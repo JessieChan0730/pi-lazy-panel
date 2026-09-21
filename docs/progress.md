@@ -69,3 +69,19 @@
 - 输入框：抽出通用的底部一行输入 `ui/widgets/prompt-bar.ts`（包装 pi-tui `Input`），搜索栏和 `ui/widgets/label-bar.ts`（`Label: ` 前缀，预填当前标签）都基于它；新增 `PanelMode` 的 `label` 模式，该模式下所有按键交给输入框。
 - 反馈都在 footer：`copied node text to clipboard` / `selected entry has no text to copy` / `label set: xxx` / `label removed` / 失败原因。
 - 测试：`test/panel.test.ts` 加了 y / T 的面板行为测试（含错误分支和无 actions 的情况）；新增 `test/tree-actions.test.ts` 在临时目录里建真实会话文件，验证 `loadNodeText` 和 `labelNode` 的落盘与 `pi.setLabel` 分流。
+
+### 跨平台适配（分支 `feat/windows-support`，2026-09-21）
+
+背景：`npm run install:pi` 在 Windows 上报 `Path does not exist: ...\$(pwd)`。npm 在 Windows 默认用 cmd.exe 跑 scripts，`$(pwd)` 这种 bash 命令替换会被原样传给 pi。说明之前的写法只考虑了 Linux / macOS，需要系统性排查。先在本分支把 Windows 适配好，再考虑 macOS。
+
+- ~~Windows 上安装修复：`package.json` 的 `install:pi` / `uninstall:pi` 改为 `pi install .` / `pi remove .`（pi 内部会把 `.` 解析成绝对路径，cmd / PowerShell / bash 下通用），`CLAUDE.md` 同步更新。已验证 `~/.pi/agent/settings.json` 的 packages 里出现 `E:\frontwebWorkSpace\PiLazyPanel`。~~
+- 排查代码中不能跨平台的写法。初步扫描（`src/`、`test/`、`package.json`）发现的可疑点，逐项确认并修复：
+  1. `src/utils/format.ts` 的 `shortenPath`：用 `${home}/` 硬编码 `/` 判断 home 前缀，Windows 下 `homedir()` 返回 `C:\Users\xxx`，路径分隔符是 `\`，永远匹配不上，会话路径不会缩成 `~`。应改用 `path.sep`，或同时兼容 `/` 和 `\`（pi 在 Windows 上存的路径分隔符是哪种也要实际看一下 `~/.pi/agent/sessions/` 里的文件）。
+  2. `test/ui.test.ts` 的 `shortenPath` 测试用 `process.env.HOME`，Windows 上没有 `HOME`（是 `USERPROFILE`），这个断言现在被静默跳过了；应改用 `os.homedir()` 和 `path.join`。
+  3. `test/panel.test.ts` 里的假会话路径写死 `/tmp/s1.jsonl`。目前只是当字符串比较所以能过，但如果后续 UI 对路径做分隔符处理就会失效；建议用 `path.join(tmpdir(), ...)` 或明确注释“仅作 id 使用”。
+  4. 换行：`src/data/content.ts`、`src/ui/panes/content-pane.ts` 用 `split("\n")` 切行，要确认 pi 的会话 .jsonl 在 Windows 上是否会出现 `\r\n`；如果有，`\r` 会残留在行尾影响宽度计算和渲染。
+  5. `package.json` 的 `test` 脚本 `"test/**/*.test.ts"` 带引号的 glob 在 Windows 下已验证可用（34/34 通过），`dev` / `check` 也无 shell 语法，可以划掉；但后续新增 scripts 一律禁止 `$(...)`、`&&` 以外的 bash 专有语法，涉及路径用 node 脚本处理。
+  6. 剪贴板：`y` 复制走的是 pi 自带的 `copyToClipboard`，是否已经适配 Windows（clip.exe）/ macOS（pbcopy）由 pi 负责，需在 pi 里实际按 `y` 验证一次，不行的话记到 `docs/issues.md`。
+  7. 配置文件路径：`src/index.ts` 用 pi 导出的 `getAgentDir()` 拿 agent 目录，`src/config/config.ts` 再用 `path.join` 拼文件名，没有自己拼 `homedir()`，已确认无问题。
+  8. 文档：`CLAUDE.md`、`docs/design.md`、`docs/keybindings.md` 里出现的路径示例统一用 `~/.pi/agent/...` 写法，不出现只在 bash 下成立的命令。
+- 排查完成后在 Windows 的 pi 里完整跑一遍 `/lazy-history`（三个面板、j/k、y、T、/），确认无异常；macOS 的验证另开任务。
