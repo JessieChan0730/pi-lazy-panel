@@ -91,6 +91,7 @@ test/
 docs/keybindings.md           # 默认快捷键表，新增 ActionId 时同步更新
 docs/design.md                # 产品设计（原 计划.md）
 docs/progress.md              # 任务进度（原 进度.md），每次开工前先看
+docs/issues.md                # 已知问题 / 搁置的问题，解决后划掉
 AGENTS.md                     # 仅指向本文件，规则统一在这里维护
 ```
 
@@ -116,5 +117,6 @@ AGENTS.md                     # 仅指向本文件，规则统一在这里维护
 
 不清楚业务和进度，请查看下面两个文档
 
-- ./docs/design.md
-- ./docs/progress.md
+- ./docs/design.md（设计）
+- ./docs/progress.md （开发进度）
+- ./docs/issues.md（已知/搁置问题）
