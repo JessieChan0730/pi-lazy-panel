@@ -22,7 +22,9 @@
  *   - 支持多键序列（"gg"）：前缀匹配时把按键放进 pending 缓冲，等待下一键
  *   - h / l 前后切换焦点，1 / 2 / 3 直接跳到对应面板（面板标题显示 "[1] SESSIONS"）
  *   - C 切到 Current folder，A 切到 All（各自只做单向切换），? 帮助，/ 搜索栏
- *   - 面板内的动作（移动光标、删除…）只做分发，具体实现留给后续任务
+ *   - j/k、gg/G：SESSIONS / TREE 移动光标，CONTENT 按行滚动；SESSIONS 里 J/K 滚动右侧内容
+ *   - SESSIONS 光标变化 → 重新加载 TREE + CONTENT；TREE 光标变化 → CONTENT 高亮并滚到对应消息
+ *   - 其余面板动作（删除、fork…）只做分发，具体实现留给后续任务
  */
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
@@ -43,7 +45,7 @@ import type {
 	TreeRow,
 } from "../types.ts";
 import { fit, sideBySide } from "./frame.ts";
-import { renderContentPane } from "./panes/content-pane.ts";
+import { type ContentLayout, layoutContent, maxScroll, renderContentPane } from "./panes/content-pane.ts";
 import { renderSessionsPane } from "./panes/sessions-pane.ts";
 import { renderTreePane } from "./panes/tree-pane.ts";
 import { renderFooter } from "./widgets/footer.ts";
@@ -54,8 +56,10 @@ import { renderSearchStatus, SearchBar } from "./widgets/search-bar.ts";
 export interface PanelState {
 	focus: PaneId;
 	mode: PanelMode;
-	/** Index of the highlighted row per list pane. */
+	/** Index of the highlighted row per list pane (for content: first visible body line). */
 	cursor: Record<PaneId, number>;
+	/** entryId of the content block highlighted by the tree cursor. */
+	contentHighlight: string | undefined;
 	/** Sessions selected with <space> for batch operations. */
 	selectedSessionFiles: Set<string>;
 	/** Last submitted search query ("" = no active search). */
@@ -75,6 +79,7 @@ export function createInitialState(overrides: Partial<PanelState> = {}): PanelSt
 		focus: "sessions",
 		mode: "normal",
 		cursor: { sessions: 0, tree: 0, content: 0 },
+		contentHighlight: undefined,
 		selectedSessionFiles: new Set(),
 		searchQuery: "",
 		searchPane: undefined,
@@ -112,6 +117,9 @@ export interface LazyPanelOptions {
 /** Max time between keys of a multi-key sequence such as "gg". */
 const PENDING_TIMEOUT_MS = 1000;
 
+/** Delay before (re)loading the session under the cursor while the user is still moving. */
+const SESSION_LOAD_DEBOUNCE_MS = 40;
+
 export class LazyPanel implements Component, Focusable {
 	readonly state: PanelState;
 	readonly keymap: Keymap;
@@ -119,6 +127,8 @@ export class LazyPanel implements Component, Focusable {
 	private sessions: SessionRow[] = [];
 	private tree: TreeRow[] = [];
 	private content: ContentBlock[] = [];
+	/** Leaf entry the current `content` branch ends at (undefined = session's own leaf). */
+	private contentLeaf: string | undefined;
 	private status: string | undefined;
 	private loadedSessionFile: string | undefined;
 	private disposed = false;
@@ -128,6 +138,14 @@ export class LazyPanel implements Component, Focusable {
 	private pending: string[] = [];
 	private pendingTimer: ReturnType<typeof setTimeout> | undefined;
 	private _focused = false;
+	/** Debounced reload of tree + content after the sessions cursor moved. */
+	private sessionLoadTimer: ReturnType<typeof setTimeout> | undefined;
+	private sessionLoadPromise: Promise<void> | undefined;
+	private sessionLoadResolve: (() => void) | undefined;
+	/** Content layout cache keyed by blocks identity / width / highlight. */
+	private layoutCache: { blocks: ContentBlock[]; inner: number; highlight: string | undefined; layout: ContentLayout } | undefined;
+	/** Viewport of the content pane as of the last render, used to clamp scrolling. */
+	private contentView = { inner: 60, visible: 10 };
 
 	constructor(private readonly o: LazyPanelOptions) {
 		this.state = createInitialState(o.initialState);
@@ -174,7 +192,7 @@ export class LazyPanel implements Component, Focusable {
 		const row = this.sessions[this.state.cursor.sessions];
 		if (!row) {
 			this.tree = [];
-			this.content = [];
+			this.setContent([], undefined);
 			this.loadedSessionFile = undefined;
 			this.o.requestRender();
 			return;
@@ -189,18 +207,126 @@ export class LazyPanel implements Component, Focusable {
 			// Ignore stale results if the cursor moved meanwhile.
 			if (this.sessions[this.state.cursor.sessions]?.file !== file) return;
 			this.tree = tree;
-			this.content = content;
+			this.setContent(content, undefined);
 			this.loadedSessionFile = file;
 			// Put the tree cursor on the active leaf, like /tree does.
 			const leafIdx = findLastIndex(tree, (r) => r.onActiveBranch);
 			this.state.cursor.tree = leafIdx >= 0 ? leafIdx : 0;
 			this.state.cursor.content = 0;
+			// 树光标落在活动叶子上，右侧内容同步滚到并高亮这条消息。
+			await this.syncContentToTree();
 		} catch (err) {
 			this.tree = [];
-			this.content = [];
+			this.setContent([], undefined);
 			this.setStatus(`failed to open session: ${(err as Error).message}`);
 		}
 		this.o.requestRender();
+	}
+
+	/**
+	 * Debounced `loadSelectedSession`: holding j/k in the sessions pane only
+	 * opens the session the cursor finally rests on. Returns a promise that
+	 * settles once that load has finished (handy for tests).
+	 */
+	scheduleSessionLoad(): Promise<void> {
+		if (this.sessionLoadTimer) clearTimeout(this.sessionLoadTimer);
+		if (!this.sessionLoadPromise) {
+			this.sessionLoadPromise = new Promise<void>((resolve) => {
+				this.sessionLoadResolve = resolve;
+			});
+		}
+		// 只推迟定时器，复用同一个 promise：连续按 j 只会真正加载最后停下的那个会话。
+		this.sessionLoadTimer = setTimeout(() => {
+			const resolve = this.sessionLoadResolve;
+			this.sessionLoadTimer = undefined;
+			this.sessionLoadPromise = undefined;
+			this.sessionLoadResolve = undefined;
+			void this.loadSelectedSession().finally(() => resolve?.());
+		}, SESSION_LOAD_DEBOUNCE_MS);
+		return this.sessionLoadPromise;
+	}
+
+	private setContent(blocks: ContentBlock[], leaf: string | undefined): void {
+		this.content = blocks;
+		this.contentLeaf = leaf;
+		this.layoutCache = undefined;
+	}
+
+	/**
+	 * Make the content pane follow the tree cursor.
+	 *
+	 * 选中的节点已经在当前显示的分支里 → 只高亮并滚动到那条消息；
+	 * 节点在活动分支上但没有消息框（工具结果、空回复等）→ 保持显示完整活动分支，高亮它前面���近的一条消息；
+	 * 节点在另一条分支上 → 重新加载“以该节点为叶子”的分支再高亮。
+	 */
+	private async syncContentToTree(): Promise<void> {
+		const node = this.tree[this.state.cursor.tree];
+		const file = this.loadedSessionFile ?? this.sessions[this.state.cursor.sessions]?.file;
+		if (!node || !file) {
+			this.state.contentHighlight = undefined;
+			this.o.requestRender();
+			return;
+		}
+		const shown = this.content.some((b) => b.entryId === node.entryId);
+		// 需要的分支：活动分支用 undefined（会话自己的叶子），否则以该节点为叶子。
+		const wantLeaf = node.onActiveBranch ? undefined : node.entryId;
+		if (!shown && this.contentLeaf !== wantLeaf) {
+			try {
+				const content = await this.o.data.loadContent(file, wantLeaf);
+				if (this.disposed) return;
+				// 光标又动了 / 会话换了：丢弃这次结果。
+				if (this.tree[this.state.cursor.tree]?.entryId !== node.entryId || this.loadedSessionFile !== file) return;
+				this.setContent(content, wantLeaf);
+			} catch (err) {
+				this.setStatus(`failed to load branch: ${(err as Error).message}`);
+				return;
+			}
+		}
+		this.highlightContent(node.entryId);
+	}
+
+	/** Highlight the block for `entryId` (or the nearest block before it in the tree) and scroll it to the top. */
+	private highlightContent(entryId: string): void {
+		const shown = new Set(this.content.map((b) => b.entryId));
+		let targetId: string | undefined = shown.has(entryId) ? entryId : undefined;
+		if (!targetId) {
+			// 没有对应消息块的节点：沿 tree 往上找最近的一条有消息块的节点。
+			for (let i = this.state.cursor.tree - 1; i >= 0 && !targetId; i--) {
+				const id = this.tree[i]?.entryId;
+				if (id && shown.has(id)) targetId = id;
+			}
+			targetId ??= this.content[this.content.length - 1]?.entryId;
+		}
+		this.state.contentHighlight = targetId;
+		if (targetId) {
+			const start = this.contentLayout().starts.get(targetId) ?? 0;
+			this.state.cursor.content = Math.min(start, this.contentMaxScroll());
+		}
+		this.o.requestRender();
+	}
+
+	/** Cached layout of the current content for the last rendered width. */
+	private contentLayout(): ContentLayout {
+		const { inner } = this.contentView;
+		const highlight = this.state.contentHighlight;
+		const c = this.layoutCache;
+		if (c && c.blocks === this.content && c.inner === inner && c.highlight === highlight) return c.layout;
+		const layout = layoutContent(this.content, inner, this.o.theme, highlight);
+		this.layoutCache = { blocks: this.content, inner, highlight, layout };
+		return layout;
+	}
+
+	private contentMaxScroll(): number {
+		return maxScroll(this.contentLayout().lines.length, this.contentView.visible);
+	}
+
+	/** Remember the content viewport for this render (so keys can clamp against it) and return the layout. */
+	private contentLayoutFor(inner: number, visible: number): ContentLayout {
+		this.contentView = { inner: Math.max(1, inner), visible: Math.max(1, visible) };
+		const layout = this.contentLayout();
+		// 窗口变小后原来的滚动位置可能越界，这里顺手夹回来。
+		this.state.cursor.content = clamp(this.state.cursor.content, 0, maxScroll(layout.lines.length, this.contentView.visible));
+		return layout;
 	}
 
 	private setStatus(s: string | undefined): void {
@@ -341,10 +467,74 @@ export class LazyPanel implements Component, Focusable {
 				// 匹配/跳转在后续任务实现；这里先提示当前状态。
 				this.setStatus(this.state.searchQuery ? `search: "${this.state.searchQuery}" (matching comes in a later task)` : "no active search — press / first");
 				return;
+			case "move-down":
+				this.moveCursor(1);
+				return;
+			case "move-up":
+				this.moveCursor(-1);
+				return;
+			case "go-top":
+				this.moveCursorTo(0);
+				return;
+			case "go-bottom":
+				this.moveCursorTo(Number.MAX_SAFE_INTEGER);
+				return;
+			case "scroll-content-down":
+				this.scrollContent(this.contentPageStep());
+				return;
+			case "scroll-content-up":
+				this.scrollContent(-this.contentPageStep());
+				return;
 			default:
 				this.setStatus(`${action}: not implemented yet`);
 				return;
 		}
+	}
+
+	// -----------------------------------------------------------------------
+	// Cursor movement
+	// -----------------------------------------------------------------------
+
+	/** j/k: list panes move the cursor one row, the content pane scrolls one line. */
+	private moveCursor(delta: number): void {
+		if (this.state.focus === "content") {
+			this.scrollContent(delta);
+			return;
+		}
+		this.moveCursorTo(this.state.cursor[this.state.focus] + delta);
+	}
+
+	/** gg/G and absolute moves; the index is clamped to the focused list. */
+	private moveCursorTo(index: number): void {
+		const pane = this.state.focus;
+		if (pane === "content") {
+			this.setContentScroll(index);
+			return;
+		}
+		const rows = pane === "sessions" ? this.sessions : this.tree;
+		const next = clamp(index, 0, rows.length - 1);
+		if (next === this.state.cursor[pane]) return;
+		this.state.cursor[pane] = next;
+		this.o.requestRender();
+		// 联动：会话变了要重新加载 tree/content；树节点变了右侧跟着高亮。
+		if (pane === "sessions") void this.scheduleSessionLoad();
+		else void this.syncContentToTree();
+	}
+
+	private scrollContent(delta: number): void {
+		this.setContentScroll(this.state.cursor.content + delta);
+	}
+
+	private setContentScroll(line: number): void {
+		const next = clamp(line, 0, this.contentMaxScroll());
+		if (next === this.state.cursor.content) return;
+		this.state.cursor.content = next;
+		this.o.requestRender();
+	}
+
+	/** J/K from the sessions pane scroll the content pane by half a viewport. */
+	private contentPageStep(): number {
+		return Math.max(1, Math.floor(this.contentView.visible / 2));
 	}
 
 	private cycleFocus(delta: 1 | -1): void {
@@ -407,12 +597,22 @@ export class LazyPanel implements Component, Focusable {
 		if (this.disposed) return;
 		this.disposed = true;
 		this.clearPending();
+		this.clearSessionLoad();
 		this.o.onClose();
 	}
 
 	dispose(): void {
 		this.disposed = true;
 		this.clearPending();
+		this.clearSessionLoad();
+	}
+
+	private clearSessionLoad(): void {
+		if (this.sessionLoadTimer) clearTimeout(this.sessionLoadTimer);
+		this.sessionLoadTimer = undefined;
+		this.sessionLoadResolve?.();
+		this.sessionLoadResolve = undefined;
+		this.sessionLoadPromise = undefined;
 	}
 
 	invalidate(): void {
@@ -467,11 +667,13 @@ export class LazyPanel implements Component, Focusable {
 		const right = renderContentPane(
 			{
 				blocks: this.content,
+				layout: this.contentLayoutFor(rightW - 2, bodyH - 2),
 				scroll: this.state.cursor.content,
 				focused: this.state.focus === "content",
 				emptyMessage: this.emptyMessage(selectedSession),
 				title: this.paneTitle("content"),
 				theme,
+				...(this.state.contentHighlight ? { highlightEntryId: this.state.contentHighlight } : {}),
 			},
 			rightW,
 			bodyH,
@@ -523,4 +725,8 @@ export class LazyPanel implements Component, Focusable {
 function findLastIndex<T>(arr: T[], pred: (t: T) => boolean): number {
 	for (let i = arr.length - 1; i >= 0; i--) if (pred(arr[i]!)) return i;
 	return -1;
+}
+
+function clamp(n: number, min: number, max: number): number {
+	return Math.max(min, Math.min(max, n));
 }

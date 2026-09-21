@@ -59,8 +59,13 @@ function describeEntry(entry: SessionEntry): Described | undefined {
 			switch (m.role) {
 				case "user":
 					return { role: "user", kind: "message", text: textOf(m.content) };
-				case "assistant":
-					return { role: "assistant", kind: "message", text: assistantText(m.content) };
+				case "assistant": {
+					const text = assistantText(m.content);
+					// 没有文本、没有工具调用、没有思考的空回复（中断/失败产生），
+					// 归到 meta：默认过滤下隐藏，`a` 全部模式仍可见。
+					if (text === "(empty)") return { role: "assistant", kind: "meta", text };
+					return { role: "assistant", kind: "message", text };
+				}
 				case "toolResult":
 					return { role: "tool", kind: "tool", text: `${m.toolName}: ${textOf(m.content)}` };
 				default:

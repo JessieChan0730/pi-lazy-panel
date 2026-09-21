@@ -10,7 +10,7 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { DEFAULT_KEYMAP } from "../src/config/keymap.ts";
 import { mergeKeymap } from "../src/config/config.ts";
-import type { SessionRow } from "../src/types.ts";
+import type { ContentBlock, SessionRow, TreeRow } from "../src/types.ts";
 import { type DataSource, LazyPanel } from "../src/ui/app.ts";
 import { SEARCH_LABEL } from "../src/ui/widgets/search-bar.ts";
 
@@ -270,12 +270,162 @@ test("multi-key sequence gg is buffered and Esc discards the pending prefix", ()
 	assert.equal(h.closed(), false);
 	h.panel.handleInput("g");
 	h.panel.handleInput("g");
-	// go-top is dispatched (stubbed for now) and the buffer is cleared
+	// go-top is dispatched and the buffer is cleared
 	assert.equal(h.text().at(-1)!.includes("pending"), false);
-	assert.ok(h.text().at(-1)!.includes("go-top"));
+	assert.equal(h.panel.state.cursor.sessions, 0);
 	h.panel.dispose();
 });
 
 function flush(): Promise<void> {
 	return new Promise((r) => setTimeout(r, 0));
 }
+
+/** Wait past the sessions-pane load debounce. */
+function settle(): Promise<void> {
+	return new Promise((r) => setTimeout(r, 80));
+}
+
+function treeRow(i: number, onActiveBranch = true): TreeRow {
+	return { entryId: `e${i}`, depth: 0, role: i % 2 ? "assistant" : "user", kind: "message", text: `msg ${i}`, timestamp: 0, onActiveBranch };
+}
+
+function block(i: number): ContentBlock {
+	return { entryId: `e${i}`, role: i % 2 ? "assistant" : "user", timestamp: 0, markdown: `message ${i}\n\nline\nline\nline` };
+}
+
+/** Panel with 5 sessions; each session has 4 tree nodes / 4 content blocks named after the session. */
+function makeLoadedPanel(height = 20) {
+	const treeCalls: string[] = [];
+	const contentCalls: Array<{ file: string; leaf: string | undefined }> = [];
+	const data: DataSource = {
+		listSessions: async () => [1, 2, 3, 4, 5].map((i) => row(i, "/a")),
+		loadTree: async (file) => {
+			treeCalls.push(file);
+			return [treeRow(0), treeRow(1), treeRow(2), treeRow(3, false)];
+		},
+		loadContent: async (file, leaf) => {
+			contentCalls.push({ file, leaf });
+			// e3 is a side branch: only reachable by asking for it explicitly.
+			return leaf === "e3" ? [block(0), block(3)] : [block(0), block(1), block(2)];
+		},
+	};
+	const panel = new LazyPanel({ theme: fakeTheme, data, getHeight: () => height, requestRender: () => {}, onClose: () => {} });
+	return { panel, treeCalls, contentCalls, text: (width = 100) => panel.render(width).map((l) => stripTerminalSequences(l)) };
+}
+
+test("j/k/gg/G move the sessions cursor and reload the tree for the new session", async () => {
+	const h = makeLoadedPanel();
+	await h.panel.load();
+	assert.deepEqual(h.treeCalls, ["/tmp/s1.jsonl"]);
+	h.panel.handleInput("j");
+	h.panel.handleInput("j");
+	assert.equal(h.panel.state.cursor.sessions, 2);
+	await settle();
+	// debounced: only the session the cursor rests on is loaded
+	assert.deepEqual(h.treeCalls, ["/tmp/s1.jsonl", "/tmp/s3.jsonl"]);
+	h.panel.handleInput("k");
+	assert.equal(h.panel.state.cursor.sessions, 1);
+	h.panel.handleInput("G");
+	assert.equal(h.panel.state.cursor.sessions, 4);
+	h.panel.handleInput("j");
+	assert.equal(h.panel.state.cursor.sessions, 4, "clamped at the bottom");
+	h.panel.handleInput("g");
+	h.panel.handleInput("g");
+	assert.equal(h.panel.state.cursor.sessions, 0);
+	h.panel.handleInput("k");
+	assert.equal(h.panel.state.cursor.sessions, 0, "clamped at the top");
+	await settle();
+	assert.equal(h.treeCalls.at(-1), "/tmp/s1.jsonl");
+	h.panel.dispose();
+});
+
+test("tree cursor drives the content highlight and scrolls the block into view", async () => {
+	const h = makeLoadedPanel();
+	await h.panel.load();
+	h.text();
+	// initial: tree cursor on the active leaf (e2), content highlights it
+	assert.equal(h.panel.state.cursor.tree, 2);
+	assert.equal(h.panel.state.contentHighlight, "e2");
+	assert.ok(h.text().some((l) => l.includes("›┌─ YOU")), "highlighted block header carries the › marker");
+
+	h.panel.handleInput("2");
+	h.panel.handleInput("g");
+	h.panel.handleInput("g");
+	assert.equal(h.panel.state.cursor.tree, 0);
+	await flush();
+	assert.equal(h.panel.state.contentHighlight, "e0");
+	assert.equal(h.panel.state.cursor.content, 0);
+
+	h.panel.handleInput("j");
+	await flush();
+	assert.equal(h.panel.state.contentHighlight, "e1");
+	assert.ok(h.panel.state.cursor.content > 0, "scrolled so the block starts at the top");
+
+	// moving onto a node from another branch reloads content for that leaf
+	h.panel.handleInput("G");
+	await flush();
+	assert.equal(h.panel.state.cursor.tree, 3);
+	assert.deepEqual(h.contentCalls.at(-1), { file: "/tmp/s1.jsonl", leaf: "e3" });
+	assert.equal(h.panel.state.contentHighlight, "e3");
+	h.panel.dispose();
+});
+
+test("active-branch nodes without a message block keep the full branch and highlight the previous message", async () => {
+	const contentCalls: Array<string | undefined> = [];
+	const data: DataSource = {
+		listSessions: async () => [row(1, "/a")],
+		// e1 is a tool result on the active branch: no content block for it
+		loadTree: async () => [treeRow(0), { ...treeRow(1), role: "tool", kind: "tool" }, treeRow(2)],
+		loadContent: async (_file, leaf) => {
+			contentCalls.push(leaf);
+			return [block(0), block(2)];
+		},
+	};
+	const panel = new LazyPanel({ theme: fakeTheme, data, getHeight: () => 20, requestRender: () => {}, onClose: () => {} });
+	await panel.load();
+	panel.render(100);
+	panel.handleInput("2");
+	panel.handleInput("k");
+	await flush();
+	assert.equal(panel.state.cursor.tree, 1);
+	assert.deepEqual(contentCalls, [undefined], "no reload for a node on the active branch");
+	assert.equal(panel.state.contentHighlight, "e0", "highlights the nearest previous message");
+	panel.dispose();
+});
+
+test("content pane scrolls by line with j/k, gg/G, and J/K from the sessions pane", async () => {
+	const h = makeLoadedPanel(12);
+	await h.panel.load();
+	h.text();
+	h.panel.handleInput("3");
+	h.panel.handleInput("g");
+	h.panel.handleInput("g");
+	assert.equal(h.panel.state.cursor.content, 0);
+	h.panel.handleInput("j");
+	h.panel.handleInput("j");
+	assert.equal(h.panel.state.cursor.content, 2);
+	h.panel.handleInput("k");
+	assert.equal(h.panel.state.cursor.content, 1);
+	h.panel.handleInput("G");
+	const bottom = h.panel.state.cursor.content;
+	assert.ok(bottom > 2);
+	h.panel.handleInput("j");
+	assert.equal(h.panel.state.cursor.content, bottom, "clamped at the last page");
+	const lastPage = h.text();
+	assert.ok(lastPage.some((l) => l.includes("└")), "last page shows the end of the conversation");
+
+	// J / K only scroll the content pane; the sessions cursor stays put
+	h.panel.handleInput("1");
+	h.panel.handleInput("g");
+	h.panel.handleInput("g");
+	h.panel.handleInput("3");
+	h.panel.handleInput("g");
+	h.panel.handleInput("g");
+	h.panel.handleInput("1");
+	h.panel.handleInput("J");
+	assert.equal(h.panel.state.cursor.sessions, 0);
+	assert.ok(h.panel.state.cursor.content > 0);
+	h.panel.handleInput("K");
+	assert.equal(h.panel.state.cursor.content, 0);
+	h.panel.dispose();
+});
