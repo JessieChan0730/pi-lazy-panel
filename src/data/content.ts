@@ -8,6 +8,7 @@
 
 import { SessionManager, type SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { ContentBlock, SessionInfo } from "../types.ts";
+import { normalizeNewlines } from "../utils/format.ts";
 
 export interface LoadContentOptions {
 	sessionFile: string;
@@ -64,9 +65,9 @@ function isConversation(entry: SessionEntry): boolean {
 type Part = { type: string; text?: string; name?: string; arguments?: Record<string, unknown> };
 
 function partsToMarkdown(content: string | Part[]): string {
-	if (typeof content === "string") return content.trim();
+	if (typeof content === "string") return normalizeNewlines(content).trim();
 	return content
-		.map((p) => (p.type === "text" ? (p.text ?? "") : p.type === "image" ? "*[image]*" : ""))
+		.map((p) => (p.type === "text" ? normalizeNewlines(p.text ?? "") : p.type === "image" ? "*[image]*" : ""))
 		.filter(Boolean)
 		.join("\n\n")
 		.trim();
@@ -75,7 +76,7 @@ function partsToMarkdown(content: string | Part[]): string {
 function assistantToMarkdown(content: Part[]): string {
 	const out: string[] = [];
 	for (const p of content) {
-		if (p.type === "text" && p.text?.trim()) out.push(p.text.trim());
+		if (p.type === "text" && p.text?.trim()) out.push(normalizeNewlines(p.text).trim());
 		else if (p.type === "toolCall") out.push(`*→ ${p.name ?? "tool"}${summarizeArgs(p.arguments)}*`);
 	}
 	return out.join("\n\n");
@@ -85,7 +86,7 @@ function summarizeArgs(args: Record<string, unknown> | undefined): string {
 	if (!args) return "";
 	const first = Object.values(args).find((v) => typeof v === "string") as string | undefined;
 	if (!first) return "";
-	const line = first.split("\n")[0] ?? "";
+	const line = first.split(/\r?\n/)[0] ?? "";
 	return ` ${line.length > 60 ? `${line.slice(0, 60)}…` : line}`;
 }
 
