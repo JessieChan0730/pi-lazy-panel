@@ -8,12 +8,15 @@
  *   data/     read-only adapters over pi's SessionManager (sessions, tree, content)
  *   actions/  side-effecting operations (resume, delete, rename, fork, export, ...)
  *   ui/       TUI components (panes, dialogs, footer, search bar)
- *
- * NOTE: This is scaffolding only. No feature is implemented yet.
  */
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { COMMAND_NAME, EXTENSION_ID } from "./constants.ts";
+import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { loadConfig } from "./config/config.ts";
+import { COMMAND_NAME } from "./constants.ts";
+import { loadContent } from "./data/content.ts";
+import { listSessions, sortSessions } from "./data/sessions.ts";
+import { applyTreeFilter, loadTree } from "./data/tree.ts";
+import { type DataSource, LazyPanel } from "./ui/app.ts";
 
 export default function (pi: ExtensionAPI) {
 	pi.registerCommand(COMMAND_NAME, {
@@ -23,8 +26,35 @@ export default function (pi: ExtensionAPI) {
 				ctx.ui.notify(`/${COMMAND_NAME} is only available in TUI mode`, "warning");
 				return;
 			}
-			// TODO: open the panel via ctx.ui.custom(...) — see ./ui/app.ts
-			ctx.ui.notify(`${EXTENSION_ID}: not implemented yet`, "info");
+			const config = await loadConfig(getAgentDir());
+			const data: DataSource = {
+				listSessions: async (scope, sort) => sortSessions(await listSessions({ cwd: ctx.cwd, scope }), sort),
+				loadTree: async (file, filter) => applyTreeFilter(await loadTree(file), filter),
+				loadContent: (file, leafEntryId) =>
+					loadContent(leafEntryId ? { sessionFile: file, leafEntryId } : { sessionFile: file }),
+			};
+
+			await ctx.ui.custom<void>(
+				(tui, theme, _keybindings, done) => {
+					const panel = new LazyPanel({
+						theme,
+						data,
+						getHeight: () => tui.terminal.rows,
+						requestRender: () => tui.requestRender(),
+						onClose: () => done(),
+						initialState: { scope: config.defaultScope, sort: config.defaultSort },
+						leftColumnRatio: config.leftColumnRatio,
+					});
+					void panel.load();
+					return panel;
+				},
+				{
+					// Full-screen overlay: covers pi's own header/editor/footer instead of
+					// being embedded in the editor slot (which would overflow the terminal).
+					overlay: true,
+					overlayOptions: { anchor: "top-left", width: "100%", maxHeight: "100%", margin: 0 },
+				},
+			);
 		},
 	});
 }

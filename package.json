@@ -25,7 +25,9 @@
 	"scripts": {
 		"check": "tsc --noEmit",
 		"test": "node --import tsx --test \"test/**/*.test.ts\"",
-		"dev": "pi -e ./src/index.ts"
+		"dev": "pi -e ./src/index.ts",
+		"install:pi": "pi install \"$(pwd)\"",
+		"uninstall:pi": "pi remove \"$(pwd)\""
 	},
 	"peerDependencies": {
 		"@earendil-works/pi-coding-agent": "*",

@@ -36,6 +36,10 @@ export interface SessionRow {
 	name?: string;
 	/** Working directory the session was created in. */
 	cwd: string;
+	/** Session file this one was forked from, if any (drives "threaded" sort). */
+	parentFile?: string;
+	/** Indentation level assigned by "threaded" sort (0 = root). */
+	threadDepth?: number;
 	/** Model id last used in the session, if known. */
 	model?: string;
 	/** Short preview of the first user message. */
@@ -52,6 +56,8 @@ export interface TreeRow {
 	parentId?: string;
 	depth: number;
 	role: "user" | "assistant" | "system" | "tool";
+	/** Coarse category used by the tree filters. */
+	kind: "message" | "tool" | "meta";
 	/** User-defined label on this entry (/tree shift+t). */
 	label?: string;
 	/** Truncated single-line text. */
