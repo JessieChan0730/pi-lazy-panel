@@ -8,7 +8,7 @@
  * {
  *   "defaultScope": "all",
  *   "keymap": {
- *     "global":   { "help": "F1", "toggle-scope": ["C", "A", "ctrl+space"] },
+ *     "global":   { "help": "F1", "scope-all": ["A", "ctrl+space"] },
  *     "sessions": { "session-delete": "ctrl+d", "session-share": null }
  *   }
  * }

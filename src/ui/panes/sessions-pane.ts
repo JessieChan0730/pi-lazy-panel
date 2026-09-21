@@ -22,6 +22,8 @@ export interface SessionsPaneProps {
 	scope: ListScope;
 	sort: SessionSortMode;
 	selected: Set<string>;
+	/** Frame title; the panel passes "[1] SESSIONS" so the jump key is visible. */
+	title?: string;
 	theme: Theme;
 }
 
@@ -49,7 +51,7 @@ export function renderSessionsPane(p: SessionsPaneProps, width: number, height: 
 	return frame(body, {
 		width,
 		height,
-		title: "SESSIONS",
+		title: p.title ?? "SESSIONS",
 		meta,
 		border: (s) => theme.fg(p.focused ? "borderAccent" : "border", s),
 		titleStyle: (s) => (p.focused ? theme.bold(theme.fg("accent", s)) : theme.fg("muted", s)),

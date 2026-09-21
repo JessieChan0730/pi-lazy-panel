@@ -73,27 +73,52 @@ function makePanel(opts: { keymap?: typeof DEFAULT_KEYMAP; height?: number } = {
 	};
 }
 
-test("Tab / Shift+Tab cycle focus through sessions → tree → content", () => {
-	const { panel } = makePanel();
+test("h / l cycle focus, 1 / 2 / 3 jump, and pane titles carry the jump key", () => {
+	const h = makePanel();
+	const { panel } = h;
 	assert.equal(panel.state.focus, "sessions");
-	panel.handleInput("\t");
+	panel.handleInput("l");
 	assert.equal(panel.state.focus, "tree");
-	panel.handleInput("\t");
+	panel.handleInput("\t"); // tab still works as a secondary "next"
 	assert.equal(panel.state.focus, "content");
-	panel.handleInput("\t");
+	panel.handleInput("l");
 	assert.equal(panel.state.focus, "sessions");
+	panel.handleInput("h");
+	assert.equal(panel.state.focus, "content");
+	// shift+tab is no longer bound
 	panel.handleInput("\x1b[Z");
 	assert.equal(panel.state.focus, "content");
+	// number keys jump straight to a pane
+	panel.handleInput("1");
+	assert.equal(panel.state.focus, "sessions");
+	panel.handleInput("3");
+	assert.equal(panel.state.focus, "content");
+	panel.handleInput("2");
+	assert.equal(panel.state.focus, "tree");
+	// "l" is not shadowed in the tree pane any more (label is "T")
+	panel.handleInput("l");
+	assert.equal(panel.state.focus, "content");
+	panel.handleInput("2");
+	const text = h.text(100).join("\n");
+	assert.ok(text.includes("[1] SESSIONS"), text);
+	assert.ok(text.includes("[2] TREE"), text);
+	assert.ok(text.includes("[3] CONTENT"), text);
 });
 
-test("C / A toggle the list scope and reload sessions", async () => {
+test("C switches to Current folder only and A to All only (no toggling)", async () => {
 	const h = makePanel();
 	await h.panel.load();
 	assert.equal(h.panel.state.scope, "current-folder");
-	h.panel.handleInput("C");
+	h.panel.handleInput("C"); // already current: no reload
+	await flush();
+	assert.equal(h.panel.state.scope, "current-folder");
+	h.panel.handleInput("A");
 	await flush();
 	assert.equal(h.panel.state.scope, "all");
-	h.panel.handleInput("A");
+	h.panel.handleInput("A"); // pressing A again stays on All
+	await flush();
+	assert.equal(h.panel.state.scope, "all");
+	h.panel.handleInput("C");
 	await flush();
 	assert.equal(h.panel.state.scope, "current-folder");
 	assert.deepEqual(
@@ -101,7 +126,7 @@ test("C / A toggle the list scope and reload sessions", async () => {
 		["current-folder", "all", "current-folder"],
 	);
 	// with a wide terminal the pane header shows the scope label
-	h.panel.handleInput("C");
+	h.panel.handleInput("A");
 	await flush();
 	assert.ok(h.text(160)[0]!.includes("All"), `header should mention All: ${h.text(160)[0]}`);
 });
@@ -115,19 +140,28 @@ test("? opens the help overlay for the focused pane and ? / Esc close it", () =>
 	assert.ok(lines.some((l) => l.includes("Resume session")));
 	assert.ok(lines.some((l) => l.includes("Focus next pane")));
 	// keys other than close/scroll are swallowed while help is open
-	h.panel.handleInput("\t");
+	h.panel.handleInput("l");
 	assert.equal(h.panel.state.focus, "sessions");
 	h.panel.handleInput("?");
 	assert.equal(h.panel.state.helpOpen, false);
 
 	// tree pane help lists tree actions
-	h.panel.handleInput("\t");
+	h.panel.handleInput("l");
 	h.panel.handleInput("?");
 	lines = h.text(100);
 	assert.ok(lines.some((l) => l.includes("HELP · Tree pane")));
 	assert.ok(lines.some((l) => l.includes("Restore conversation")));
 	h.panel.handleInput("\x1b");
 	assert.equal(h.panel.state.helpOpen, false);
+
+	// content pane help only lists scrolling plus the global keys
+	h.panel.handleInput("3");
+	h.panel.handleInput("?");
+	lines = h.text(100);
+	assert.ok(lines.some((l) => l.includes("HELP · Content pane")));
+	assert.ok(lines.some((l) => l.includes("Go to top")));
+	assert.equal(lines.some((l) => /Yank|Preview|Word/.test(l)), false, "content help must not list vim editing keys");
+	h.panel.handleInput("\x1b");
 	// every rendered line keeps the exact width while the overlay is drawn
 	h.panel.handleInput("?");
 	for (const l of h.panel.render(100)) assert.equal(visibleWidth(l), 100);
@@ -174,15 +208,17 @@ test("q quits, custom keymap overrides defaults and combos work", () => {
 	assert.equal(plain.closed(), true);
 
 	const custom = mergeKeymap(DEFAULT_KEYMAP, {
-		global: { quit: "ctrl+q", "focus-next": "ctrl+n", help: "F1", "toggle-scope": null },
+		global: { quit: "ctrl+q", "focus-next": "ctrl+n", help: "F1", "scope-all": null, "focus-sessions": "F5" },
 	});
 	const h = makePanel({ keymap: custom });
 	h.panel.handleInput("q"); // no longer bound
 	assert.equal(h.closed(), false);
 	h.panel.handleInput("\x0e"); // ctrl+n
 	assert.equal(h.panel.state.focus, "tree");
-	h.panel.handleInput("C"); // unbound
+	h.panel.handleInput("A"); // unbound
 	assert.equal(h.panel.state.scope, "current-folder");
+	// the pane title follows the rebound jump key
+	assert.ok(h.text(100).some((l) => l.includes("[F5] SESSIONS")));
 	h.panel.handleInput("\x1bOP"); // F1
 	assert.equal(h.panel.state.helpOpen, true);
 	assert.ok(h.text(100).some((l) => l.includes("F1")));

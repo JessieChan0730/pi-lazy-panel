@@ -2,7 +2,7 @@
  * Footer bar.
  *
  * Single line at the bottom of the panel:
- *   │ NORMAL │ / Search   ? Help   Tab Focus   Enter Resume   d Delete   q Quit
+ *   │ NORMAL │ / Search   ? Help   l Focus   Enter Resume   d Delete   q Quit
  *
  * Shows the current mode and the most relevant bindings for the focused pane.
  * Hints are derived from the resolved keymap, so custom bindings show up here.
@@ -30,7 +30,8 @@ const SHORT: Partial<Record<ActionId, string>> = {
 	search: "Search",
 	help: "Help",
 	"focus-next": "Focus",
-	"toggle-scope": "Scope",
+	"scope-current": "Current",
+	"scope-all": "All",
 	quit: "Quit",
 	"session-resume": "Resume",
 	"session-delete": "Delete",
@@ -38,9 +39,8 @@ const SHORT: Partial<Record<ActionId, string>> = {
 	"tree-restore": "Restore",
 	"tree-label": "Label",
 	"tree-copy": "Copy",
-	yank: "Copy",
-	"preview-toggle": "Preview",
 	"go-top": "Top",
+	"go-bottom": "Bottom",
 };
 
 export function renderFooter(p: FooterProps, width: number): string[] {

@@ -120,7 +120,11 @@ export type ActionId =
 	// global
 	| "focus-next"
 	| "focus-prev"
-	| "toggle-scope"
+	| "focus-sessions"
+	| "focus-tree"
+	| "focus-content"
+	| "scope-current"
+	| "scope-all"
 	| "help"
 	| "quit"
 	| "search"
@@ -155,19 +159,12 @@ export type ActionId =
 	| "tree-filter-tools"
 	| "tree-filter-user"
 	| "tree-filter-labeled"
-	| "tree-filter-all"
-	// content pane (vim-like)
-	| "cursor-left"
-	| "cursor-right"
-	| "word-forward"
-	| "word-backward"
-	| "center-cursor"
-	| "preview-toggle"
-	| "yank"
-	| "yank-line";
+	| "tree-filter-all";
+// content pane is read-only and only uses the shared navigation actions
+// (move-down / move-up / go-top / go-bottom), see docs/design.md.
 
 /**
- * A single key chord in pi-tui key syntax, e.g. "j", "ctrl+d", "shift+tab".
+ * A single key chord in pi-tui key syntax, e.g. "j", "ctrl+d", "tab".
  * Multi-key sequences are written either verbatim when every step is one
  * printable character ("gg", "yy") or space-separated ("ctrl+w h").
  * An uppercase letter ("G") means shift + that letter.

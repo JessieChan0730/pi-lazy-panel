@@ -24,6 +24,8 @@ export interface TreePaneProps {
 	filter: TreeFilter;
 	/** Shown when no session is selected / loading. */
 	emptyMessage?: string;
+	/** Frame title; the panel passes "[2] TREE" so the jump key is visible. */
+	title?: string;
 	theme: Theme;
 }
 
@@ -46,7 +48,7 @@ export function renderTreePane(p: TreePaneProps, width: number, height: number):
 	return frame(body, {
 		width,
 		height,
-		title: "TREE",
+		title: p.title ?? "TREE",
 		meta,
 		border: (s) => theme.fg(p.focused ? "borderAccent" : "border", s),
 		titleStyle: (s) => (p.focused ? theme.bold(theme.fg("accent", s)) : theme.fg("muted", s)),

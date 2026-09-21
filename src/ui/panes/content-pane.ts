@@ -4,8 +4,8 @@
  * Renders `ContentBlock[]` as boxed messages ("YOU · 22:18" / "ASSISTANT · 22:18")
  * using pi's native Markdown renderer from @earendil-works/pi-tui.
  *
- * Static for now: shows the top of the conversation (scroll offset 0). Cursor,
- * scrolling, yank, preview and search come in a later task.
+ * Static for now: shows the top of the conversation (scroll offset 0). Scrolling
+ * (j/k, gg/G) and search come in a later task; the pane is read-only.
  */
 
 import { getMarkdownTheme, type Theme } from "@earendil-works/pi-coding-agent";

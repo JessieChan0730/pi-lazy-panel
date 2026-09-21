@@ -15,9 +15,15 @@ import type { ActionId, KeyScope, Keymap, PaneId } from "../types.ts";
 
 export const DEFAULT_KEYMAP: Keymap = {
 	global: {
-		"focus-next": "tab",
-		"focus-prev": "shift+tab",
-		"toggle-scope": ["C", "A"],
+		// 面板切换参考 lazygit：h/l 前后切换，1/2/3 直接跳到对应编号的面板。
+		"focus-next": ["l", "tab"],
+		"focus-prev": "h",
+		"focus-sessions": "1",
+		"focus-tree": "2",
+		"focus-content": "3",
+		// C / A 各自只切到一种范围，不做 toggle。
+		"scope-current": "C",
+		"scope-all": "A",
 		help: "?",
 		quit: ["q", "ctrl+c"],
 		search: "/",
@@ -54,7 +60,8 @@ export const DEFAULT_KEYMAP: Keymap = {
 		"go-bottom": "G",
 		"tree-restore": "return",
 		"tree-copy": "y",
-		"tree-label": "l",
+		// 打标签用 T，和 pi 自带 /tree 的 shift+T 一致；这样 l 留给全局的“下一个面板”。
+		"tree-label": "T",
 		"tree-filter-default": "d",
 		"tree-filter-tools": "t",
 		"tree-filter-user": "u",
@@ -62,19 +69,12 @@ export const DEFAULT_KEYMAP: Keymap = {
 		"tree-filter-all": "a",
 	},
 
+	// 只读面板：只保留上下滚动 + 顶部/底部（搜索 / 帮助等走 global）。
 	content: {
 		"move-down": ["j", "down"],
 		"move-up": ["k", "up"],
-		"cursor-left": ["h", "left"],
-		"cursor-right": ["l", "right"],
-		"word-forward": "e",
-		"word-backward": "b",
 		"go-top": "gg",
 		"go-bottom": "G",
-		"center-cursor": "zz",
-		"preview-toggle": "v",
-		yank: "y",
-		"yank-line": "yy",
 	},
 };
 
@@ -82,7 +82,11 @@ export const DEFAULT_KEYMAP: Keymap = {
 export const ACTION_DESCRIPTIONS: Record<ActionId, string> = {
 	"focus-next": "Focus next pane",
 	"focus-prev": "Focus previous pane",
-	"toggle-scope": "Toggle scope: Current folder / All",
+	"focus-sessions": "Focus sessions pane",
+	"focus-tree": "Focus tree pane",
+	"focus-content": "Focus content pane",
+	"scope-current": "Scope: Current folder",
+	"scope-all": "Scope: All",
 	help: "Toggle this help",
 	quit: "Quit the panel",
 	search: "Search in the focused pane",
@@ -115,21 +119,13 @@ export const ACTION_DESCRIPTIONS: Record<ActionId, string> = {
 	"tree-filter-user": "Filter: user messages only",
 	"tree-filter-labeled": "Filter: labeled only",
 	"tree-filter-all": "Filter: everything",
-	"cursor-left": "Cursor left",
-	"cursor-right": "Cursor right",
-	"word-forward": "Word forward",
-	"word-backward": "Word backward",
-	"center-cursor": "Center cursor line",
-	"preview-toggle": "Toggle preview mode",
-	yank: "Yank selection",
-	"yank-line": "Yank line",
 };
 
 /** Actions shown as footer hints per pane, in display order (first few that fit). */
 export const FOOTER_HINTS: Record<PaneId, ActionId[]> = {
-	sessions: ["search", "help", "focus-next", "toggle-scope", "session-resume", "session-delete", "session-rename", "quit"],
+	sessions: ["search", "help", "focus-next", "scope-current", "scope-all", "session-resume", "session-delete", "session-rename", "quit"],
 	tree: ["search", "help", "focus-next", "tree-restore", "tree-label", "tree-copy", "quit"],
-	content: ["search", "help", "focus-next", "yank", "preview-toggle", "go-top", "quit"],
+	content: ["search", "help", "focus-next", "go-top", "go-bottom", "quit"],
 };
 
 /** Display names of scopes in the help overlay. */
@@ -138,4 +134,18 @@ export const SCOPE_TITLES: Record<KeyScope, string> = {
 	sessions: "Sessions pane",
 	tree: "Tree pane",
 	content: "Content pane",
+};
+
+/** Pane title shown in the frame header; the panel prefixes it with the jump key ("[1] SESSIONS"). */
+export const PANE_TITLES: Record<PaneId, string> = {
+	sessions: "SESSIONS",
+	tree: "TREE",
+	content: "CONTENT",
+};
+
+/** Action that focuses each pane, used to derive the "[1]" prefix from the resolved keymap. */
+export const FOCUS_ACTIONS: Record<PaneId, ActionId> = {
+	sessions: "focus-sessions",
+	tree: "focus-tree",
+	content: "focus-content",
 };

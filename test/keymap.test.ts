@@ -56,18 +56,25 @@ test("resolveKeys: pane bindings shadow global, multi-key sequences go through p
 	const bindings = compileKeymap(DEFAULT_KEYMAP);
 	// global
 	assert.deepEqual(resolveKeys(bindings, "sessions", ["\t"]), { kind: "action", action: "focus-next", scope: "global" });
-	assert.deepEqual(resolveKeys(bindings, "content", ["C"]), { kind: "action", action: "toggle-scope", scope: "global" });
+	assert.deepEqual(resolveKeys(bindings, "sessions", ["l"]), { kind: "action", action: "focus-next", scope: "global" });
+	assert.deepEqual(resolveKeys(bindings, "content", ["h"]), { kind: "action", action: "focus-prev", scope: "global" });
+	assert.deepEqual(resolveKeys(bindings, "content", ["2"]), { kind: "action", action: "focus-tree", scope: "global" });
+	assert.deepEqual(resolveKeys(bindings, "content", ["C"]), { kind: "action", action: "scope-current", scope: "global" });
+	assert.deepEqual(resolveKeys(bindings, "content", ["A"]), { kind: "action", action: "scope-all", scope: "global" });
 	assert.deepEqual(resolveKeys(bindings, "tree", ["?"]), { kind: "action", action: "help", scope: "global" });
 	assert.deepEqual(resolveKeys(bindings, "tree", ["/"]), { kind: "action", action: "search", scope: "global" });
 	// "n" is search-next globally but "session-new" in the sessions pane
 	assert.equal(actionOf(resolveKeys(bindings, "sessions", ["n"])), "session-new");
 	assert.equal(actionOf(resolveKeys(bindings, "tree", ["n"])), "search-next");
+	// "l" is focus-next everywhere; the tree pane labels with "T" (like /tree's shift+T)
+	assert.equal(actionOf(resolveKeys(bindings, "tree", ["l"])), "focus-next");
+	assert.equal(actionOf(resolveKeys(bindings, "tree", ["T"])), "tree-label");
 	// gg: first g is pending, second completes
 	assert.deepEqual(resolveKeys(bindings, "sessions", ["g"]), { kind: "pending" });
 	assert.equal(actionOf(resolveKeys(bindings, "sessions", ["g", "g"])), "go-top");
 	assert.deepEqual(resolveKeys(bindings, "sessions", ["g", "x"]), { kind: "none" });
-	// content pane: "y" alone is yank but also prefix of "yy" -> a match wins over pending
-	assert.equal(actionOf(resolveKeys(bindings, "content", ["y"])), "yank");
+	// content pane is read-only: "y" is not bound there
+	assert.deepEqual(resolveKeys(bindings, "content", ["y"]), { kind: "none" });
 	assert.deepEqual(resolveKeys(bindings, "sessions", ["z"]), { kind: "none" });
 });
 
@@ -76,7 +83,7 @@ test("mergeKeymap: user chords replace defaults per action, null unbinds, other 
 	const merged = mergeKeymap(
 		DEFAULT_KEYMAP,
 		{
-			global: { help: "F1", "toggle-scope": ["C", "A", "ctrl+space"] },
+			global: { help: "F1", "scope-all": ["A", "ctrl+space"] },
 			sessions: { "session-delete": "ctrl+d", "session-share": null },
 			// @ts-expect-error unknown scope on purpose
 			bogus: { quit: "x" },
@@ -84,12 +91,12 @@ test("mergeKeymap: user chords replace defaults per action, null unbinds, other 
 		warnings,
 	);
 	assert.equal(merged.global.help, "F1");
-	assert.deepEqual(merged.global["toggle-scope"], ["C", "A", "ctrl+space"]);
+	assert.deepEqual(merged.global["scope-all"], ["A", "ctrl+space"]);
 	assert.equal(merged.global.quit, DEFAULT_KEYMAP.global.quit);
 	assert.equal(merged.sessions["session-delete"], "ctrl+d");
 	assert.equal(merged.sessions["session-share"], undefined);
 	assert.equal(merged.sessions["session-rename"], "r");
-	assert.equal(merged.tree["tree-label"], "l");
+	assert.equal(merged.tree["tree-label"], "T");
 	assert.equal(warnings.length, 1);
 	assert.match(warnings[0]!, /unknown keymap scope/);
 	// defaults must not be mutated

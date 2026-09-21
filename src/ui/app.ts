@@ -7,12 +7,12 @@
  * Layout (see docs/design.md):
  *
  *      25%              75%
- *   ┌──────────┬────────────────────┐
- *   │ SESSIONS │                    │
- *   ├──────────┤      CONTENT       │
- *   │   TREE   │                    │
- *   └──────────┴────────────────────┘
- *   │ NORMAL │ / Search  ? Help ... │   <- footer, or the search bar in search mode
+ *   ┌──────────────┬────────────────────┐
+ *   │ [1] SESSIONS │                    │
+ *   ├──────────────┤    [3] CONTENT     │
+ *   │ [2] TREE     │                    │
+ *   └──────────────┴────────────────────┘
+ *   │ NORMAL │ / Search  ? Help ...     │   <- footer, or the search bar in search mode
  *
  * This layer does no I/O: all data arrives through the injected `DataSource`
  * so the panel stays testable with plain objects.
@@ -20,14 +20,15 @@
  * Key handling (本任务范围):
  *   - 按键 → resolveKeys(bindings, focus, pending) → ActionId → dispatch()
  *   - 支持多键序列（"gg"）：前缀匹配时把按键放进 pending 缓冲，等待下一键
- *   - Tab / Shift+Tab 切换焦点，C / A 切换 Current ↔ All，? 帮助，/ 搜索栏
+ *   - h / l 前后切换焦点，1 / 2 / 3 直接跳到对应面板（面板标题显示 "[1] SESSIONS"）
+ *   - C 切到 Current folder，A 切到 All（各自只做单向切换），? 帮助，/ 搜索栏
  *   - 面板内的动作（移动光标、删除…）只做分发，具体实现留给后续任务
  */
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, Focusable } from "@earendil-works/pi-tui";
-import { type Binding, compileKeymap, matchesKeyId, resolveKeys } from "../config/keys.ts";
-import { DEFAULT_KEYMAP } from "../config/keymap.ts";
+import { type Binding, compileKeymap, labelsFor, matchesKeyId, resolveKeys } from "../config/keys.ts";
+import { DEFAULT_KEYMAP, FOCUS_ACTIONS, PANE_TITLES } from "../config/keymap.ts";
 import { LEFT_COLUMN_RATIO, PANE_IDS } from "../constants.ts";
 import type {
 	ActionId,
@@ -312,8 +313,20 @@ export class LazyPanel implements Component, Focusable {
 			case "focus-prev":
 				this.cycleFocus(-1);
 				return;
-			case "toggle-scope":
-				this.toggleScope();
+			case "focus-sessions":
+				this.setFocus("sessions");
+				return;
+			case "focus-tree":
+				this.setFocus("tree");
+				return;
+			case "focus-content":
+				this.setFocus("content");
+				return;
+			case "scope-current":
+				this.setScope("current-folder");
+				return;
+			case "scope-all":
+				this.setScope("all");
 				return;
 			case "help":
 				this.state.helpOpen = true;
@@ -336,13 +349,18 @@ export class LazyPanel implements Component, Focusable {
 
 	private cycleFocus(delta: 1 | -1): void {
 		const i = PANE_IDS.indexOf(this.state.focus);
-		const next = PANE_IDS[(i + delta + PANE_IDS.length) % PANE_IDS.length]!;
-		this.state.focus = next;
+		this.setFocus(PANE_IDS[(i + delta + PANE_IDS.length) % PANE_IDS.length]!);
+	}
+
+	private setFocus(pane: PaneId): void {
+		this.state.focus = pane;
 		this.o.requestRender();
 	}
 
-	private toggleScope(): void {
-		this.state.scope = this.state.scope === "all" ? "current-folder" : "all";
+	/** Switch the list scope; C / A are one-way so pressing the current one is a no-op. */
+	private setScope(scope: ListScope): void {
+		if (this.state.scope === scope) return;
+		this.state.scope = scope;
 		// 切换范围后光标回到顶部并重新拉取会话列表。
 		this.state.cursor.sessions = 0;
 		this.state.selectedSessionFiles.clear();
@@ -425,6 +443,7 @@ export class LazyPanel implements Component, Focusable {
 					scope: this.state.scope,
 					sort: this.state.sort,
 					selected: this.state.selectedSessionFiles,
+					title: this.paneTitle("sessions"),
 					theme,
 				},
 				leftW,
@@ -437,6 +456,7 @@ export class LazyPanel implements Component, Focusable {
 					focused: this.state.focus === "tree",
 					filter: this.state.treeFilter,
 					emptyMessage: this.emptyMessage(selectedSession),
+					title: this.paneTitle("tree"),
 					theme,
 				},
 				leftW,
@@ -450,6 +470,7 @@ export class LazyPanel implements Component, Focusable {
 				scroll: this.state.cursor.content,
 				focused: this.state.focus === "content",
 				emptyMessage: this.emptyMessage(selectedSession),
+				title: this.paneTitle("content"),
 				theme,
 			},
 			rightW,
@@ -483,6 +504,12 @@ export class LazyPanel implements Component, Focusable {
 		if (!selected) return "Select a session.";
 		if (this.loadedSessionFile !== selected.file) return "Loading…";
 		return "Nothing to show.";
+	}
+
+	/** "[1] SESSIONS": the jump key comes from the resolved keymap, so rebinding shows up here. */
+	private paneTitle(pane: PaneId): string {
+		const key = labelsFor(this.keymap, "global", FOCUS_ACTIONS[pane])[0];
+		return key ? `[${key}] ${PANE_TITLES[pane]}` : PANE_TITLES[pane];
 	}
 }
 
