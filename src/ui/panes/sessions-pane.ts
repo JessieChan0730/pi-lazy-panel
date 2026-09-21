@@ -13,7 +13,7 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { ListScope, SessionRow, SessionSortMode } from "../../types.ts";
 import { formatShortDate, shortenPath } from "../../utils/format.ts";
-import { fit, frame } from "../frame.ts";
+import { fit, frame, metaBudget } from "../frame.ts";
 
 export interface SessionsPaneProps {
 	rows: SessionRow[];
@@ -46,12 +46,12 @@ export function renderSessionsPane(p: SessionsPaneProps, width: number, height: 
 		}
 	}
 
-	const scopeLabel = p.scope === "all" ? "All" : "Current";
-	const meta = p.rows.length ? `${p.cursor + 1}/${p.rows.length} · ${scopeLabel} · ${p.sort}` : scopeLabel;
+	const title = p.title ?? "SESSIONS";
+	const meta = sessionsMeta(p.rows.length, p.cursor, p.scope, p.sort, metaBudget(width, title));
 	return frame(body, {
 		width,
 		height,
-		title: p.title ?? "SESSIONS",
+		title,
 		meta,
 		border: (s) => theme.fg(p.focused ? "borderAccent" : "border", s),
 		titleStyle: (s) => (p.focused ? theme.bold(theme.fg("accent", s)) : theme.fg("muted", s)),
@@ -88,6 +88,27 @@ function renderRow(row: SessionRow, inner: number, isCursor: boolean, p: Session
 		fit(markerStyle(marker) + indent + theme.fg("text", titleText) + " " + theme.fg("dim", date), inner),
 		fit(theme.fg("muted", line2Raw), inner),
 	];
+}
+
+/** Header labels of the list scope, long form and the short form used when space is tight. */
+export const SCOPE_LABELS: Record<ListScope, { long: string; short: string }> = {
+	"current-folder": { long: "Current", short: "Cur" },
+	all: { long: "All", short: "All" },
+};
+
+/**
+ * Header meta for the sessions pane: "1/15 · Current · recent".
+ *
+ * 宽度不够时按顺序降级（去掉排序 → 缩短 scope → 只留位置），保证任何宽度下
+ * 用户都能看到当前 scope 和会话数量，而不是整段消失。
+ */
+export function sessionsMeta(total: number, cursor: number, scope: ListScope, sort: SessionSortMode, budget: number): string {
+	const label = SCOPE_LABELS[scope];
+	const pos = `${Math.min(cursor + 1, total)}/${total}`;
+	const candidates = total
+		? [`${pos} · ${label.long} · ${sort}`, `${pos} · ${label.long}`, `${pos} · ${label.short}`, pos]
+		: [label.long, label.short];
+	return candidates.find((c) => visibleWidth(c) <= budget) ?? candidates[candidates.length - 1]!;
 }
 
 /** First visible index so that `cursor` stays inside a window of `visible` rows. */

@@ -495,7 +495,14 @@ export class LazyPanel implements Component, Focusable {
 		const pendingHint = this.pending.length ? `pending: ${this.pending.join("")}` : undefined;
 		const status = pendingHint ?? this.status;
 		return renderFooter(
-			{ mode: this.state.mode, focus: this.state.focus, keymap: this.keymap, theme: this.o.theme, ...(status ? { status } : {}) },
+			{
+				mode: this.state.mode,
+				focus: this.state.focus,
+				keymap: this.keymap,
+				scope: this.state.scope,
+				theme: this.o.theme,
+				...(status ? { status } : {}),
+			},
 			width,
 		)[0]!;
 	}

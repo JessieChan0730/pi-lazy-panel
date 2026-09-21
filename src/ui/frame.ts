@@ -31,6 +31,18 @@ export function fit(line: string, width: number): string {
 	return truncateToWidth(line, width, "…", true);
 }
 
+/**
+ * Max visible columns of `meta` text that `frame()` can show next to `title`
+ * without dropping it. Panes use this to pick a shorter meta variant instead of
+ * silently losing the whole "1/15 · Current · recent" hint in a narrow column.
+ *
+ * 推导：顶边 = "┌─" + " title " + fill + " meta " + "─" + "┐"，fill >= 0 时 meta 才保留，
+ * 即 meta 文本宽度 <= width - 8 - visibleWidth(title)。
+ */
+export function metaBudget(width: number, title: string): number {
+	return Math.max(0, width - 8 - visibleWidth(title));
+}
+
 /** Build a bordered frame around `body`. Body lines are clipped/padded to the inner size. */
 export function frame(body: string[], o: FrameOptions): string[] {
 	const { width, height } = o;

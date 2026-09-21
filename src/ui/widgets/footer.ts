@@ -13,7 +13,7 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { FOOTER_HINTS } from "../../config/keymap.ts";
 import { labelsForFocus } from "../../config/keys.ts";
-import type { ActionId, Keymap, PaneId, PanelMode } from "../../types.ts";
+import type { ActionId, Keymap, ListScope, PaneId, PanelMode } from "../../types.ts";
 import { fit } from "../frame.ts";
 
 export interface FooterProps {
@@ -21,9 +21,17 @@ export interface FooterProps {
 	focus: PaneId;
 	keymap: Keymap;
 	theme: Theme;
+	/** Current list scope; the hint for the scope already active is hidden ("A All" while on Current). */
+	scope?: ListScope;
 	/** Optional status text (e.g. "loading…" or an error). */
 	status?: string;
 }
+
+/** Scope actions are one-way, so only the one that would change something is worth a hint. */
+const SCOPE_ACTION_OF: Record<ListScope, ActionId> = {
+	"current-folder": "scope-current",
+	all: "scope-all",
+};
 
 /** Short footer wording per action (falls back to the action id). */
 const SHORT: Partial<Record<ActionId, string>> = {
@@ -52,7 +60,10 @@ export function renderFooter(p: FooterProps, width: number): string[] {
 	// 只显示放得下的提示，避免窄终端里被截断成半个词。
 	const parts: string[] = [];
 	let used = 0;
+	// 当前已经是 Current 就不提示 C Current，只提示 A All；反之亦然。
+	const activeScopeAction = p.scope ? SCOPE_ACTION_OF[p.scope] : undefined;
 	for (const action of FOOTER_HINTS[p.focus]) {
+		if (action === activeScopeAction) continue;
 		const labels = labelsForFocus(p.keymap, p.focus, action);
 		if (labels.length === 0) continue;
 		const key = labels[0]!;

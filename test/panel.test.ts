@@ -131,6 +131,35 @@ test("C switches to Current folder only and A to All only (no toggling)", async 
 	assert.ok(h.text(160)[0]!.includes("All"), `header should mention All: ${h.text(160)[0]}`);
 });
 
+test("sessions header shows position · scope · sort in BOTH scopes, and the footer hints the other scope", async () => {
+	const h = makePanel();
+	await h.panel.load();
+	const header = (w: number) => h.text(w)[0]!;
+	const footer = (w: number) => h.text(w).at(-1)!;
+
+	// Current: 回归点——"[1] " 前缀让 "Current" 在 160 列（左栏 40 列）下放不下，之前整段 meta 消失
+	assert.equal(h.panel.state.scope, "current-folder");
+	assert.ok(header(200).includes("1/1 · Current · recent"), `Current header: ${header(200)}`);
+	assert.ok(header(160).includes("1/1 · Current"), `Current header @160: ${header(160)}`);
+	assert.ok(footer(160).includes("A All"), `footer should offer All: ${footer(160)}`);
+	assert.equal(footer(160).includes("C Current"), false, `footer must not hint the active scope: ${footer(160)}`);
+
+	// All
+	h.panel.handleInput("A");
+	await flush();
+	assert.ok(header(200).includes("1/2 · All · recent"), `All header: ${header(200)}`);
+	assert.ok(header(160).includes("1/2 · All · recent"), `All header @160: ${header(160)}`);
+	assert.ok(footer(160).includes("C Current"), `footer should offer Current: ${footer(160)}`);
+	assert.equal(footer(160).includes("A All"), false, `footer must not hint the active scope: ${footer(160)}`);
+
+	// narrow terminals degrade the meta step by step but never drop position + scope entirely
+	h.panel.handleInput("C");
+	await flush();
+	assert.ok(header(120).includes("1/1 · Cur"), `120 cols: ${header(120)}`);
+	assert.ok(header(100).includes("1/1"), `100 cols: ${header(100)}`);
+	for (const w of [100, 120, 160, 200]) assert.equal(visibleWidth(h.panel.render(w)[0]!), w);
+});
+
 test("? opens the help overlay for the focused pane and ? / Esc close it", () => {
 	const h = makePanel({ height: 30 });
 	h.panel.handleInput("?");
