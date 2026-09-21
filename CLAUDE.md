@@ -1,0 +1,116 @@
+# CLAUDE.md
+
+## 这个项目是什么
+
+一个类似 lazygit 的 pi(<https://pi.dev/>) 插件，用来管理 pi 的历史对话，主要命令有三个 /resume（恢复会话，从历史会话中选择并恢复）  /tree  （会话树导航，跳转到对话树的任意节点继续对话，某个对话详情里面的某一个界面） /new （新建一个对话），然后还有围绕着对话进行操作的命令：/name（命名会话，为当前会话设置一个易读的名称） /session（会话信息，显示会话文件路径、ID、消息数、token 用量和费用） /fork（分叉会话，从之前的用户消息分叉出一个新会话文件）/clone（克隆会话复制当前活动分支到新会话文件）/copy （复制 AI 最后一条回复到剪贴板）/export（导出会话导出为 HTML 或 JSONL 文件）/import（导入会话从 JSONL 文件导入并恢复会话）
+/share（分享会话上传为私有 GitHub Gist，生成可分享的 HTML 链接）， 根据这些命令能够拿到信息，我觉得产品可以设计成为这样：
+
+- 左边第一个面板是显示历史对话, 也就是 /resume 里面的那些数据
+- 左边第二个面板（在第一个面板底部）是显示对话节点 也就是 /tree 里面的那些数据（根据上面选择的不同的 /resume 来确自动变化这里面的内容）
+- 右边第一个面板是显示对话的详细内容（需要区分是AI的消息，还是我的消息），这个面板占据全部高度
+- 搜索，放在底部不需要一个输入框。当用户输入 / 时候，底部出现 搜索：两个字样，随后用户输入内容回车进行搜索（只搜索当前focus面板中的内容），这个完全参考 lazygit 就行
+
+聚焦到得不同的面板，不同的快捷键有不同的含义。
+
+```txt
+关系其实是：
+    resume1
+        - tree1
+            - node1
+            - node2
+```
+
+也就是随着第一个面板，用户选择聚焦不同的resume,下面的第二个面板的tree也要不停变化显示不同的可还原的节点
+
+暂定的指定（后续可能会适配）：
+/compact，/settings，/changelog
+
+确定不会用到的指令：
+/login，/logout，/model，/thinking，/scoped-models
+
+## 命令
+
+```
+npm install            # 必须先执行：pi 相关包是 devDependencies，默认不会安装
+npm run check          # tsc --noEmit（strict、noUncheckedIndexedAccess、exactOptionalPropertyTypes）
+npm test               # node --import tsx --test "test/**/*.test.ts"
+npm run dev            # pi -e ./src/index.ts，临时把插件加载进一个 pi TUI，不写配置
+npm run install:pi     # pi install "$(pwd)"，把本目录以本地路径注册到 ~/.pi/agent/settings.json，只需执行一次
+npm run uninstall:pi   # pi remove "$(pwd)"，从 pi 中移除
+```
+
+- 运行单个测试文件：`node --import tsx --test test/ui.test.ts`
+- 按名称过滤：`node --import tsx --test --test-name-pattern="frame" test/ui.test.ts`
+- 没有构建步骤：pi 直接加载 `src/index.ts`（见 `package.json` 的 `pi.extensions`）。`install:pi` 注册的是目录路径，改完代码后重启 pi 或在 pi 里输入 `/reload` 即为最新代码。
+- 没有 linter，`.editorconfig`（tab 缩进、LF）是格式规范。
+- pi 扩展 API 文档在安装后的 `node_modules/@earendil-works/pi-coding-agent/docs/{extensions,tui,session-format}.md`，涉及 pi / pi-tui API 时先查文档，不要猜。
+
+## 项目目录结构
+
+严格分层，上层可以依赖下层，下层禁止依赖上层。
+
+```
+src/
+├── index.ts                  # 入口：registerCommand("/lazy-history")，用 ctx.ui.custom 打开全屏面板
+├── types.ts                  # 共享类型（只放类型，禁止运行时代码）
+├── constants.ts              # 常量：扩展 id、命令名、布局比例、面板 id
+├── ui/                       # 渲染层：pi-tui Component。不做 I/O，不调用 pi 会话 API
+│   ├── app.ts                # 根组件 LazyPanel + PanelState；数据通过 DataSource 接口注入
+│   ├── frame.ts              # 纯函数：画边框、左右拼列、按可见宽度补齐/截断
+│   ├── panes/
+│   │   ├── sessions-pane.ts  # 左上 SESSIONS 面板
+│   │   ├── tree-pane.ts      # 左下 TREE 面板
+│   │   └── content-pane.ts   # 右侧 CONTENT 面板，用 pi-tui 的 Markdown 渲染消息
+│   └── widgets/
+│       ├── footer.ts         # 底部一行：模式 + 当前面板快捷键提示
+│       ├── search-bar.ts     # 底部搜索输入（TODO）
+│       ├── confirm-dialog.ts # 删除 / fork 前的确认框（TODO）
+│       ├── help-overlay.ts   # ? 快捷键帮助（TODO）
+│       └── session-info-dialog.ts  # i 会话信息弹窗（TODO）
+├── actions/                  # 副作用层：每个函数包装一个 pi 命令/API，不弹窗，由调用方先确认（TODO）
+│   ├── session-actions.ts    # resume / delete / rename / fork / export / import / share / clone …
+│   └── tree-actions.ts       # restore / label / copy
+├── data/                     # 数据层：只读适配 pi 的 SessionManager，产出纯数据行，无 UI
+│   ├── sessions.ts           # SessionManager.list/listAll -> SessionRow[]；sortSessions
+│   ├── tree.ts               # getTree -> TreeRow[]；applyTreeFilter（d/t/u/l/a）
+│   ├── content.ts            # getBranch -> ContentBlock[]；loadSessionInfo；resolveContentLeaf
+│   └── search.ts             # 纯函数：解析 name:/model:/path:/tag:/after:/before: 查询（TODO）
+├── config/
+│   ├── keymap.ts             # 默认键位（纯数据）
+│   └── config.ts             # 唯一知道 ~/.pi/agent/lazy-panel.json 的模块，深合并用户配置
+└── utils/
+    └── format.ts             # 纯格式化：时间、token、费用、路径缩写
+
+test/
+├── smoke.test.ts             # 键位表、搜索解析的冒烟测试
+└── ui.test.ts                # 格式化、frame 几何、树过滤
+
+docs/keybindings.md           # 默认快捷键表，新增 ActionId 时同步更新
+docs/design.md                # 产品设计（原 计划.md）
+docs/progress.md              # 任务进度（原 进度.md），每次开工前先看
+AGENTS.md                     # 仅指向本文件，规则统一在这里维护
+```
+
+数据流：`sessions.ts` → `SessionRow[]` → SESSIONS 面板；选中行驱动 `tree.ts` → `TreeRow[]` → TREE 面板；选中节点（或活动叶子）驱动 `content.ts` → `ContentBlock[]` → CONTENT 面板。所有 UI 状态集中在 `PanelState`（`src/ui/app.ts`）。
+
+快捷键是间接绑定：按键 → `ActionId`（`src/types.ts`），按作用域（`global | sessions | tree | content`）在 `src/config/keymap.ts` 给默认值，`loadConfig` 深合并用户覆盖。新增动作时要同时改：`ActionId`、默认键位、UI 里的分发、`docs/keybindings.md`。
+
+## 代码风格/合作规范
+
+1. 函数格式尽量统一，顶级函数最好不要使用箭头函数
+2. 关键代码部分可以添加中文注释，方便我review代码
+3. 用户叫你提交的代码的时候，message 格式请遵循`约定式提交 (Conventional Commits)`, message 要使用英文，例如 `fix(sessions): optimize ui`
+4. 完成一个任务后，自动帮我执行 `npm run install:pi` 我会去 pi 中进行验证
+5. 本地导入必须显式包含 `.ts` 扩展名（需配合 `allowImportingTsExtensions` 和 `verbatimModuleSyntax` 配置）；仅类型导入（type-only imports）必须使用 `import type` 语法。
+6. `@earendil-works/pi-coding-agent`、`@earendil-works/pi-tui` 和 `typebox` 需保留在 `peerDependencies` 中，版本号设为 `*`；严禁将其打包（bundle）或作为本地依赖（vendor）包含在内。
+7. 执行破坏性操作（如删除、fork）时，必须先通过 `ui/widgets/confirm-dialog.ts` 进行确认。
+8. 对话内容渲染必须使用 `@earendil-works/pi-tui` 提供的 `Markdown` 组件；禁止引入其他 Markdown 库。
+9. `/lazy-history` 仅适用于 TUI 模式；请务必在 `src/index.ts` 中保留 `ctx.mode !== "tui"` 的条件判断。
+10. 模块之间尽量低耦合
+
+## 重要文档
+
+不清楚业务和进度，请查看下面两个文档
+
+- ./docs/design.md
+- ./docs/progress.md

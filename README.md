@@ -5,7 +5,7 @@ three-pane panel: sessions on the left, the selected session's tree below it, an
 conversation content on the right. Everything is driven by vim-like keys.
 
 > Status: **scaffold only**. The directory structure and stubs are in place; no feature is
-> implemented yet. See [计划.md](./计划.md) for the full product plan (Chinese).
+> implemented yet. See [docs/design.md](./docs/design.md) for the full product plan (Chinese).
 
 ```
      25%              75%
