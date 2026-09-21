@@ -37,14 +37,14 @@ Source of truth: `src/config/keymap.ts`. Override any binding in
 
 | Key         | Action                                     |
 | ----------- | ------------------------------------------ |
-| `l` / `Tab` | Focus next pane                            |
-| `h`         | Focus previous pane                        |
-| `1` `2` `3` | Focus SESSIONS / TREE / CONTENT directly   |
-| `C`         | List scope: Current folder                 |
-| `A`         | List scope: All                            |
-| `?`         | Help overlay for the focused pane (`?`/`Esc`/`q` close, `j`/`k` scroll) |
-| `q` / `Ctrl+c` | Quit the panel                          |
-| `Esc`       | Discard pending keys → clear search → quit |
+| ~~`l` / `Tab`~~ | ~~Focus next pane~~                        |
+| ~~`h`~~         | ~~Focus previous pane~~                    |
+| ~~`1` `2` `3`~~ | ~~Focus SESSIONS / TREE / CONTENT directly~~ |
+| ~~`C`~~         | ~~List scope: Current folder~~             |
+| ~~`A`~~         | ~~List scope: All~~                        |
+| ~~`?`~~         | ~~Help overlay for the focused pane (`?`/`Esc`/`q` close, `j`/`k` scroll)~~ |
+| ~~`q` / `Ctrl+c`~~ | ~~Quit the panel~~                      |
+| ~~`Esc`~~       | ~~Discard pending keys → clear search → quit~~ |
 | `/`         | Search bar for the focused pane (`Enter` run, `Esc` cancel) |
 | `n` / `N`   | Next / previous search match               |
 
@@ -54,9 +54,9 @@ Source of truth: `src/config/keymap.ts`. Override any binding in
 
 | Key           | Action                                          |
 | ------------- | ----------------------------------------------- |
-| `j` `k` `↑` `↓` | Move cursor                                   |
-| `gg` / `G`    | Top / bottom                                    |
-| `J` / `K`     | Scroll the content pane                         |
+| ~~`j` `k` `↑` `↓`~~ | ~~Move cursor~~                           |
+| ~~`gg` / `G`~~ | ~~Top / bottom~~                               |
+| ~~`J` / `K`~~ | ~~Scroll the content pane~~                     |
 | `Enter`       | Resume session                                  |
 | `d`           | Delete (confirm y/n; works on multi-select)     |
 | `r`           | Rename                                          |
@@ -75,8 +75,8 @@ Source of truth: `src/config/keymap.ts`. Override any binding in
 
 | Key             | Action                                              |
 | --------------- | --------------------------------------------------- |
-| `j` `k` `↑` `↓` | Move cursor                                         |
-| `gg` / `G`      | Top / bottom                                        |
+| ~~`j` `k` `↑` `↓`~~ | ~~Move cursor~~                                 |
+| ~~`gg` / `G`~~  | ~~Top / bottom~~                                    |
 | `Enter`         | Restore to node: No summary / Summarize / Custom    |
 | `y`             | Copy node text                                      |
 | `T`             | Add / edit label (same as `Shift+T` in `/tree`)     |
@@ -88,5 +88,5 @@ Only scrolling; copying a message is done from the tree pane (`y`).
 
 | Key             | Action                |
 | --------------- | --------------------- |
-| `j` `k` `↑` `↓` | Scroll                |
-| `gg` / `G`      | Top / bottom          |
+| ~~`j` `k` `↑` `↓`~~ | ~~Scroll~~        |
+| ~~`gg` / `G`~~  | ~~Top / bottom~~      |
