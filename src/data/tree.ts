@@ -118,6 +118,52 @@ function assistantText(content: Part[]): string {
 	return "(empty)";
 }
 
+/**
+ * Full text of one entry, for the clipboard (mirrors what /tree ctrl+x copies).
+ *
+ * - message: bash executions copy the command; other messages copy their text
+ *   parts, an assistant message without text falls back to its error message
+ * - custom_message: its text parts
+ * - compaction / branch_summary: the summary
+ * - everything else (labels, model changes…): nothing
+ *
+ * Returns `undefined` when the entry is missing or has no text.
+ */
+export function loadNodeText(sessionFile: string, entryId: string): string | undefined {
+	const manager = SessionManager.open(sessionFile);
+	const entry = manager.getEntry(entryId);
+	if (!entry) return undefined;
+	let text: string | undefined;
+	switch (entry.type) {
+		case "message": {
+			const m = entry.message as { role: string; command?: string; content?: string | Part[]; errorMessage?: string };
+			if (m.role === "bashExecution") text = m.command;
+			else if (m.content !== undefined) {
+				text = fullText(m.content);
+				// 和 /tree 一致：没有正文的 assistant 回复复制它的错误信息。
+				if (!text && m.role === "assistant") text = m.errorMessage;
+			}
+			break;
+		}
+		case "custom_message":
+			text = fullText(entry.content);
+			break;
+		case "compaction":
+		case "branch_summary":
+			text = entry.summary;
+			break;
+		default:
+			break;
+	}
+	return text?.trim() ? text : undefined;
+}
+
+/** Concatenate the text parts of a message verbatim (no whitespace collapsing). */
+function fullText(content: string | Part[]): string {
+	if (typeof content === "string") return content;
+	return content.map((p) => (p.type === "text" ? (p.text ?? "") : "")).join("");
+}
+
 /** Filter tree rows (mirrors /tree ctrl+d/t/u/l/a). */
 export function applyTreeFilter(rows: TreeRow[], filter: TreeFilter): TreeRow[] {
 	switch (filter) {

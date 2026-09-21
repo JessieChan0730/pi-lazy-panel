@@ -20,7 +20,7 @@ export type ListScope = "current-folder" | "all";
 export type SessionSortMode = "threaded" | "recent" | "fuzzy";
 
 /** Input mode of the panel, shown in the footer (vim-like). */
-export type PanelMode = "normal" | "search" | "visual" | "preview";
+export type PanelMode = "normal" | "search" | "label" | "visual" | "preview";
 
 // ---------------------------------------------------------------------------
 // Data rows

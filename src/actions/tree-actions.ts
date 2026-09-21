@@ -2,14 +2,20 @@
  * Tree actions — side effects triggered from the tree pane.
  *
  *   restore -> ctx.navigateTree(entryId, { summarize, customInstructions })
- *              after the user picks: No summary | Summarize | Summarize with custom prompt
- *   copy    -> copyToClipboard(entry text)
- *   label   -> pi.setLabel(entryId, label)
+ *              after the user picks: No summary | Summarize | Summarize with custom prompt (TODO)
+ *   copy    -> copyToClipboard(full entry text)            (/tree ctrl+x)
+ *   label   -> pi.setLabel / SessionManager.appendLabelChange (/tree shift+T)
  *
- * TODO: implement each action.
+ * No dialogs here: the caller collects input / confirmation first.
  */
 
-import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import {
+	copyToClipboard,
+	type ExtensionAPI,
+	type ExtensionCommandContext,
+	SessionManager,
+} from "@earendil-works/pi-coding-agent";
+import { loadNodeText } from "../data/tree.ts";
 import type { TreeRow } from "../types.ts";
 
 export type RestoreSummaryMode = "none" | "summarize" | "summarize-custom";
@@ -27,10 +33,36 @@ export async function restoreToNode(
 	// TODO
 }
 
-export async function copyNodeText(_ctx: ExtensionCommandContext, _row: TreeRow): Promise<void> {
-	// TODO
+/**
+ * Copy the full text of a tree node to the system clipboard.
+ * Resolves to `false` when the entry has no text to copy (like /tree's
+ * "Selected entry has no text to copy").
+ */
+export async function copyNodeText(sessionFile: string, entryId: string): Promise<boolean> {
+	const text = loadNodeText(sessionFile, entryId);
+	if (!text) return false;
+	await copyToClipboard(text);
+	return true;
 }
 
-export async function labelNode(_ctx: ExtensionCommandContext, _row: TreeRow, _label: string | undefined): Promise<void> {
-	// TODO
+/**
+ * Set (or clear with `undefined` / "") a label on a tree node.
+ *
+ * 面板操作的可能是任意历史会话文件：如果就是 pi 当前打开的会话，走 `pi.setLabel`
+ * 让 pi 内存里的 SessionManager 同步；否则单独打开该文件追加 label 条目
+ * （SessionManager.open 会持久化到 .jsonl）。
+ */
+export async function labelNode(
+	pi: Pick<ExtensionAPI, "setLabel">,
+	ctx: Pick<ExtensionCommandContext, "sessionManager">,
+	sessionFile: string,
+	entryId: string,
+	label: string | undefined,
+): Promise<void> {
+	const value = label?.trim() || undefined;
+	if (ctx.sessionManager.getSessionFile() === sessionFile) {
+		pi.setLabel(entryId, value);
+		return;
+	}
+	SessionManager.open(sessionFile).appendLabelChange(entryId, value);
 }

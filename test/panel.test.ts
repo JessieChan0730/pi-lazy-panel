@@ -11,7 +11,8 @@ import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { DEFAULT_KEYMAP } from "../src/config/keymap.ts";
 import { mergeKeymap } from "../src/config/config.ts";
 import type { ContentBlock, SessionRow, TreeRow } from "../src/types.ts";
-import { type DataSource, LazyPanel } from "../src/ui/app.ts";
+import { type ActionSource, type DataSource, LazyPanel } from "../src/ui/app.ts";
+import { LABEL_PROMPT } from "../src/ui/widgets/label-bar.ts";
 import { SEARCH_LABEL } from "../src/ui/widgets/search-bar.ts";
 
 /** Styling is irrelevant here; return text unchanged so assertions stay simple. */
@@ -428,4 +429,129 @@ test("content pane scrolls by line with j/k, gg/G, and J/K from the sessions pan
 	h.panel.handleInput("K");
 	assert.equal(h.panel.state.cursor.content, 0);
 	h.panel.dispose();
+});
+
+/** Panel whose tree rows come from a mutable map of labels, plus a recording ActionSource. */
+function makeTreeActionPanel(actions?: Partial<ActionSource>) {
+	const labels = new Map<string, string>();
+	const copies: Array<{ file: string; entryId: string }> = [];
+	const labelCalls: Array<{ file: string; entryId: string; label: string | undefined }> = [];
+	const data: DataSource = {
+		listSessions: async () => [row(1, "/a")],
+		loadTree: async (_file, filter) => {
+			const rows = [treeRow(0), treeRow(1), treeRow(2)].map((r) => (labels.has(r.entryId) ? { ...r, label: labels.get(r.entryId)! } : r));
+			return filter === "labeled" ? rows.filter((r) => r.label !== undefined) : rows;
+		},
+		loadContent: async () => [block(0), block(1), block(2)],
+	};
+	const source: ActionSource = {
+		copyNodeText: async (file, entryId) => {
+			copies.push({ file, entryId });
+			return entryId !== "e0"; // e0 pretends to have no text
+		},
+		setNodeLabel: async (file, entryId, label) => {
+			labelCalls.push({ file, entryId, label });
+			if (label) labels.set(entryId, label);
+			else labels.delete(entryId);
+		},
+		...actions,
+	};
+	const panel = new LazyPanel({ theme: fakeTheme, data, actions: source, getHeight: () => 20, requestRender: () => {}, onClose: () => {} });
+	return { panel, copies, labelCalls, labels, text: (width = 100) => panel.render(width).map((l) => stripTerminalSequences(l)) };
+}
+
+test("y in the tree pane copies the node under the cursor and reports the result in the footer", async () => {
+	const h = makeTreeActionPanel();
+	await h.panel.load();
+	h.panel.handleInput("2");
+	assert.equal(h.panel.state.cursor.tree, 2);
+	h.panel.handleInput("y");
+	await flush();
+	assert.deepEqual(h.copies, [{ file: "/tmp/s1.jsonl", entryId: "e2" }]);
+	assert.ok(h.text().at(-1)!.includes("copied node text"), h.text().at(-1));
+
+	// an entry without text is reported, like /tree does
+	h.panel.handleInput("g");
+	h.panel.handleInput("g");
+	h.panel.handleInput("y");
+	await flush();
+	assert.equal(h.copies.at(-1)!.entryId, "e0");
+	assert.ok(h.text().at(-1)!.includes("no text to copy"), h.text().at(-1));
+
+	// y in the sessions pane is clone, not tree copy
+	h.panel.handleInput("1");
+	h.panel.handleInput("y");
+	await flush();
+	assert.equal(h.copies.length, 2);
+	h.panel.dispose();
+});
+
+test("T opens the Label bar; Enter saves and refreshes the row, empty removes, Esc cancels", async () => {
+	const h = makeTreeActionPanel();
+	await h.panel.load();
+	h.panel.handleInput("2");
+	h.panel.handleInput("k"); // cursor on e1
+	await flush();
+	h.panel.handleInput("T");
+	assert.equal(h.panel.state.mode, "label");
+	let bottom = h.text().at(-1)!;
+	assert.ok(bottom.startsWith(LABEL_PROMPT.trimEnd()), `footer should start with ${LABEL_PROMPT}, got: ${bottom}`);
+
+	// keys go to the input, not to the keymap
+	for (const ch of "ckpt") h.panel.handleInput(ch);
+	assert.equal(h.panel.state.focus, "tree");
+	assert.equal(h.panel.state.cursor.tree, 1);
+	h.panel.handleInput("\r");
+	await flush();
+	assert.equal(h.panel.state.mode, "normal");
+	assert.deepEqual(h.labelCalls, [{ file: "/tmp/s1.jsonl", entryId: "e1", label: "ckpt" }]);
+	// tree reloaded: the row now shows the label, cursor stays on the same node
+	assert.equal(h.panel.state.cursor.tree, 1);
+	assert.ok(h.text().some((l) => l.includes("[ckpt]")), "tree row should show the new label");
+	assert.ok(h.text().at(-1)!.includes("label set: ckpt"));
+
+	// reopening pre-fills the current label; Esc leaves it untouched
+	h.panel.handleInput("T");
+	assert.ok(h.text().at(-1)!.includes("ckpt"));
+	h.panel.handleInput("\x1b");
+	assert.equal(h.panel.state.mode, "normal");
+	assert.equal(h.labelCalls.length, 1);
+	assert.equal(h.labels.get("e1"), "ckpt");
+
+	// clearing the field removes the label
+	h.panel.handleInput("T");
+	for (let i = 0; i < 4; i++) h.panel.handleInput("\x7f");
+	h.panel.handleInput("\r");
+	await flush();
+	assert.deepEqual(h.labelCalls.at(-1), { file: "/tmp/s1.jsonl", entryId: "e1", label: undefined });
+	assert.equal(h.labels.has("e1"), false);
+	assert.ok(h.text().at(-1)!.includes("label removed"));
+	h.panel.dispose();
+});
+
+test("label errors land in the footer and a panel without actions says so", async () => {
+	const failing = makeTreeActionPanel({
+		setNodeLabel: async () => {
+			throw new Error("disk full");
+		},
+	});
+	await failing.panel.load();
+	failing.panel.handleInput("2");
+	failing.panel.handleInput("T");
+	failing.panel.handleInput("x");
+	failing.panel.handleInput("\r");
+	await flush();
+	assert.ok(failing.text().at(-1)!.includes("label failed: disk full"), failing.text().at(-1));
+	failing.panel.dispose();
+
+	const bare = makeLoadedPanel();
+	await bare.panel.load();
+	bare.panel.handleInput("2");
+	bare.panel.handleInput("T");
+	assert.equal(bare.panel.state.mode, "normal");
+	assert.ok(bare.text().at(-1)!.includes("actions unavailable"));
+	bare.panel.handleInput("y");
+	await flush();
+	assert.ok(bare.text().at(-1)!.includes("actions unavailable"));
+	bare.panel.dispose();
 });

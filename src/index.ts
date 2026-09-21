@@ -11,12 +11,13 @@
  */
 
 import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { copyNodeText, labelNode } from "./actions/tree-actions.ts";
 import { loadConfig } from "./config/config.ts";
 import { COMMAND_NAME } from "./constants.ts";
 import { loadContent } from "./data/content.ts";
 import { listSessions, sortSessions } from "./data/sessions.ts";
 import { applyTreeFilter, loadTree } from "./data/tree.ts";
-import { type DataSource, LazyPanel } from "./ui/app.ts";
+import { type ActionSource, type DataSource, LazyPanel } from "./ui/app.ts";
 
 export default function (pi: ExtensionAPI) {
 	pi.registerCommand(COMMAND_NAME, {
@@ -33,12 +34,18 @@ export default function (pi: ExtensionAPI) {
 				loadContent: (file, leafEntryId) =>
 					loadContent(leafEntryId ? { sessionFile: file, leafEntryId } : { sessionFile: file }),
 			};
+			// 副作用统一走 actions 层；打标签时如果是当前会话就通过 pi.setLabel 同步 pi 内存状态。
+			const actions: ActionSource = {
+				copyNodeText,
+				setNodeLabel: (file, entryId, label) => labelNode(pi, ctx, file, entryId, label),
+			};
 
 			await ctx.ui.custom<void>(
 				(tui, theme, _keybindings, done) => {
 					const panel = new LazyPanel({
 						theme,
 						data,
+						actions,
 						getHeight: () => tui.terminal.rows,
 						requestRender: () => tui.requestRender(),
 						onClose: () => done(),

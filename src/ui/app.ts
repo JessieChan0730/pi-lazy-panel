@@ -24,6 +24,7 @@
  *   - C 切到 Current folder，A 切到 All（各自只做单向切换），? 帮助，/ 搜索栏
  *   - j/k、gg/G：SESSIONS / TREE 移动光标，CONTENT 按行滚动；SESSIONS 里 J/K 滚动右侧内容
  *   - SESSIONS 光标变化 → 重新加载 TREE + CONTENT；TREE 光标变化 → CONTENT 高亮并滚到对应消息
+ *   - TREE：y 复制节点全文（走注入的 ActionSource），T 底部弹出 Label 输入框，回车保存 / Esc 取消 / 空值清除
  *   - 其余面板动作（删除、fork…）只做分发，具体实现留给后续任务
  */
 
@@ -50,6 +51,7 @@ import { renderSessionsPane } from "./panes/sessions-pane.ts";
 import { renderTreePane } from "./panes/tree-pane.ts";
 import { renderFooter } from "./widgets/footer.ts";
 import { helpLineCount, overlayHelp } from "./widgets/help-overlay.ts";
+import { LabelBar } from "./widgets/label-bar.ts";
 import { renderSearchStatus, SearchBar } from "./widgets/search-bar.ts";
 
 /** Mutable UI state of the panel. Kept in one place for easy debugging. */
@@ -99,9 +101,22 @@ export interface DataSource {
 	loadContent(sessionFile: string, leafEntryId?: string): Promise<ContentBlock[]>;
 }
 
+/**
+ * Side effects injected by the entry point (they wrap src/actions/*).
+ * 面板本身不做 I/O：复制、打标签都通过这里交给 actions 层。
+ */
+export interface ActionSource {
+	/** Copy the node's full text to the clipboard; `false` = the entry has no text. */
+	copyNodeText(sessionFile: string, entryId: string): Promise<boolean>;
+	/** Set, or clear with `undefined`, the label of a node. */
+	setNodeLabel(sessionFile: string, entryId: string, label: string | undefined): Promise<void>;
+}
+
 export interface LazyPanelOptions {
 	theme: Theme;
 	data: DataSource;
+	/** Optional: without it y / T report that actions are unavailable. */
+	actions?: ActionSource;
 	/** Terminal height available to the panel, re-read on every render. */
 	getHeight: () => number;
 	requestRender: () => void;
@@ -134,6 +149,9 @@ export class LazyPanel implements Component, Focusable {
 	private disposed = false;
 	private readonly ratio: number;
 	private readonly searchBar: SearchBar;
+	private readonly labelBar: LabelBar;
+	/** Node being labelled while `mode === "label"`. */
+	private labelTarget: { file: string; entryId: string } | undefined;
 	/** Raw key chunks of an unfinished multi-key sequence. */
 	private pending: string[] = [];
 	private pendingTimer: ReturnType<typeof setTimeout> | undefined;
@@ -159,15 +177,22 @@ export class LazyPanel implements Component, Focusable {
 			onCancel: () => this.cancelSearch(),
 			onChange: () => this.o.requestRender(),
 		});
+		this.labelBar = new LabelBar({
+			theme: o.theme,
+			onSubmit: (v) => void this.submitLabel(v),
+			onCancel: () => this.cancelLabel(),
+			onChange: () => this.o.requestRender(),
+		});
 	}
 
-	/** Focusable: forwarded to the search input so the IME cursor lands in the bar. */
+	/** Focusable: forwarded to the active prompt so the IME cursor lands in the bar. */
 	get focused(): boolean {
 		return this._focused;
 	}
 	set focused(v: boolean) {
 		this._focused = v;
 		this.searchBar.focused = v && this.state.mode === "search";
+		this.labelBar.focused = v && this.state.mode === "label";
 	}
 
 	// -----------------------------------------------------------------------
@@ -256,7 +281,7 @@ export class LazyPanel implements Component, Focusable {
 	 * Make the content pane follow the tree cursor.
 	 *
 	 * 选中的节点已经在当前显示的分支里 → 只高亮并滚动到那条消息；
-	 * 节点在活动分支上但没有消息框（工具结果、空回复等）→ 保持显示完整活动分支，高亮它前面���近的一条消息；
+	 * 节点在活动分支上但没有消息框（工具结果、空回复等）→ 保持显示完整活动分支，高亮它前面最近的一条消息；
 	 * 节点在另一条分支上 → 重新加载“以该节点为叶子”的分支再高亮。
 	 */
 	private async syncContentToTree(): Promise<void> {
@@ -344,6 +369,12 @@ export class LazyPanel implements Component, Focusable {
 		// 搜索模式：所有按键交给输入框（Enter/Esc 由 SearchBar 回调处理）。
 		if (this.state.mode === "search") {
 			this.searchBar.handleInput(data);
+			return;
+		}
+
+		// 打标签模式：同理交给 Label 输入框。
+		if (this.state.mode === "label") {
+			this.labelBar.handleInput(data);
 			return;
 		}
 
@@ -485,6 +516,12 @@ export class LazyPanel implements Component, Focusable {
 			case "scroll-content-up":
 				this.scrollContent(-this.contentPageStep());
 				return;
+			case "tree-copy":
+				void this.copyTreeNode();
+				return;
+			case "tree-label":
+				this.openLabelInput();
+				return;
 			default:
 				this.setStatus(`${action}: not implemented yet`);
 				return;
@@ -590,6 +627,99 @@ export class LazyPanel implements Component, Focusable {
 	}
 
 	// -----------------------------------------------------------------------
+	// Tree node actions: copy / label
+	// -----------------------------------------------------------------------
+
+	/** Tree row under the cursor plus the file it belongs to, or undefined with a footer hint. */
+	private currentTreeNode(): { file: string; row: TreeRow } | undefined {
+		const row = this.tree[this.state.cursor.tree];
+		const file = this.loadedSessionFile;
+		if (!row || !file) {
+			this.setStatus("no tree node selected");
+			return undefined;
+		}
+		return { file, row };
+	}
+
+	/** y: copy the node's full text (like /tree ctrl+x). */
+	private async copyTreeNode(): Promise<void> {
+		const target = this.currentTreeNode();
+		if (!target) return;
+		if (!this.o.actions) {
+			this.setStatus("copy: actions unavailable");
+			return;
+		}
+		try {
+			const copied = await this.o.actions.copyNodeText(target.file, target.row.entryId);
+			if (this.disposed) return;
+			this.setStatus(copied ? "copied node text to clipboard" : "selected entry has no text to copy");
+		} catch (err) {
+			this.setStatus(`copy failed: ${(err as Error).message}`);
+		}
+	}
+
+	/** T: open the label prompt pre-filled with the node's current label. */
+	private openLabelInput(): void {
+		const target = this.currentTreeNode();
+		if (!target) return;
+		if (!this.o.actions) {
+			this.setStatus("label: actions unavailable");
+			return;
+		}
+		this.labelTarget = { file: target.file, entryId: target.row.entryId };
+		this.state.mode = "label";
+		this.labelBar.reset(target.row.label ?? "");
+		this.labelBar.focused = this._focused;
+		this.o.requestRender();
+	}
+
+	/** Enter in the label prompt: persist, then reload the tree so the row shows the new label. */
+	private async submitLabel(value: string): Promise<void> {
+		const target = this.labelTarget;
+		this.closeLabelInput();
+		if (!target || !this.o.actions) return;
+		const label = value.trim() || undefined;
+		try {
+			await this.o.actions.setNodeLabel(target.file, target.entryId, label);
+			if (this.disposed) return;
+			this.setStatus(label ? `label set: ${label}` : "label removed");
+		} catch (err) {
+			this.setStatus(`label failed: ${(err as Error).message}`);
+			return;
+		}
+		await this.reloadTree(target.file, target.entryId);
+	}
+
+	private cancelLabel(): void {
+		this.closeLabelInput();
+		this.o.requestRender();
+	}
+
+	private closeLabelInput(): void {
+		this.state.mode = "normal";
+		this.labelBar.focused = false;
+		this.labelTarget = undefined;
+	}
+
+	/**
+	 * Re-read the tree of `file` (same filter) and keep the cursor on `entryId`.
+	 * 在 labeled 过滤下清掉 label 会让这一行消失，此时光标夹回范围内并同步右侧高亮。
+	 */
+	private async reloadTree(file: string, entryId: string): Promise<void> {
+		try {
+			const tree = await this.o.data.loadTree(file, this.state.treeFilter);
+			if (this.disposed || this.loadedSessionFile !== file) return;
+			this.tree = tree;
+			const idx = tree.findIndex((r) => r.entryId === entryId);
+			this.state.cursor.tree = idx >= 0 ? idx : clamp(this.state.cursor.tree, 0, Math.max(0, tree.length - 1));
+			await this.syncContentToTree();
+		} catch (err) {
+			this.setStatus(`failed to reload tree: ${(err as Error).message}`);
+		}
+		this.o.requestRender();
+	}
+
+	// -----------------------------------------------------------------------
 	// Lifecycle
 	// -----------------------------------------------------------------------
 
@@ -686,10 +816,13 @@ export class LazyPanel implements Component, Focusable {
 		return [...lines, this.renderBottom(width)].map((l) => fit(l, width));
 	}
 
-	/** Footer row: search bar while typing, search status after Enter, otherwise hints. */
+	/** Footer row: search / label bar while typing, search status after Enter, otherwise hints. */
 	private renderBottom(width: number): string {
 		if (this.state.mode === "search") {
 			return this.searchBar.render(width)[0] ?? "";
+		}
+		if (this.state.mode === "label") {
+			return this.labelBar.render(width)[0] ?? "";
 		}
 		if (this.state.searchQuery) {
 			return renderSearchStatus({ query: this.state.searchQuery, current: 0, total: 0, theme: this.o.theme }, width);
