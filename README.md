@@ -38,7 +38,8 @@ src/
   constants.ts              ids, command name, layout constants
   types.ts                  shared types (rows, keymap, search query, config)
   config/
-    keymap.ts               default key bindings (data only)
+    keymap.ts               default key bindings + action descriptions (data only)
+    keys.ts                 chord parsing / matching / per-scope resolution
     config.ts               loads ~/.pi/agent/lazy-panel.json over defaults
   data/                     read-only adapters over pi's SessionManager
     sessions.ts             list + sort sessions
@@ -78,13 +79,19 @@ Optional file `~/.pi/agent/lazy-panel.json`:
   "defaultSort": "recent",
   "leftColumnRatio": 0.25,
   "keymap": {
-    "sessions": { "session-delete": "ctrl+d" }
+    "global":   { "help": "F1", "toggle-scope": ["C", "A"] },
+    "sessions": { "session-delete": "ctrl+d", "session-share": null }
   }
 }
 ```
 
-Action ids are listed in `src/types.ts` (`ActionId`); default bindings in
-[docs/keybindings.md](./docs/keybindings.md).
+A keymap value replaces the default chords for that action; `null` unbinds it.
+Chords use pi-tui syntax (`ctrl+d`, `shift+tab`), an uppercase letter means
+shift (`G`), and multi-key sequences are written verbatim (`gg`) or space
+separated (`ctrl+w h`).
+
+Action ids are listed in `src/types.ts` (`ActionId`); default bindings and the
+full chord syntax in [docs/keybindings.md](./docs/keybindings.md).
 
 ## License
 

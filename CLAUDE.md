@@ -63,9 +63,9 @@ src/
 │   │   └── content-pane.ts   # 右侧 CONTENT 面板，用 pi-tui 的 Markdown 渲染消息
 │   └── widgets/
 │       ├── footer.ts         # 底部一行：模式 + 当前面板快捷键提示
-│       ├── search-bar.ts     # 底部搜索输入（TODO）
+│       ├── search-bar.ts     # 底部搜索输入：包装 pi-tui Input，显示 `搜索:`（匹配/高亮 TODO）
 │       ├── confirm-dialog.ts # 删除 / fork 前的确认框（TODO）
-│       ├── help-overlay.ts   # ? 快捷键帮助（TODO）
+│       ├── help-overlay.ts   # ? 快捷键帮助：居中弹窗，内容来自最终 keymap
 │       └── session-info-dialog.ts  # i 会话信息弹窗（TODO）
 ├── actions/                  # 副作用层：每个函数包装一个 pi 命令/API，不弹窗，由调用方先确认（TODO）
 │   ├── session-actions.ts    # resume / delete / rename / fork / export / import / share / clone …
@@ -76,13 +76,16 @@ src/
 │   ├── content.ts            # getBranch -> ContentBlock[]；loadSessionInfo；resolveContentLeaf
 │   └── search.ts             # 纯函数：解析 name:/model:/path:/tag:/after:/before: 查询（TODO）
 ├── config/
-│   ├── keymap.ts             # 默认键位（纯数据）
-│   └── config.ts             # 唯一知道 ~/.pi/agent/lazy-panel.json 的模块，深合并用户配置
+│   ├── keymap.ts             # 默认键位 + 动作描述 + footer 提示顺序（纯数据）
+│   ├── keys.ts               # 纯函数：chord 解析（ctrl+d / G / gg）、按键匹配、按 scope 解析 ActionId
+│   └── config.ts             # 唯一知道 ~/.pi/agent/lazy-panel.json 的模块，深合并用户配置（null 解绑）
 └── utils/
     └── format.ts             # 纯格式化：时间、token、费用、路径缩写
 
 test/
 ├── smoke.test.ts             # 键位表、搜索解析的冒烟测试
+├── keymap.test.ts            # chord 解析、多键序列、用户配置合并
+├── panel.test.ts             # LazyPanel 行为：焦点切换、C/A、? 帮助、/ 搜索栏、自定义键位
 └── ui.test.ts                # 格式化、frame 几何、树过滤
 
 docs/keybindings.md           # 默认快捷键表，新增 ActionId 时同步更新
@@ -93,7 +96,7 @@ AGENTS.md                     # 仅指向本文件，规则统一在这里维护
 
 数据流：`sessions.ts` → `SessionRow[]` → SESSIONS 面板；选中行驱动 `tree.ts` → `TreeRow[]` → TREE 面板；选中节点（或活动叶子）驱动 `content.ts` → `ContentBlock[]` → CONTENT 面板。所有 UI 状态集中在 `PanelState`（`src/ui/app.ts`）。
 
-快捷键是间接绑定：按键 → `ActionId`（`src/types.ts`），按作用域（`global | sessions | tree | content`）在 `src/config/keymap.ts` 给默认值，`loadConfig` 深合并用户覆盖。新增动作时要同时改：`ActionId`、默认键位、UI 里的分发、`docs/keybindings.md`。
+快捷键是间接绑定：按键 → `resolveKeys`（`src/config/keys.ts`，先面板 scope 再 global，支持 `gg` 这类多键序列） → `ActionId`（`src/types.ts`） → `LazyPanel.dispatch`。默认值在 `src/config/keymap.ts`，`loadConfig` 深合并用户覆盖。新增动作时要同时改：`ActionId`、默认键位、`ACTION_DESCRIPTIONS`、`dispatch` 里的分发、`docs/keybindings.md`。
 
 ## 代码风格/合作规范
 

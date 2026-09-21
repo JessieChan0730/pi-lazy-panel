@@ -1,7 +1,34 @@
 # Default key bindings
 
 Source of truth: `src/config/keymap.ts`. Override any binding in
-`~/.pi/agent/lazy-panel.json` under `keymap.<scope>.<action-id>`.
+`~/.pi/agent/lazy-panel.json` under `keymap.<scope>.<action-id>` (scopes:
+`global`, `sessions`, `tree`, `content`). Action ids are the `ActionId` union in
+`src/types.ts`.
+
+## Customising keys
+
+```json
+{
+  "keymap": {
+    "global":   { "help": "F1", "toggle-scope": ["C", "A", "ctrl+space"] },
+    "sessions": { "session-delete": "ctrl+d", "session-share": null }
+  }
+}
+```
+
+- A value is one chord or an array of chords. It **replaces** the default for
+  that action (it does not add to it). `null` unbinds the action.
+- Chord syntax (`src/config/keys.ts`):
+  - single key: `j`, `?`, `/`, `tab`, `enter`, `escape`, `space`, `up`, `pageDown`, `f1`
+  - modifiers: `ctrl+d`, `shift+tab`, `alt+x`, `ctrl+shift+p` (any order)
+  - an uppercase letter is shorthand for shift: `G` = `shift+g`
+  - multi-key sequence: `gg`, `yy` (verbatim), or space separated `ctrl+w h`
+- Pane bindings shadow global ones for the same key (e.g. `n` is *new session*
+  in the sessions pane but *next match* elsewhere).
+- Invalid chords or unknown scopes are skipped and reported in the footer when
+  the panel opens.
+- Multi-key sequences wait up to 1 s for the next key; `Esc` discards a
+  half-typed sequence.
 
 ## Global
 
@@ -10,9 +37,10 @@ Source of truth: `src/config/keymap.ts`. Override any binding in
 | `Tab`       | Focus next pane                            |
 | `Shift+Tab` | Focus previous pane                        |
 | `C` / `A`   | Toggle list scope: Current folder ↔ All    |
-| `?`         | Help for the focused pane                  |
-| `q`         | Quit the panel                             |
-| `/`         | Search in the focused pane (Enter to run)  |
+| `?`         | Help overlay for the focused pane (`?`/`Esc`/`q` close, `j`/`k` scroll) |
+| `q` / `Ctrl+c` | Quit the panel                          |
+| `Esc`       | Discard pending keys → clear search → quit |
+| `/`         | Search bar for the focused pane (`Enter` run, `Esc` cancel) |
 | `n` / `N`   | Next / previous search match               |
 
 ## Sessions pane
