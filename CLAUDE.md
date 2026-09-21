@@ -107,6 +107,7 @@ AGENTS.md                     # 仅指向本文件，规则统一在这里维护
 8. 对话内容渲染必须使用 `@earendil-works/pi-tui` 提供的 `Markdown` 组件；禁止引入其他 Markdown 库。
 9. `/lazy-history` 仅适用于 TUI 模式；请务必在 `src/index.ts` 中保留 `ctx.mode !== "tui"` 的条件判断。
 10. 模块之间尽量低耦合
+11. 更新 design, progress, keybindings 这些文档，提交消息固定为 `chore(doc): update doc by $progress` 后面 $变量 根据实际修改的文档来定
 
 ## 重要文档
 
