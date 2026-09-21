@@ -121,6 +121,34 @@ export const ACTION_DESCRIPTIONS: Record<ActionId, string> = {
 	"tree-filter-all": "Filter: everything",
 };
 
+/**
+ * Actions merged into a single help line (`?` overlay).
+ *
+ * 帮助面板里同类操作合并成一行，省空间：例如 1/2/3 显示成 `1..3  Focus pane by number`，
+ * 树过滤显示成 `d/t/u/L/a  Filter: default / tools / user / labeled / all`。
+ * 合并只影响帮助展示，不影响键位解析。组内只要有 ≥2 个动作在当前 scope 绑定了键位就合并，
+ * 否则退回单条展示；用户自定义键位一样会如实显示。
+ */
+export interface HelpGroup {
+	/** Member actions, in the order their keys are listed. */
+	actions: ActionId[];
+	/** Description for the merged line. */
+	text: string;
+}
+
+export const HELP_GROUPS: HelpGroup[] = [
+	{ actions: ["focus-prev", "focus-next"], text: "Focus previous / next pane" },
+	{ actions: ["focus-sessions", "focus-tree", "focus-content"], text: "Focus pane by number" },
+	{ actions: ["scope-current", "scope-all"], text: "Scope: current folder / all" },
+	{ actions: ["search-next", "search-prev"], text: "Next / previous search match" },
+	{ actions: ["go-top", "go-bottom"], text: "Go to top / bottom" },
+	{ actions: ["scroll-content-down", "scroll-content-up"], text: "Scroll content pane down / up" },
+	{
+		actions: ["tree-filter-default", "tree-filter-tools", "tree-filter-user", "tree-filter-labeled", "tree-filter-all"],
+		text: "Filter: default / tools / user / labeled / all",
+	},
+];
+
 /** Actions shown as footer hints per pane, in display order (first few that fit). */
 export const FOOTER_HINTS: Record<PaneId, ActionId[]> = {
 	sessions: ["search", "help", "focus-next", "scope-current", "scope-all", "session-resume", "session-delete", "session-rename", "quit"],

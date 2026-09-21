@@ -138,7 +138,10 @@ test("? opens the help overlay for the focused pane and ? / Esc close it", () =>
 	let lines = h.text(100);
 	assert.ok(lines.some((l) => l.includes("HELP · Sessions pane")));
 	assert.ok(lines.some((l) => l.includes("Resume session")));
-	assert.ok(lines.some((l) => l.includes("Focus next pane")));
+	// 同类动作合并成一行：h/l/Tab、1..3、d/t/u/L/a
+	assert.ok(lines.some((l) => l.includes("h/l/Tab") && l.includes("Focus previous / next pane")));
+	assert.ok(lines.some((l) => l.includes("1..3") && l.includes("Focus pane by number")));
+	assert.equal(lines.some((l) => l.includes("Focus next pane")), false, "merged actions must not also appear alone");
 	// keys other than close/scroll are swallowed while help is open
 	h.panel.handleInput("l");
 	assert.equal(h.panel.state.focus, "sessions");
@@ -151,6 +154,8 @@ test("? opens the help overlay for the focused pane and ? / Esc close it", () =>
 	lines = h.text(100);
 	assert.ok(lines.some((l) => l.includes("HELP · Tree pane")));
 	assert.ok(lines.some((l) => l.includes("Restore conversation")));
+	assert.ok(lines.some((l) => l.includes("d/t/u/L/a") && l.includes("Filter: default / tools / user / labeled / all")));
+	assert.equal(lines.some((l) => l.includes("Filter: tools")), false);
 	h.panel.handleInput("\x1b");
 	assert.equal(h.panel.state.helpOpen, false);
 

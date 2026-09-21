@@ -128,7 +128,9 @@ test("chordLabel / labelsForFocus produce readable hints", () => {
 	assert.equal(chordLabel("shift+g"), "G");
 	assert.equal(chordLabel("G"), "G");
 	assert.equal(chordLabel("ctrl+d"), "Ctrl+d");
-	assert.equal(chordLabel("gg"), "g g");
+	assert.equal(chordLabel("gg"), "gg");
+	assert.equal(chordLabel("ctrl+w h"), "Ctrl+w h");
+	assert.equal(chordLabel("ctrl+shift+g"), "Ctrl+G");
 	assert.equal(chordLabel("shift+tab"), "Shift+Tab");
 	assert.equal(chordLabel("F1"), "F1");
 	assert.equal(chordLabel("down"), "↓");

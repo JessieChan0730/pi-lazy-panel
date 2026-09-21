@@ -7,10 +7,12 @@
  * output with pi-tui's `compositeTuiLine`.
  *
  *   ┌─ HELP · Sessions pane ─────────────────────┐
- *   │ j / ↓        Move cursor down              │
+ *   │ j/↓          Move cursor down              │
+ *   │ gg/G         Go to top / bottom            │
  *   │ ...                                        │
  *   │ Global                                     │
- *   │ Tab          Focus next pane               │
+ *   │ h/l/Tab      Focus previous / next pane    │
+ *   │ 1..3         Focus pane by number          │
  *   └─ ? / Esc close ─ j/k scroll ───────────────┘
  *
  * 帮助内容直接来自最终合并后的 keymap，所以用户自定义的键位会如实显示。
@@ -18,7 +20,7 @@
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { compositeTuiLine, visibleWidth } from "@earendil-works/pi-tui";
-import { ACTION_DESCRIPTIONS, SCOPE_TITLES } from "../../config/keymap.ts";
+import { ACTION_DESCRIPTIONS, HELP_GROUPS, SCOPE_TITLES } from "../../config/keymap.ts";
 import { labelsFor } from "../../config/keys.ts";
 import type { ActionId, Keymap, KeyScope, PaneId } from "../../types.ts";
 import { fit, frame } from "../frame.ts";
@@ -41,14 +43,53 @@ export function buildHelpLines(keymap: Keymap, focus: PaneId): HelpLine[] {
 	for (const scope of scopes) {
 		if (out.length) out.push({ kind: "blank" });
 		out.push({ kind: "header", text: SCOPE_TITLES[scope] });
-		const actions = Object.keys(keymap[scope]) as ActionId[];
-		for (const action of actions) {
-			const labels = labelsFor(keymap, scope, action);
-			if (labels.length === 0) continue;
-			out.push({ kind: "binding", keys: labels.join(" / "), text: ACTION_DESCRIPTIONS[action] });
-		}
+		out.push(...buildScopeLines(keymap, scope));
 	}
 	return out;
+}
+
+/**
+ * Binding lines of one scope. Actions that belong to a HELP_GROUPS entry are
+ * merged into one line (placed where the first bound member appears) as long as
+ * at least two members are bound in this scope.
+ *
+ * 同组动作合并成一行；组内只剩一个绑定时退回单独一行，避免描述和键位对不上。
+ */
+function buildScopeLines(keymap: Keymap, scope: KeyScope): HelpLine[] {
+	const out: HelpLine[] = [];
+	const consumed = new Set<ActionId>();
+	const actions = Object.keys(keymap[scope]) as ActionId[];
+	for (const action of actions) {
+		if (consumed.has(action)) continue;
+		const labels = labelsFor(keymap, scope, action);
+		if (labels.length === 0) continue;
+
+		const group = HELP_GROUPS.find((g) => g.actions.includes(action));
+		const members = group ? group.actions.filter((a) => labelsFor(keymap, scope, a).length > 0) : [];
+		if (group && members.length >= 2) {
+			for (const m of members) consumed.add(m);
+			const keys = members.flatMap((m) => labelsFor(keymap, scope, m));
+			out.push({ kind: "binding", keys: compactKeys(keys), text: group.text });
+			continue;
+		}
+		out.push({ kind: "binding", keys: compactKeys(labels), text: ACTION_DESCRIPTIONS[action] });
+	}
+	return out;
+}
+
+/**
+ * Render a list of key labels compactly.
+ *   ["1","2","3"]      -> "1..3"      (3+ consecutive single characters)
+ *   ["d","t","u","L"]  -> "d/t/u/L"
+ *   ["j","↓"]          -> "j/↓"
+ */
+export function compactKeys(labels: string[]): string {
+	if (labels.length >= 3 && labels.every((l) => [...l].length === 1)) {
+		const codes = labels.map((l) => l.codePointAt(0)!);
+		const consecutive = codes.every((c, i) => i === 0 || c === codes[i - 1]! + 1);
+		if (consecutive) return `${labels[0]}..${labels[labels.length - 1]}`;
+	}
+	return labels.join("/");
 }
 
 /** Size of the box for a given terminal size. */

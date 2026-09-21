@@ -205,48 +205,49 @@ export function compileKeymap(keymap: Keymap): Binding[] {
 export function chordLabel(chord: KeyChord): string {
 	const seq = parseChord(chord);
 	if (!seq) return chord;
-	return seq
-		.map((id) =>
-			id
-				.split("+")
-				.map((part) => {
-					switch (part) {
-						case "ctrl":
-							return "Ctrl";
-						case "shift":
-							return "Shift";
-						case "alt":
-							return "Alt";
-						case "super":
-							return "Super";
-						case "tab":
-							return "Tab";
-						case "enter":
-						case "return":
-							return "Enter";
-						case "escape":
-						case "esc":
-							return "Esc";
-						case "space":
-							return "Space";
-						case "up":
-							return "↑";
-						case "down":
-							return "↓";
-						case "left":
-							return "←";
-						case "right":
-							return "→";
-						default:
-							// f1..f12 read better uppercase.
-							return /^f\d{1,2}$/.test(part) ? part.toUpperCase() : part;
-					}
-				})
-				.join("+"),
-		)
-		.join(" ")
-		// "Shift+g" reads better as "G".
-		.replace(/(^|[\s+])Shift\+([a-z])/g, (_m, pre: string, c: string) => `${pre}${c.toUpperCase()}`);
+	const steps = seq.map((id) =>
+		id
+			.split("+")
+			.map((part) => {
+				switch (part) {
+					case "ctrl":
+						return "Ctrl";
+					case "shift":
+						return "Shift";
+					case "alt":
+						return "Alt";
+					case "super":
+						return "Super";
+					case "tab":
+						return "Tab";
+					case "enter":
+					case "return":
+						return "Enter";
+					case "escape":
+					case "esc":
+						return "Esc";
+					case "space":
+						return "Space";
+					case "up":
+						return "↑";
+					case "down":
+						return "↓";
+					case "left":
+						return "←";
+					case "right":
+						return "→";
+					default:
+						// f1..f12 read better uppercase.
+						return /^f\d{1,2}$/.test(part) ? part.toUpperCase() : part;
+				}
+			})
+			.join("+")
+			// "Shift+g" reads better as "G".
+			.replace(/(^|\+)Shift\+([a-z])$/, (_m, pre: string, c: string) => `${pre}${c.toUpperCase()}`),
+	);
+	// vim 风格的纯字母序列（gg / yy）紧挨着显示；带修饰键或命名键的多步序列（ctrl+w h）用空格分开。
+	const plainRun = steps.every((s) => [...s].length === 1);
+	return steps.join(plainRun ? "" : " ");
 }
 
 /** All chords bound to `action` in `scope`, as display labels ("j / ↓"). */
