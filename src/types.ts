@@ -166,27 +166,33 @@ export type ActionId =
 	| "yank"
 	| "yank-line";
 
-/** A single key chord, e.g. "j", "ctrl+d", "gg", "shift+s". */
+/**
+ * A single key chord in pi-tui key syntax, e.g. "j", "ctrl+d", "shift+tab".
+ * Multi-key sequences are written either verbatim when every step is one
+ * printable character ("gg", "yy") or space-separated ("ctrl+w h").
+ * An uppercase letter ("G") means shift + that letter.
+ */
 export type KeyChord = string;
+
+/** Binding scope: the global scope or one pane. */
+export type KeyScope = "global" | PaneId;
 
 /** Keymap for one pane (or the global scope). */
 export type PaneKeymap = Partial<Record<ActionId, KeyChord | KeyChord[]>>;
 
 /** Full keymap: global bindings plus per-pane overrides. */
-export interface Keymap {
-	global: PaneKeymap;
-	sessions: PaneKeymap;
-	tree: PaneKeymap;
-	content: PaneKeymap;
-}
+export type Keymap = Record<KeyScope, PaneKeymap>;
 
 // ---------------------------------------------------------------------------
 // User config
 // ---------------------------------------------------------------------------
 
+/** Per-scope keymap in the user file. `null` unbinds an action. */
+export type UserPaneKeymap = Partial<Record<ActionId, KeyChord | KeyChord[] | null>>;
+
 /** Shape of `~/.pi/agent/lazy-panel.json`. All fields optional. */
 export interface UserConfig {
-	keymap?: Partial<Keymap>;
+	keymap?: Partial<Record<KeyScope, UserPaneKeymap>>;
 	defaultScope?: ListScope;
 	defaultSort?: SessionSortMode;
 	leftColumnRatio?: number;

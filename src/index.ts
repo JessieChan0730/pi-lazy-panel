@@ -42,8 +42,11 @@ export default function (pi: ExtensionAPI) {
 						getHeight: () => tui.terminal.rows,
 						requestRender: () => tui.requestRender(),
 						onClose: () => done(),
+						keymap: config.keymap,
 						initialState: { scope: config.defaultScope, sort: config.defaultSort },
 						leftColumnRatio: config.leftColumnRatio,
+						// 配置文件有问题时在底部提示，但不阻止面板打开。
+						...(config.warnings.length ? { status: config.warnings[0] } : {}),
 					});
 					void panel.load();
 					return panel;

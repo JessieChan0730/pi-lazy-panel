@@ -1,0 +1,130 @@
+/**
+ * Keymap tests: chord parsing, multi-key resolution and user-config merging.
+ * Run with `npm test` (node --test via tsx).
+ */
+
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { mergeKeymap, resolveConfig } from "../src/config/config.ts";
+import { DEFAULT_KEYMAP } from "../src/config/keymap.ts";
+import { chordLabel, compileKeymap, labelsForFocus, matchesKeyId, normalizeKeyStep, parseChord, type ResolveResult, resolveKeys } from "../src/config/keys.ts";
+
+/** Action of a resolve result, or undefined when it did not resolve to one. */
+function actionOf(r: ResolveResult): string | undefined {
+	return r.kind === "action" ? r.action : undefined;
+}
+
+test("normalizeKeyStep: uppercase means shift, modifiers are ordered, named keys are recognised", () => {
+	assert.equal(normalizeKeyStep("G"), "shift+g");
+	assert.equal(normalizeKeyStep("shift+g"), "shift+g");
+	assert.equal(normalizeKeyStep("Shift+Ctrl+D"), "ctrl+shift+d");
+	assert.equal(normalizeKeyStep("Tab"), "tab");
+	assert.equal(normalizeKeyStep("PageDown"), "pageDown");
+	assert.equal(normalizeKeyStep("?"), "?");
+	assert.equal(normalizeKeyStep("+"), "+");
+	assert.equal(normalizeKeyStep("bogus"), undefined);
+	assert.equal(normalizeKeyStep("meta+x"), undefined);
+});
+
+test("parseChord: single keys, combos, verbatim sequences and spaced sequences", () => {
+	assert.deepEqual(parseChord("j"), ["j"]);
+	assert.deepEqual(parseChord("ctrl+d"), ["ctrl+d"]);
+	assert.deepEqual(parseChord("gg"), ["g", "g"]);
+	assert.deepEqual(parseChord("yy"), ["y", "y"]);
+	assert.deepEqual(parseChord("ctrl+w h"), ["ctrl+w", "h"]);
+	assert.deepEqual(parseChord("space"), ["space"]);
+	assert.deepEqual(parseChord("shift+tab"), ["shift+tab"]);
+	assert.equal(parseChord(""), undefined);
+	assert.equal(parseChord("ctrl+"), undefined);
+});
+
+test("matchesKeyId: raw terminal bytes match canonical ids", () => {
+	assert.ok(matchesKeyId("\t", "tab"));
+	assert.ok(matchesKeyId("\x1b[Z", "shift+tab"));
+	assert.ok(matchesKeyId("G", "shift+g"));
+	assert.ok(matchesKeyId("\x04", "ctrl+d"));
+	assert.ok(matchesKeyId("?", "?"));
+	assert.ok(matchesKeyId("/", "/"));
+	// kitty CSI-u for "?" (shift+/) is decoded as a printable
+	assert.ok(matchesKeyId("\x1b[47:63;2u", "?"));
+	// key release events never match
+	assert.equal(matchesKeyId("\x1b[103;1:3u", "g"), false);
+	assert.equal(matchesKeyId("x", "y"), false);
+});
+
+test("resolveKeys: pane bindings shadow global, multi-key sequences go through pending", () => {
+	const bindings = compileKeymap(DEFAULT_KEYMAP);
+	// global
+	assert.deepEqual(resolveKeys(bindings, "sessions", ["\t"]), { kind: "action", action: "focus-next", scope: "global" });
+	assert.deepEqual(resolveKeys(bindings, "content", ["C"]), { kind: "action", action: "toggle-scope", scope: "global" });
+	assert.deepEqual(resolveKeys(bindings, "tree", ["?"]), { kind: "action", action: "help", scope: "global" });
+	assert.deepEqual(resolveKeys(bindings, "tree", ["/"]), { kind: "action", action: "search", scope: "global" });
+	// "n" is search-next globally but "session-new" in the sessions pane
+	assert.equal(actionOf(resolveKeys(bindings, "sessions", ["n"])), "session-new");
+	assert.equal(actionOf(resolveKeys(bindings, "tree", ["n"])), "search-next");
+	// gg: first g is pending, second completes
+	assert.deepEqual(resolveKeys(bindings, "sessions", ["g"]), { kind: "pending" });
+	assert.equal(actionOf(resolveKeys(bindings, "sessions", ["g", "g"])), "go-top");
+	assert.deepEqual(resolveKeys(bindings, "sessions", ["g", "x"]), { kind: "none" });
+	// content pane: "y" alone is yank but also prefix of "yy" -> a match wins over pending
+	assert.equal(actionOf(resolveKeys(bindings, "content", ["y"])), "yank");
+	assert.deepEqual(resolveKeys(bindings, "sessions", ["z"]), { kind: "none" });
+});
+
+test("mergeKeymap: user chords replace defaults per action, null unbinds, other actions untouched", () => {
+	const warnings: string[] = [];
+	const merged = mergeKeymap(
+		DEFAULT_KEYMAP,
+		{
+			global: { help: "F1", "toggle-scope": ["C", "A", "ctrl+space"] },
+			sessions: { "session-delete": "ctrl+d", "session-share": null },
+			// @ts-expect-error unknown scope on purpose
+			bogus: { quit: "x" },
+		},
+		warnings,
+	);
+	assert.equal(merged.global.help, "F1");
+	assert.deepEqual(merged.global["toggle-scope"], ["C", "A", "ctrl+space"]);
+	assert.equal(merged.global.quit, DEFAULT_KEYMAP.global.quit);
+	assert.equal(merged.sessions["session-delete"], "ctrl+d");
+	assert.equal(merged.sessions["session-share"], undefined);
+	assert.equal(merged.sessions["session-rename"], "r");
+	assert.equal(merged.tree["tree-label"], "l");
+	assert.equal(warnings.length, 1);
+	assert.match(warnings[0]!, /unknown keymap scope/);
+	// defaults must not be mutated
+	assert.equal(DEFAULT_KEYMAP.sessions["session-delete"], "d");
+	assert.equal(DEFAULT_KEYMAP.global.help, "?");
+
+	// the override is what the resolver sees
+	const bindings = compileKeymap(merged);
+	assert.equal(actionOf(resolveKeys(bindings, "sessions", ["\x04"])), "session-delete");
+	assert.equal(resolveKeys(bindings, "sessions", ["d"]).kind, "none");
+	assert.equal(actionOf(resolveKeys(bindings, "sessions", ["\x1bOP"])), "help");
+});
+
+test("resolveConfig: invalid values fall back to defaults with warnings", () => {
+	const cfg = resolveConfig({ defaultScope: "everything", leftColumnRatio: 5, keymap: { global: { quit: 42 } } });
+	assert.equal(cfg.defaultScope, "current-folder");
+	assert.equal(cfg.leftColumnRatio, 0.25);
+	assert.equal(cfg.keymap.global.quit, DEFAULT_KEYMAP.global.quit);
+	assert.equal(cfg.warnings.length, 3);
+	const ok = resolveConfig({ defaultScope: "all", defaultSort: "threaded", leftColumnRatio: 0.3 });
+	assert.equal(ok.defaultScope, "all");
+	assert.equal(ok.defaultSort, "threaded");
+	assert.equal(ok.leftColumnRatio, 0.3);
+	assert.deepEqual(ok.warnings, []);
+	assert.equal(resolveConfig("nope").warnings.length, 1);
+});
+
+test("chordLabel / labelsForFocus produce readable hints", () => {
+	assert.equal(chordLabel("shift+g"), "G");
+	assert.equal(chordLabel("G"), "G");
+	assert.equal(chordLabel("ctrl+d"), "Ctrl+d");
+	assert.equal(chordLabel("gg"), "g g");
+	assert.equal(chordLabel("shift+tab"), "Shift+Tab");
+	assert.equal(chordLabel("F1"), "F1");
+	assert.equal(chordLabel("down"), "↓");
+	assert.deepEqual(labelsForFocus(DEFAULT_KEYMAP, "sessions", "quit"), ["q", "Ctrl+c"]);
+	assert.deepEqual(labelsForFocus(DEFAULT_KEYMAP, "sessions", "move-down"), ["j", "↓"]);
+});
