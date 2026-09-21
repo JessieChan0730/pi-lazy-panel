@@ -54,4 +54,18 @@
 - TREE 光标变化 → CONTENT 高亮对应消息：消息框头部加 `›` 箭头 + 选中背景，并把该消息滚到面板顶部。节点在当前分支里只高亮；节点在另一条分支上时按“以该节点为叶子”重新加载分支再高亮；工具结果这类没有消息框的节点高亮它前面最近的一条消息。
 - CONTENT：j/k 按行滚动，gg/G 到顶部/最后一页；SESSIONS 里 J/K 按半屏滚动右侧内容，光标不动。内容排版（Markdown 渲染）按宽度/高亮缓存，只在数据或宽度变化时重算；窗口变小时滚动位置自动夹回。
 - `test/panel.test.ts` 加了三组测试覆盖以上行为。
-- 修正：`assistant: (empty)`（中断/失败产生的空回复）在 tree 里归为 meta，默认过滤下隐藏，`a` 全部模式仍可见；活动分支上没有消息框的节点（工具结果、空回复）��再截断右侧内容，而是保持完整分支并高亮它前面最近的一条消息。
+- 修正：`assistant: (empty)`（中断/失败产生的空回复）在 tree 里归为 meta，默认过滤下隐藏，`a` 全部模式仍可见；活动分支上没有消息框的节点（工具结果、空回复）不再截断右侧内容，而是保持完整分支并高亮它前面最近的一条消息。
+
+### TREE 面板节点操作（2026-09-21）
+
+- ~~y：复制光标所在节点的消息内容到剪贴板（对应 pi 自带 `/tree` 的 ctrl+x）。~~
+- ~~T：给光标所在节点添加 label，底部弹出输入框，回车保存、Esc 取消，空内容清除 label（对应 `/tree` 的 shift+T；不用 `l` 是为了把 `l` 留给全局的"下一个面板"）。~~
+- 打完标签后 `/` 搜索要能按 label 搜索（搜索功能本身另开任务，本次不做）。
+
+实现说明（2026-09-21）：
+
+- 分层：`data/tree.ts` 新增 `loadNodeText`（和 `/tree` ctrl+x 一样：消息取全部 text 片段原文、bash 执行取命令、没正文的 assistant 回复取 errorMessage、compaction / branch summary 取摘要）；`actions/tree-actions.ts` 实现 `copyNodeText`（pi 的 `copyToClipboard`）和 `labelNode`；UI 通过 `LazyPanel` 新增的 `ActionSource` 接口调用，面板本身仍不做 I/O，`index.ts` 负责组装。
+- 打标签落盘：如果目标就是 pi 当前打开的会话，走 `pi.setLabel` 让 pi 内存里的 SessionManager 同步；其他历史会话用 `SessionManager.open(file).appendLabelChange` 直接追加 label 条目到 .jsonl。保存后重新加载 TREE，光标停在同一节点上，行首显示 `[label]`；在 `L`（labeled）过滤下清掉标签会让该行消失，光标夹回范围内。
+- 输入框：抽出通用的底部一行输入 `ui/widgets/prompt-bar.ts`（包装 pi-tui `Input`），搜索栏和 `ui/widgets/label-bar.ts`（`Label: ` 前缀，预填当前标签）都基于它；新增 `PanelMode` 的 `label` 模式，该模式下所有按键交给输入框。
+- 反馈都在 footer：`copied node text to clipboard` / `selected entry has no text to copy` / `label set: xxx` / `label removed` / 失败原因。
+- 测试：`test/panel.test.ts` 加了 y / T 的面板行为测试（含错误分支和无 actions 的情况）；新增 `test/tree-actions.test.ts` 在临时目录里建真实会话文件，验证 `loadNodeText` 和 `labelNode` 的落盘与 `pi.setLabel` 分流。
