@@ -26,6 +26,10 @@ const fakeTheme = {
 	strikethrough: (s: string) => s,
 } as unknown as Theme;
 
+/**
+ * 假会话行。`file` 只是传给 DataSource 桩的不透明 id，面板本身不会对它做任何
+ * 路径处理，所以这里固定用 `/tmp/...` 字符串即可，不必按平台拼路径。
+ */
 function row(i: number, cwd: string): SessionRow {
 	return {
 		file: `/tmp/s${i}.jsonl`,

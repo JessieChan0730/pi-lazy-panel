@@ -75,13 +75,16 @@
 背景：`npm run install:pi` 在 Windows 上报 `Path does not exist: ...\$(pwd)`。npm 在 Windows 默认用 cmd.exe 跑 scripts，`$(pwd)` 这种 bash 命令替换会被原样传给 pi。说明之前的写法只考虑了 Linux / macOS，需要系统性排查。先在本分支把 Windows 适配好，再考虑 macOS。
 
 - ~~Windows 上安装修复：`package.json` 的 `install:pi` / `uninstall:pi` 改为 `pi install .` / `pi remove .`（pi 内部会把 `.` 解析成绝对路径，cmd / PowerShell / bash 下通用），`CLAUDE.md` 同步更新。已验证 `~/.pi/agent/settings.json` 的 packages 里出现 `E:\frontwebWorkSpace\PiLazyPanel`。~~
-- 排查代码中不能跨平台的写法。初步扫描（`src/`、`test/`、`package.json`）发现的可疑点，逐项确认并修复：
-  1. `src/utils/format.ts` 的 `shortenPath`：用 `${home}/` 硬编码 `/` 判断 home 前缀，Windows 下 `homedir()` 返回 `C:\Users\xxx`，路径分隔符是 `\`，永远匹配不上，会话路径不会缩成 `~`。应改用 `path.sep`，或同时兼容 `/` 和 `\`（pi 在 Windows 上存的路径分隔符是哪种也要实际看一下 `~/.pi/agent/sessions/` 里的文件）。
-  2. `test/ui.test.ts` 的 `shortenPath` 测试用 `process.env.HOME`，Windows 上没有 `HOME`（是 `USERPROFILE`），这个断言现在被静默跳过了；应改用 `os.homedir()` 和 `path.join`。
-  3. `test/panel.test.ts` 里的假会话路径写死 `/tmp/s1.jsonl`。目前只是当字符串比较所以能过，但如果后续 UI 对路径做分隔符处理就会失效；建议用 `path.join(tmpdir(), ...)` 或明确注释“仅作 id 使用”。
-  4. 换行：`src/data/content.ts`、`src/ui/panes/content-pane.ts` 用 `split("\n")` 切行，要确认 pi 的会话 .jsonl 在 Windows 上是否会出现 `\r\n`；如果有，`\r` 会残留在行尾影响宽度计算和渲染。
-  5. `package.json` 的 `test` 脚本 `"test/**/*.test.ts"` 带引号的 glob 在 Windows 下已验证可用（34/34 通过），`dev` / `check` 也无 shell 语法，可以划掉；但后续新增 scripts 一律禁止 `$(...)`、`&&` 以外的 bash 专有语法，涉及路径用 node 脚本处理。
-  6. 剪贴板：`y` 复制走的是 pi 自带的 `copyToClipboard`，是否已经适配 Windows（clip.exe）/ macOS（pbcopy）由 pi 负责，需在 pi 里实际按 `y` 验证一次，不行的话记到 `docs/issues.md`。
-  7. 配置文件路径：`src/index.ts` 用 pi 导出的 `getAgentDir()` 拿 agent 目录，`src/config/config.ts` 再用 `path.join` 拼文件名，没有自己拼 `homedir()`，已确认无问题。
-  8. 文档：`CLAUDE.md`、`docs/design.md`、`docs/keybindings.md` 里出现的路径示例统一用 `~/.pi/agent/...` 写法，不出现只在 bash 下成立的命令。
-- 排查完成后在 Windows 的 pi 里完整跑一遍 `/lazy-history`（三个面板、j/k、y、T、/），确认无异常；macOS 的验证另开任务。
+- ~~排查代码中不能跨平台的写法。初步扫描（`src/`、`test/`、`package.json`）发现的可疑点，逐项确认并修复。~~
+- 待用户在 Windows 的 pi 里完整跑一遍 `/lazy-history`（三个面板、j/k、y、T、/），确认无异常；macOS 的验证另开任务。
+
+实现说明（2026-09-21）：
+
+1. ~~`shortenPath`~~：实测 pi 在 Windows 上存的 cwd 是 `E:\\androidWorkspace\\FilmRecall` 这种反斜杠写法。现在 `/` 和 `\` 两种分隔符都认，Windows 下前缀比较忽略大小写（盘符大小写不敏感）；`C:\Users\xxxyz` 这种只是前缀相同的目录不会误缩。
+2. ~~`test/ui.test.ts`~~：改用 `os.homedir()` + `path.join`，同时断言两种分隔符；反例不能用 `tmpdir()`（Windows 的临时目录在 home 下面，会被正确缩写成 `~\AppData\...`），改用平台各自的一个 home 外路径。
+3. ~~`test/panel.test.ts` 的 `/tmp/s1.jsonl`~~：确认面板对 `file` 不做任何路径处理，只当不透明 id 传给 DataSource 桩，加了注释说明，不改路径。
+4. ~~换行~~：实测本机 7 个会话文件（含 Windows 下产生的）都没有 `\r`（原始字节和 JSON 转义里都没有）。但工具输出 / 粘贴内容仍可能带，所以 `utils/format.ts` 新增 `normalizeNewlines`（`\r\n` / `\r` → `\n`），`data/content.ts` 在生成 markdown 时统一调用；tree / sessions 的一行预览走 `singleLine`，`\s+` 本来就会吃掉 `\r`。
+5. ~~scripts~~：已验证，无需改动。
+6. ~~剪贴板~~：查了 pi 0.85.1 的 `copyToClipboard` 实现：先试 OSC 52，再按平台走 `pbcopy`（darwin）/ `clip`（win32）/ `wl-copy`、`xclip` 等（linux），Windows 已覆盖，无需插件侧处理。
+7. ~~配置路径~~：无问题。
+8. ~~文档~~：`CLAUDE.md`、`docs/design.md`、`docs/keybindings.md` 里的路径示例都已是 `~/.pi/agent/...` 写法，没有 bash 专有命令。

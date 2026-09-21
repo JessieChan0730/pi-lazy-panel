@@ -4,13 +4,15 @@
  */
 
 import assert from "node:assert/strict";
+import { homedir } from "node:os";
+import { join, sep } from "node:path";
 import { test } from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { applyTreeFilter } from "../src/data/tree.ts";
 import type { TreeRow } from "../src/types.ts";
 import { fit, frame, metaBudget, sideBySide } from "../src/ui/frame.ts";
 import { scrollOffset, sessionsMeta } from "../src/ui/panes/sessions-pane.ts";
-import { formatCost, formatTokens, shortenPath, singleLine } from "../src/utils/format.ts";
+import { formatCost, formatTokens, normalizeNewlines, shortenPath, singleLine } from "../src/utils/format.ts";
 
 test("formatTokens / formatCost", () => {
 	assert.equal(formatTokens(84213), "84.2k");
@@ -20,10 +22,19 @@ test("formatTokens / formatCost", () => {
 });
 
 test("shortenPath replaces the home prefix and singleLine collapses whitespace", () => {
-	const home = process.env.HOME ?? "";
-	if (home) assert.equal(shortenPath(`${home}/x/y`), "~/x/y");
-	assert.equal(shortenPath("/tmp/z"), "/tmp/z");
+	// 用 os.homedir() + path.join，Windows 上没有 HOME 环境变量，路径分隔符也是 `\`。
+	const home = homedir();
+	assert.equal(shortenPath(home), "~");
+	assert.equal(shortenPath(join(home, "x", "y")), `~${sep}x${sep}y`);
+	// 同一台机器上也可能出现另一种分隔符（git bash / 手写路径），两种都要认。
+	assert.equal(shortenPath(`${home}/x/y`), "~/x/y");
+	// 只是前缀相同但不是子目录，不能缩写。
+	assert.equal(shortenPath(`${home}xyz`), `${home}xyz`);
+	// 不在 home 下的路径原样返回（Windows 的 tmpdir 在 home 里，所以不能拿它当反例）。
+	const outside = process.platform === "win32" ? "D:\\work\\z" : "/opt/z";
+	assert.equal(shortenPath(outside), outside);
 	assert.equal(singleLine("  a\n\n b\tc "), "a b c");
+	assert.equal(normalizeNewlines("a\r\nb\rc\n"), "a\nb\nc\n");
 });
 
 test("fit pads and truncates to the exact width, including wide chars", () => {
