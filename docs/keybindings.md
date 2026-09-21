@@ -10,7 +10,7 @@ Source of truth: `src/config/keymap.ts`. Override any binding in
 ```json
 {
   "keymap": {
-    "global":   { "help": "F1", "toggle-scope": ["C", "A", "ctrl+space"] },
+    "global":   { "help": "F1", "scope-all": ["A", "ctrl+space"], "focus-sessions": "F5" },
     "sessions": { "session-delete": "ctrl+d", "session-share": null }
   }
 }
@@ -19,29 +19,36 @@ Source of truth: `src/config/keymap.ts`. Override any binding in
 - A value is one chord or an array of chords. It **replaces** the default for
   that action (it does not add to it). `null` unbinds the action.
 - Chord syntax (`src/config/keys.ts`):
-  - single key: `j`, `?`, `/`, `tab`, `enter`, `escape`, `space`, `up`, `pageDown`, `f1`
+  - single key: `j`, `?`, `/`, `1`, `tab`, `enter`, `escape`, `space`, `up`, `pageDown`, `f1`
   - modifiers: `ctrl+d`, `shift+tab`, `alt+x`, `ctrl+shift+p` (any order)
   - an uppercase letter is shorthand for shift: `G` = `shift+g`
   - multi-key sequence: `gg`, `yy` (verbatim), or space separated `ctrl+w h`
 - Pane bindings shadow global ones for the same key (e.g. `n` is *new session*
-  in the sessions pane but *next match* elsewhere).
+  in the sessions pane but *next match* elsewhere). `h` / `l` are not shadowed
+  by any default pane binding, so pane switching works the same everywhere.
 - Invalid chords or unknown scopes are skipped and reported in the footer when
   the panel opens.
 - Multi-key sequences wait up to 1 s for the next key; `Esc` discards a
   half-typed sequence.
+- The pane header shows the jump key bound to `focus-<pane>` (`[1] SESSIONS`),
+  so rebinding it updates the title too.
 
 ## Global
 
 | Key         | Action                                     |
 | ----------- | ------------------------------------------ |
-| `Tab`       | Focus next pane                            |
-| `Shift+Tab` | Focus previous pane                        |
-| `C` / `A`   | Toggle list scope: Current folder ↔ All    |
+| `l` / `Tab` | Focus next pane                            |
+| `h`         | Focus previous pane                        |
+| `1` `2` `3` | Focus SESSIONS / TREE / CONTENT directly   |
+| `C`         | List scope: Current folder                 |
+| `A`         | List scope: All                            |
 | `?`         | Help overlay for the focused pane (`?`/`Esc`/`q` close, `j`/`k` scroll) |
 | `q` / `Ctrl+c` | Quit the panel                          |
 | `Esc`       | Discard pending keys → clear search → quit |
 | `/`         | Search bar for the focused pane (`Enter` run, `Esc` cancel) |
 | `n` / `N`   | Next / previous search match               |
+
+`C` and `A` are one-way: pressing `A` while already on *All* does nothing.
 
 ## Sessions pane
 
@@ -72,16 +79,14 @@ Source of truth: `src/config/keymap.ts`. Override any binding in
 | `gg` / `G`      | Top / bottom                                        |
 | `Enter`         | Restore to node: No summary / Summarize / Custom    |
 | `y`             | Copy node text                                      |
-| `l`             | Add / edit label                                    |
+| `T`             | Add / edit label (same as `Shift+T` in `/tree`)     |
 | `d` `t` `u` `L` `a` | Filter: default / tools / user-only / labeled / all |
 
-## Content pane (read-only, vim-like)
+## Content pane (read-only)
+
+Only scrolling; copying a message is done from the tree pane (`y`).
 
 | Key             | Action                |
 | --------------- | --------------------- |
-| `h` `j` `k` `l` | Move cursor           |
-| `b` / `e`       | Word backward/forward |
+| `j` `k` `↑` `↓` | Scroll                |
 | `gg` / `G`      | Top / bottom          |
-| `zz`            | Center cursor line    |
-| `v`             | Preview mode          |
-| `y` / `yy`      | Yank selection / line |

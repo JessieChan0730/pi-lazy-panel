@@ -9,13 +9,16 @@ conversation content on the right. Everything is driven by vim-like keys.
 
 ```
      25%              75%
-  ┌──────────┬────────────────────┐
-  │ SESSIONS │                    │
-  ├──────────┤      CONTENT       │
-  │   TREE   │                    │
-  └──────────┴────────────────────┘
-  │ NORMAL │ / Search  ? Help ... │
+  ┌──────────────┬────────────────────┐
+  │ [1] SESSIONS │                    │
+  ├──────────────┤    [3] CONTENT     │
+  │ [2] TREE     │                    │
+  └──────────────┴────────────────────┘
+  │ NORMAL │ / Search  ? Help  l Focus  … │
 ```
+
+Press `h` / `l` to move between panes (like lazygit), or `1` / `2` / `3` to jump
+straight to one. `C` shows sessions of the current folder, `A` shows all.
 
 ## Install (once published)
 
@@ -79,7 +82,7 @@ Optional file `~/.pi/agent/lazy-panel.json`:
   "defaultSort": "recent",
   "leftColumnRatio": 0.25,
   "keymap": {
-    "global":   { "help": "F1", "toggle-scope": ["C", "A"] },
+    "global":   { "help": "F1", "scope-all": ["A", "ctrl+space"] },
     "sessions": { "session-delete": "ctrl+d", "session-share": null }
   }
 }
