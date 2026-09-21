@@ -56,14 +56,16 @@ src/
 ├── constants.ts              # 常量：扩展 id、命令名、布局比例、面板 id
 ├── ui/                       # 渲染层：pi-tui Component。不做 I/O，不调用 pi 会话 API
 │   ├── app.ts                # 根组件 LazyPanel + PanelState；数据通过 DataSource 接口注入
-│   ├── frame.ts              # 纯函数：画边框、左右拼列、按可见宽度补齐/截断
+│   ├── frame.ts              # 纯函数：画边框、左右拼列、按可见宽度补齐/截断、居中叠加弹窗（overlayCentered）
 │   ├── panes/
 │   │   ├── sessions-pane.ts  # 左上 SESSIONS 面板
 │   │   ├── tree-pane.ts      # 左下 TREE 面板
 │   │   └── content-pane.ts   # 右侧 CONTENT 面板，用 pi-tui 的 Markdown 渲染消息
 │   └── widgets/
-│       ├── footer.ts         # 底部一行：模式 + 当前面板快捷键提示
-│       ├── search-bar.ts     # 底部搜索输入：包装 pi-tui Input，显示 `搜索:`（匹配/高亮 TODO）
+│       ├── footer.ts         # 底部一行：模式 + 当前面板快捷键提示（弹窗打开时显示弹窗的提示）
+│       ├── prompt-bar.ts     # 底部一行输入的通用组件（包装 pi-tui Input），搜索栏基于它
+│       ├── search-bar.ts     # 底部搜索输入：显示 `搜索:`（匹配/高亮 TODO）
+│       ├── label-dialog.ts   # T 打标签：居中弹窗输入框（类似 lazygit commit 弹窗）
 │       ├── confirm-dialog.ts # 删除 / fork 前的确认框（TODO）
 │       ├── help-overlay.ts   # ? 快捷键帮助：居中弹窗，内容来自最终 keymap
 │       └── session-info-dialog.ts  # i 会话信息弹窗（TODO）

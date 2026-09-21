@@ -79,7 +79,7 @@ Source of truth: `src/config/keymap.ts`. Override any binding in
 | ~~`gg` / `G`~~  | ~~Top / bottom~~                                    |
 | `Enter`         | Restore to node: No summary / Summarize / Custom    |
 | ~~`y`~~         | ~~Copy node text (full text, like `Ctrl+x` in `/tree`)~~ |
-| ~~`T`~~         | ~~Add / edit label in a bottom prompt (`Enter` save, `Esc` cancel, empty removes; same as `Shift+T` in `/tree`)~~ |
+| ~~`T`~~         | ~~Add / edit label in a centered dialog, like lazygit's commit popup (`Enter` save, `Esc` cancel, empty removes; same as `Shift+T` in `/tree`)~~ |
 | `d` `t` `u` `L` `a` | Filter: default / tools / user-only / labeled / all |
 
 ## Content pane (read-only)

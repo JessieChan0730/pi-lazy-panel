@@ -76,7 +76,7 @@ i: 弹出对话框展示 Session Info 信息，就是 /seesion 中的内容（�
 ~~j/k/方向上下键盘：上下移动~~
   - ~~光标变化时右侧 CONTENT 跟着定位：对应消息框头部显示 `›` 箭头并加选中背景，同时把这条消息滚到面板顶部；节点在别的分支上时右侧改为显示“以该节点为叶子”的分支~~
 y: 复制消息内容（类似于 /tree 里面 ctrl + x 快捷键的功能）
-T: 给某个节点添加 label 弹出一个输入框 (和 /tree 里面 shift+t 快捷键一致；不用 l 是为了把 l 留给全局的“下一个面板”)，打标签之后 / 搜索也要能按照标签搜索
+T: 给某个节点添加 label，在面板中央弹出一个输入框（类似 lazygit commit 的弹窗；和 /tree 里面 shift+t 快捷键一致；不用 l 是为了把 l 留给全局的“下一个面板”），打标签之后 / 搜索也要能按照标签搜索
 d/t/u/L/a: 过滤（过滤 类似 /tree ：filters ctrl+d/t/u/l/a 快捷键的功能，其中“只看有标签”用大写 L）
 enter: 确定要恢复到这个界面上，此时展示菜单，提供三个选项（No summary，Summarize，Summarize with custom prompt）
 

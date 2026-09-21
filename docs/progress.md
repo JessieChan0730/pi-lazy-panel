@@ -70,6 +70,17 @@
 - 反馈都在 footer：`copied node text to clipboard` / `selected entry has no text to copy` / `label set: xxx` / `label removed` / 失败原因。
 - 测试：`test/panel.test.ts` 加了 y / T 的面板行为测试（含错误分支和无 actions 的情况）；新增 `test/tree-actions.test.ts` 在临时目录里建真实会话文件，验证 `loadNodeText` 和 `labelNode` 的落盘与 `pi.setLabel` 分流。
 
+### TREE 打标签改为居中弹窗（2026-09-22）
+
+- ~~T 打标签的输入框从底部一行改成面板中央弹出的输入框（类似 lazygit commit 的效果）：标题 `Label`，右侧显示被打标签的节点（`assistant: …`），回车保存、Esc 取消、空内容清除；按键提示放在底部 footer（`LABEL │ Enter save  Esc cancel  empty removes`）。~~
+
+实现说明（2026-09-22）：
+
+- 新增 `ui/widgets/label-dialog.ts`（`LabelDialog`）：包装 pi-tui `Input`，5 行高的居中方框，预填当前标签且光标停在末尾（直接退格就能清空）；删除原来的 `ui/widgets/label-bar.ts`，`prompt-bar.ts` 现在只被搜索栏使用。
+- `ui/frame.ts` 抽出 `overlayCentered`（居中叠加，基于 pi-tui `compositeTuiLine`），帮助弹窗和标签弹窗共用；后续的确认框 / 会话信息弹窗也可以直接用。
+- `ui/widgets/footer.ts` 新增 `hints` 参数：弹窗打开时 footer 显示弹窗自己的按键提示，而不是当前面板的键位；`types.ts` 新增 `KeyHint` 类型给 footer / prompt-bar / label-dialog 共用。
+- `test/panel.test.ts` 的 T 测试改为断言弹窗画在面板中间、标题带节点信息、footer 带提示、Enter/Esc 后弹窗消失；`test/ui.test.ts` 加了 `overlayCentered` 的几何测试。
+
 ### 跨平台适配（分支 `feat/windows-support`，2026-09-21）
 
 背景：`npm run install:pi` 在 Windows 上报 `Path does not exist: ...\$(pwd)`。npm 在 Windows 默认用 cmd.exe 跑 scripts，`$(pwd)` 这种 bash 命令替换会被原样传给 pi。说明之前的写法只考虑了 Linux / macOS，需要系统性排查。先在本分支把 Windows 适配好，再考虑 macOS。
