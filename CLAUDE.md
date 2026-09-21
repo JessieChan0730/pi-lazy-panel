@@ -35,8 +35,8 @@ npm install            # 必须先执行：pi 相关包是 devDependencies，默
 npm run check          # tsc --noEmit（strict、noUncheckedIndexedAccess、exactOptionalPropertyTypes）
 npm test               # node --import tsx --test "test/**/*.test.ts"
 npm run dev            # pi -e ./src/index.ts，临时把插件加载进一个 pi TUI，不写配置
-npm run install:pi     # pi install "$(pwd)"，把本目录以本地路径注册到 ~/.pi/agent/settings.json，只需执行一次
-npm run uninstall:pi   # pi remove "$(pwd)"，从 pi 中移除
+npm run install:pi     # pi install .，把本目录以本地路径注册到 ~/.pi/agent/settings.json（pi 会把 . 解析成绝对路径），只需执行一次
+npm run uninstall:pi   # pi remove .，从 pi 中移除
 ```
 
 - 运行单个测试文件：`node --import tsx --test test/ui.test.ts`
