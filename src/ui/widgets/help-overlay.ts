@@ -4,7 +4,7 @@
  * A centered box drawn over the panel listing the bindings of the focused pane
  * followed by the global ones. Pure rendering: given the resolved keymap and
  * the focused pane, produce lines; the panel composites them over its own
- * output with pi-tui's `compositeTuiLine`.
+ * output with `overlayCentered` from ../frame.ts.
  *
  *   ┌─ HELP · Sessions pane ─────────────────────┐
  *   │ j/↓          Move cursor down              │
@@ -19,11 +19,11 @@
  */
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { compositeTuiLine, visibleWidth } from "@earendil-works/pi-tui";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { ACTION_DESCRIPTIONS, HELP_GROUPS, SCOPE_TITLES } from "../../config/keymap.ts";
 import { labelsFor } from "../../config/keys.ts";
 import type { ActionId, Keymap, KeyScope, PaneId } from "../../types.ts";
-import { fit, frame } from "../frame.ts";
+import { fit, frame, overlayCentered } from "../frame.ts";
 
 export interface HelpOverlayProps {
 	keymap: Keymap;
@@ -136,17 +136,9 @@ export function renderHelpBox(p: HelpOverlayProps, width: number, height: number
 
 /** Composite the help box centered over already-rendered panel `lines`. */
 export function overlayHelp(lines: string[], p: HelpOverlayProps, termW: number): string[] {
-	const termH = lines.length;
 	const count = buildHelpLines(p.keymap, p.focus).length;
-	const { width, height } = helpBoxSize(termW, termH, count);
-	const box = renderHelpBox(p, width, height);
-	const top = Math.max(0, Math.floor((termH - height) / 2));
-	const left = Math.max(0, Math.floor((termW - width) / 2));
-	const out = [...lines];
-	for (let i = 0; i < box.length && top + i < out.length; i++) {
-		out[top + i] = compositeTuiLine(out[top + i] ?? "", box[i]!, left, width, termW);
-	}
-	return out;
+	const { width, height } = helpBoxSize(termW, lines.length, count);
+	return overlayCentered(lines, renderHelpBox(p, width, height), width, termW);
 }
 
 /** Number of body lines, used by the panel to clamp help scrolling. */

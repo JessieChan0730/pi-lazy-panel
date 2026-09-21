@@ -3,20 +3,22 @@
  *
  *   <label>foo▏                              Enter <ok>  Esc <cancel>
  *
- * Generic building block behind the search bar (`/`) and the label input (`T`).
- * Wraps pi-tui's `Input` so cursor movement, word deletion, paste and the
- * kill-ring come for free. The bar only owns rendering + the input widget; the
- * panel decides what to do on submit / cancel.
+ * Generic building block behind the search bar (`/`). Wraps pi-tui's `Input`
+ * so cursor movement, word deletion, paste and the kill-ring come for free.
+ * The bar only owns rendering + the input widget; the panel decides what to do
+ * on submit / cancel. (Labelling a tree node uses the centered
+ * ./label-dialog.ts instead.)
  *
- * 底部一行式输入框：搜索栏和 tree 打标签共用，只负责画和收键，语义由 app.ts 决定。
+ * 底部一行式输入框：搜索栏用它，只负责画和收键，语义由 app.ts 决定。
  */
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Input, visibleWidth } from "@earendil-works/pi-tui";
+import type { KeyHint } from "../../types.ts";
 import { fit } from "../frame.ts";
 
 /** One `key description` pair shown at the right end of the bar. */
-export type PromptHint = [key: string, text: string];
+export type PromptHint = KeyHint;
 
 export interface PromptBarOptions {
 	theme: Theme;

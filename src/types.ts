@@ -22,6 +22,9 @@ export type SessionSortMode = "threaded" | "recent" | "fuzzy";
 /** Input mode of the panel, shown in the footer (vim-like). */
 export type PanelMode = "normal" | "search" | "label" | "visual" | "preview";
 
+/** A `key description` pair shown as a hint in the footer or a prompt bar. */
+export type KeyHint = [key: string, text: string];
+
 // ---------------------------------------------------------------------------
 // Data rows
 // ---------------------------------------------------------------------------

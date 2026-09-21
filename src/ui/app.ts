@@ -24,7 +24,7 @@
  *   - C 切到 Current folder，A 切到 All（各自只做单向切换），? 帮助，/ 搜索栏
  *   - j/k、gg/G：SESSIONS / TREE 移动光标，CONTENT 按行滚动；SESSIONS 里 J/K 滚动右侧内容
  *   - SESSIONS 光标变化 → 重新加载 TREE + CONTENT；TREE 光标变化 → CONTENT 高亮并滚到对应消息
- *   - TREE：y 复制节点全文（走注入的 ActionSource），T 底部弹出 Label 输入框，回车保存 / Esc 取消 / 空值清除
+ *   - TREE：y 复制节点全文（走注入的 ActionSource），T 居中弹出 Label 输入框（类似 lazygit 的 commit 弹窗），回车保存 / Esc 取消 / 空值清除
  *   - 其余面板动作（删除、fork…）只做分发，具体实现留给后续任务
  */
 
@@ -51,7 +51,7 @@ import { renderSessionsPane } from "./panes/sessions-pane.ts";
 import { renderTreePane } from "./panes/tree-pane.ts";
 import { renderFooter } from "./widgets/footer.ts";
 import { helpLineCount, overlayHelp } from "./widgets/help-overlay.ts";
-import { LabelBar } from "./widgets/label-bar.ts";
+import { LABEL_DIALOG_HINTS, LabelDialog } from "./widgets/label-dialog.ts";
 import { renderSearchStatus, SearchBar } from "./widgets/search-bar.ts";
 
 /** Mutable UI state of the panel. Kept in one place for easy debugging. */
@@ -149,7 +149,7 @@ export class LazyPanel implements Component, Focusable {
 	private disposed = false;
 	private readonly ratio: number;
 	private readonly searchBar: SearchBar;
-	private readonly labelBar: LabelBar;
+	private readonly labelDialog: LabelDialog;
 	/** Node being labelled while `mode === "label"`. */
 	private labelTarget: { file: string; entryId: string } | undefined;
 	/** Raw key chunks of an unfinished multi-key sequence. */
@@ -177,7 +177,7 @@ export class LazyPanel implements Component, Focusable {
 			onCancel: () => this.cancelSearch(),
 			onChange: () => this.o.requestRender(),
 		});
-		this.labelBar = new LabelBar({
+		this.labelDialog = new LabelDialog({
 			theme: o.theme,
 			onSubmit: (v) => void this.submitLabel(v),
 			onCancel: () => this.cancelLabel(),
@@ -192,7 +192,7 @@ export class LazyPanel implements Component, Focusable {
 	set focused(v: boolean) {
 		this._focused = v;
 		this.searchBar.focused = v && this.state.mode === "search";
-		this.labelBar.focused = v && this.state.mode === "label";
+		this.labelDialog.focused = v && this.state.mode === "label";
 	}
 
 	// -----------------------------------------------------------------------
@@ -372,9 +372,9 @@ export class LazyPanel implements Component, Focusable {
 			return;
 		}
 
-		// 打标签模式：同理交给 Label 输入框。
+		// 打标签模式：同理交给居中的 Label 弹窗。
 		if (this.state.mode === "label") {
-			this.labelBar.handleInput(data);
+			this.labelDialog.handleInput(data);
 			return;
 		}
 
@@ -658,7 +658,7 @@ export class LazyPanel implements Component, Focusable {
 		}
 	}
 
-	/** T: open the label prompt pre-filled with the node's current label. */
+	/** T: open the label dialog pre-filled with the node's current label. */
 	private openLabelInput(): void {
 		const target = this.currentTreeNode();
 		if (!target) return;
@@ -668,8 +668,9 @@ export class LazyPanel implements Component, Focusable {
 		}
 		this.labelTarget = { file: target.file, entryId: target.row.entryId };
 		this.state.mode = "label";
-		this.labelBar.reset(target.row.label ?? "");
-		this.labelBar.focused = this._focused;
+		// 弹窗标题右侧显示是给哪条消息打标签。
+		this.labelDialog.open(target.row.label ?? "", `${target.row.role}: ${target.row.text}`);
+		this.labelDialog.focused = this._focused;
 		this.o.requestRender();
 	}
 
@@ -697,7 +698,7 @@ export class LazyPanel implements Component, Focusable {
 
 	private closeLabelInput(): void {
 		this.state.mode = "normal";
-		this.labelBar.focused = false;
+		this.labelDialog.focused = false;
 		this.labelTarget = undefined;
 	}
 
@@ -813,33 +814,29 @@ export class LazyPanel implements Component, Focusable {
 		if (this.state.helpOpen) {
 			lines = overlayHelp(lines, { keymap: this.keymap, focus: this.state.focus, scroll: this.state.helpScroll, theme }, width);
 		}
+		// 打标签时把居中弹窗画在三个面板上面（lazygit commit 弹窗的效果）。
+		if (this.state.mode === "label") {
+			lines = this.labelDialog.overlay(lines, width);
+		}
 		return [...lines, this.renderBottom(width)].map((l) => fit(l, width));
 	}
 
-	/** Footer row: search / label bar while typing, search status after Enter, otherwise hints. */
+	/** Footer row: search bar while typing, the dialog's keys in label mode, search status after Enter, otherwise hints. */
 	private renderBottom(width: number): string {
 		if (this.state.mode === "search") {
 			return this.searchBar.render(width)[0] ?? "";
 		}
+		const footer = { mode: this.state.mode, focus: this.state.focus, keymap: this.keymap, scope: this.state.scope, theme: this.o.theme };
+		// 弹窗打开时 footer 只显示弹窗自己的按键提示（Enter save / Esc cancel / empty removes）。
 		if (this.state.mode === "label") {
-			return this.labelBar.render(width)[0] ?? "";
+			return renderFooter({ ...footer, hints: LABEL_DIALOG_HINTS }, width)[0]!;
 		}
 		if (this.state.searchQuery) {
 			return renderSearchStatus({ query: this.state.searchQuery, current: 0, total: 0, theme: this.o.theme }, width);
 		}
 		const pendingHint = this.pending.length ? `pending: ${this.pending.join("")}` : undefined;
 		const status = pendingHint ?? this.status;
-		return renderFooter(
-			{
-				mode: this.state.mode,
-				focus: this.state.focus,
-				keymap: this.keymap,
-				scope: this.state.scope,
-				theme: this.o.theme,
-				...(status ? { status } : {}),
-			},
-			width,
-		)[0]!;
+		return renderFooter({ ...footer, ...(status ? { status } : {}) }, width)[0]!;
 	}
 
 	private emptyMessage(selected: SessionRow | undefined): string {

@@ -12,7 +12,7 @@ import { DEFAULT_KEYMAP } from "../src/config/keymap.ts";
 import { mergeKeymap } from "../src/config/config.ts";
 import type { ContentBlock, SessionRow, TreeRow } from "../src/types.ts";
 import { type ActionSource, type DataSource, LazyPanel } from "../src/ui/app.ts";
-import { LABEL_PROMPT } from "../src/ui/widgets/label-bar.ts";
+import { LABEL_DIALOG_TITLE } from "../src/ui/widgets/label-dialog.ts";
 import { SEARCH_LABEL } from "../src/ui/widgets/search-bar.ts";
 
 /** Styling is irrelevant here; return text unchanged so assertions stay simple. */
@@ -490,7 +490,14 @@ test("y in the tree pane copies the node under the cursor and reports the result
 	h.panel.dispose();
 });
 
-test("T opens the Label bar; Enter saves and refreshes the row, empty removes, Esc cancels", async () => {
+/** The centered Label dialog in rendered `lines`: its top row, title line and input line (row + 2), or undefined when closed. */
+function labelDialog(lines: string[]): { top: number; title: string; input: string } | undefined {
+	const top = lines.findIndex((l) => l.includes(`┌─ ${LABEL_DIALOG_TITLE} `));
+	if (top < 0) return undefined;
+	return { top, title: lines[top]!, input: lines[top + 2] ?? "" };
+}
+
+test("T opens a centered Label dialog; Enter saves and refreshes the row, empty removes, Esc cancels", async () => {
 	const h = makeTreeActionPanel();
 	await h.panel.load();
 	h.panel.handleInput("2");
@@ -498,16 +505,25 @@ test("T opens the Label bar; Enter saves and refreshes the row, empty removes, E
 	await flush();
 	h.panel.handleInput("T");
 	assert.equal(h.panel.state.mode, "label");
-	let bottom = h.text().at(-1)!;
-	assert.ok(bottom.startsWith(LABEL_PROMPT.trimEnd()), `footer should start with ${LABEL_PROMPT}, got: ${bottom}`);
+	const lines = h.text();
+	const dlg = labelDialog(lines);
+	assert.ok(dlg, "the Label dialog should be drawn");
+	// drawn over the middle of the panel (not in the footer row), naming the node; the footer carries the dialog's keys
+	assert.ok(dlg.top > 2 && dlg.top < lines.length - 6, `dialog row ${dlg.top} of ${lines.length}`);
+	assert.ok(dlg.title.includes("assistant: msg 1"), dlg.title);
+	const footer = lines.at(-1)!;
+	assert.ok(footer.includes("LABEL") && footer.includes("Enter save") && footer.includes("empty removes"), footer);
+	for (const l of h.panel.render(100)) assert.equal(visibleWidth(l), 100);
 
 	// keys go to the input, not to the keymap
 	for (const ch of "ckpt") h.panel.handleInput(ch);
 	assert.equal(h.panel.state.focus, "tree");
 	assert.equal(h.panel.state.cursor.tree, 1);
+	assert.ok(labelDialog(h.text())!.input.includes("ckpt"));
 	h.panel.handleInput("\r");
 	await flush();
 	assert.equal(h.panel.state.mode, "normal");
+	assert.equal(labelDialog(h.text()), undefined, "dialog closes on Enter");
 	assert.deepEqual(h.labelCalls, [{ file: "/tmp/s1.jsonl", entryId: "e1", label: "ckpt" }]);
 	// tree reloaded: the row now shows the label, cursor stays on the same node
 	assert.equal(h.panel.state.cursor.tree, 1);
@@ -516,15 +532,17 @@ test("T opens the Label bar; Enter saves and refreshes the row, empty removes, E
 
 	// reopening pre-fills the current label; Esc leaves it untouched
 	h.panel.handleInput("T");
-	assert.ok(h.text().at(-1)!.includes("ckpt"));
+	assert.ok(labelDialog(h.text())!.input.includes("ckpt"));
 	h.panel.handleInput("\x1b");
 	assert.equal(h.panel.state.mode, "normal");
+	assert.equal(labelDialog(h.text()), undefined, "dialog closes on Esc");
 	assert.equal(h.labelCalls.length, 1);
 	assert.equal(h.labels.get("e1"), "ckpt");
 
-	// clearing the field removes the label
+	// the cursor starts at the end of the pre-filled text, so backspace clears it; an empty value removes the label
 	h.panel.handleInput("T");
 	for (let i = 0; i < 4; i++) h.panel.handleInput("\x7f");
+	assert.equal(labelDialog(h.text())!.input.includes("ckpt"), false);
 	h.panel.handleInput("\r");
 	await flush();
 	assert.deepEqual(h.labelCalls.at(-1), { file: "/tmp/s1.jsonl", entryId: "e1", label: undefined });

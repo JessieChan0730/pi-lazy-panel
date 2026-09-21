@@ -5,7 +5,7 @@
  * pi-tui requires from `Component.render()`.
  */
 
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { compositeTuiLine, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 export type Style = (s: string) => string;
 
@@ -73,6 +73,23 @@ function topBorder(o: FrameOptions, inner: number): string {
 	}
 	const metaPart = meta ? (o.metaStyle ?? o.titleStyle)(meta) + o.border("─") : "";
 	return o.border("┌─") + o.titleStyle(title) + o.border("─".repeat(fill)) + metaPart + o.border("┐");
+}
+
+/**
+ * Composite `box` (lines of exactly `width` columns) centered over the
+ * already-rendered `base` lines of a `termW`-column terminal. Shared by the
+ * help overlay and the dialogs; box rows beyond `base` are dropped.
+ *
+ * 居中叠加：帮助弹窗和打标签弹窗都用这个把自己画到面板上面。
+ */
+export function overlayCentered(base: string[], box: string[], width: number, termW: number): string[] {
+	const top = Math.max(0, Math.floor((base.length - box.length) / 2));
+	const left = Math.max(0, Math.floor((termW - width) / 2));
+	const out = [...base];
+	for (let i = 0; i < box.length && top + i < out.length; i++) {
+		out[top + i] = compositeTuiLine(out[top + i] ?? "", box[i]!, left, width, termW);
+	}
+	return out;
 }
 
 /** Place `left` and `right` column line arrays side by side. Both must already be the right width. */

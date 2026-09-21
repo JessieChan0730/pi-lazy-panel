@@ -7,10 +7,10 @@ import assert from "node:assert/strict";
 import { homedir } from "node:os";
 import { join, sep } from "node:path";
 import { test } from "node:test";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { applyTreeFilter } from "../src/data/tree.ts";
 import type { TreeRow } from "../src/types.ts";
-import { fit, frame, metaBudget, sideBySide } from "../src/ui/frame.ts";
+import { fit, frame, metaBudget, overlayCentered, sideBySide } from "../src/ui/frame.ts";
 import { scrollOffset, sessionsMeta } from "../src/ui/panes/sessions-pane.ts";
 import { formatCost, formatTokens, normalizeNewlines, shortenPath, singleLine } from "../src/utils/format.ts";
 
@@ -92,6 +92,22 @@ test("sideBySide joins columns to leftWidth + rightWidth", () => {
 	const out = sideBySide(["a", "b", "c"], ["x"], 3, 4);
 	assert.equal(out.length, 3);
 	for (const l of out) assert.equal(visibleWidth(l), 7);
+});
+
+test("overlayCentered draws the box in the middle of the base lines and keeps every width", () => {
+	const base = Array.from({ length: 10 }, () => "x".repeat(20));
+	const box = ["┌──┐", "│ab│", "└──┘"];
+	const out = overlayCentered(base, box, 4, 20);
+	assert.equal(out.length, 10);
+	for (const l of out) assert.equal(visibleWidth(l), 20);
+	// rows 3..5, columns 8..11
+	assert.equal(stripTerminalSequences(out[3]!), "xxxxxxxx┌──┐xxxxxxxx");
+	assert.equal(stripTerminalSequences(out[4]!), "xxxxxxxx│ab│xxxxxxxx");
+	assert.equal(stripTerminalSequences(out[5]!), "xxxxxxxx└──┘xxxxxxxx");
+	assert.equal(out[2], base[2]);
+	assert.equal(out[6], base[6]);
+	// a box taller than the base is clipped, never extends the output
+	assert.equal(overlayCentered(["yy"], box, 4, 2).length, 1);
 });
 
 test("scrollOffset keeps the cursor visible", () => {
