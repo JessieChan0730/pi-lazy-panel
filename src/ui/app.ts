@@ -24,7 +24,8 @@
  *   - C 切到 Current folder，A 切到 All（各自只做单向切换），? 帮助，/ 搜索栏
  *   - j/k、gg/G：SESSIONS / TREE 移动光标，CONTENT 按行滚动；SESSIONS 里 J/K 滚动右侧内容
  *   - SESSIONS 光标变化 → 重新加载 TREE + CONTENT；TREE 光标变化 → CONTENT 高亮并滚到对应消息
- *   - TREE：y 复制节点全文（走注入的 ActionSource），T 居中弹出 Label 输入框（类似 lazygit 的 commit 弹窗），回车保存 / Esc 取消 / 空值清除
+ *   - TREE：y 复制节点全文（走注入的 ActionSource），T 居中弹出 Label 输入框（类似 lazygit 的 commit 弹窗），回车保存 / Esc 取消 / 空值清除；
+ *     a 打开完整树对话框（顶部搜索框、中间完整树、底部提示；本任务只做 UI，Esc/q 关闭）。小面板不做 / 搜索和 d/t/u/L/a 过滤，按 / 只在 footer 提示去对话框
  *   - Enter：SESSIONS 里切到光标所在会话（/resume）；TREE 里以光标节点为叶子恢复（/tree restore）：先居中弹出
  *     Summarize branch? 三选菜单（No summary / Summarize / Summarize with custom prompt，自定义指令再弹一个输入框），
  *     光标就在活动叶子上或 pi 设置了 branchSummary.skipPrompt 时不问、直接进入；
@@ -35,7 +36,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, Focusable } from "@earendil-works/pi-tui";
 import { type Binding, compileKeymap, labelsFor, matchesKeyId, resolveKeys } from "../config/keys.ts";
-import { DEFAULT_KEYMAP, FOCUS_ACTIONS, PANE_TITLES } from "../config/keymap.ts";
+import { DEFAULT_KEYMAP, FOCUS_ACTIONS, isDisabledIn, PANE_TITLES } from "../config/keymap.ts";
 import { LEFT_COLUMN_RATIO, PANE_IDS, SUMMARIZING_STATUS } from "../constants.ts";
 import type {
 	ActionId,
@@ -69,6 +70,7 @@ import {
 } from "./widgets/restore-dialog.ts";
 import { renderSearchStatus, SearchBar } from "./widgets/search-bar.ts";
 import { SelectDialog } from "./widgets/select-dialog.ts";
+import { TreeDialog } from "./widgets/tree-dialog.ts";
 
 /** Mutable UI state of the panel. Kept in one place for easy debugging. */
 export interface PanelState {
@@ -191,6 +193,8 @@ export class LazyPanel implements Component, Focusable {
 	private readonly inputDialog: InputDialog;
 	/** Shared centered menu: the "Summarize branch?" choice now, confirmations and pickers later. */
 	private readonly selectDialog: SelectDialog;
+	/** Full tree in a big box (`a` in the tree pane); search / filters move here in the next task. */
+	private readonly treeDialog: TreeDialog;
 	/** Node being labelled while `mode === "label"`. */
 	private labelTarget: { file: string; entryId: string } | undefined;
 	/** Node being restored to while `mode === "restore"`. */
@@ -227,6 +231,10 @@ export class LazyPanel implements Component, Focusable {
 			onChange: () => this.o.requestRender(),
 		});
 		this.selectDialog = new SelectDialog({
+			theme: o.theme,
+			onChange: () => this.o.requestRender(),
+		});
+		this.treeDialog = new TreeDialog({
 			theme: o.theme,
 			onChange: () => this.o.requestRender(),
 		});
@@ -434,6 +442,12 @@ export class LazyPanel implements Component, Focusable {
 			return;
 		}
 
+		// 完整树对话框打开时：所有按键交给它（目前只有 Esc/q 关闭）。
+		if (this.treeDialog.isOpen) {
+			this.treeDialog.handleInput(data);
+			return;
+		}
+
 		// 帮助弹窗打开时只响应关闭 / 滚动。
 		if (this.state.helpOpen) {
 			this.handleHelpInput(data);
@@ -464,6 +478,12 @@ export class LazyPanel implements Component, Focusable {
 		}
 		this.clearPending();
 		if (result.kind === "action") {
+			// 小面板里关掉的全局动作（TREE 里的 / 搜索）：提示去对话框里用，不执行。
+			if (result.scope === "global" && isDisabledIn(this.state.focus, result.action)) {
+				const key = labelsFor(this.keymap, this.state.focus, "tree-open")[0];
+				this.setStatus(key ? `${result.action}: not available here, press ${key} to open the tree dialog` : `${result.action}: not available here`);
+				return;
+			}
 			this.dispatch(result.action);
 		}
 	}
@@ -577,6 +597,9 @@ export class LazyPanel implements Component, Focusable {
 				return;
 			case "tree-label":
 				this.openLabelInput();
+				return;
+			case "tree-open":
+				this.openTreeDialog();
 				return;
 			case "session-resume":
 				void this.resumeSession();
@@ -787,6 +810,32 @@ export class LazyPanel implements Component, Focusable {
 		} catch (err) {
 			this.setStatus(`failed to reload tree: ${(err as Error).message}`);
 		}
+		this.o.requestRender();
+	}
+
+	// -----------------------------------------------------------------------
+	// Tree dialog (a): the full tree in a big box
+	// -----------------------------------------------------------------------
+
+	/** a: show the whole tree of the loaded session with the cursor on the pane's node. */
+	private openTreeDialog(): void {
+		if (!this.loadedSessionFile) {
+			this.setStatus("no session loaded");
+			return;
+		}
+		this.state.mode = "tree";
+		this.treeDialog.open({
+			rows: this.tree,
+			initialIndex: this.state.cursor.tree,
+			filter: this.state.treeFilter,
+			onClose: () => this.closeTreeDialog(),
+		});
+		this.o.requestRender();
+	}
+
+	private closeTreeDialog(): void {
+		this.state.mode = "normal";
+		this.treeDialog.close();
 		this.o.requestRender();
 	}
 
@@ -1008,7 +1057,6 @@ export class LazyPanel implements Component, Focusable {
 					rows: this.tree,
 					cursor: this.state.cursor.tree,
 					focused: this.state.focus === "tree",
-					filter: this.state.treeFilter,
 					emptyMessage: this.emptyMessage(selectedSession),
 					title: this.paneTitle("tree"),
 					theme,
@@ -1038,6 +1086,9 @@ export class LazyPanel implements Component, Focusable {
 			lines = overlayHelp(lines, { keymap: this.keymap, focus: this.state.focus, scroll: this.state.helpScroll, theme }, width);
 		}
 		// 弹窗打开时画在三个面板上面（lazygit commit 弹窗的效果）；输入框和菜单不会同时打开。
+		if (this.treeDialog.isOpen) {
+			lines = this.treeDialog.overlay(lines, width);
+		}
 		if (this.inputDialog.isOpen) {
 			lines = this.inputDialog.overlay(lines, width);
 		}
@@ -1054,7 +1105,13 @@ export class LazyPanel implements Component, Focusable {
 		}
 		const footer = { mode: this.state.mode, focus: this.state.focus, keymap: this.keymap, scope: this.state.scope, theme: this.o.theme };
 		// 弹窗打开时 footer 只显示弹窗自己的按键提示（如 Enter save / Esc cancel / empty removes）。
-		const dialog = this.inputDialog.isOpen ? this.inputDialog : this.selectDialog.isOpen ? this.selectDialog : undefined;
+		const dialog = this.inputDialog.isOpen
+			? this.inputDialog
+			: this.selectDialog.isOpen
+				? this.selectDialog
+				: this.treeDialog.isOpen
+					? this.treeDialog
+					: undefined;
 		if (dialog) {
 			return renderFooter({ ...footer, hints: dialog.hints }, width)[0]!;
 		}

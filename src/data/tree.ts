@@ -16,32 +16,31 @@ export async function loadTree(sessionFile: string): Promise<TreeRow[]> {
 	const activeIds = new Set(manager.getBranch(resolveContentLeaf(manager)).map((e) => e.id));
 	const leafIds = effectiveLeafIds(manager);
 	const rows: TreeRow[] = [];
-	// Like pi's /tree: depth only grows at branch points, so a linear chain
-	// stays flush-left instead of drifting right one column per entry.
-	const visit = (node: SessionTreeNode, depth: number) => {
-		const row = toRow(node, depth, activeIds.has(node.entry.id), leafIds.has(node.entry.id));
+	// 行的 parentId 指向最近的一个“也是行”的祖先：label 这类不显示的条目被跳过，
+	// UI 画树线时才不会出现指向不存在节点的父引用。
+	const visit = (node: SessionTreeNode, parentRowId: string | undefined) => {
+		const row = toRow(node, parentRowId, activeIds.has(node.entry.id), leafIds.has(node.entry.id));
 		if (row) rows.push(row);
-		const childDepth = node.children.length > 1 ? depth + 1 : depth;
-		for (const child of node.children) visit(child, childDepth);
+		const nextParent = row ? row.entryId : parentRowId;
+		for (const child of node.children) visit(child, nextParent);
 	};
-	for (const root of manager.getTree()) visit(root, 0);
+	for (const root of manager.getTree()) visit(root, undefined);
 	return rows;
 }
 
-function toRow(node: SessionTreeNode, depth: number, onActiveBranch: boolean, isLeaf: boolean): TreeRow | undefined {
+function toRow(node: SessionTreeNode, parentRowId: string | undefined, onActiveBranch: boolean, isLeaf: boolean): TreeRow | undefined {
 	const entry = node.entry;
 	const described = describeEntry(entry);
 	if (!described) return undefined;
 	const row: TreeRow = {
 		entryId: entry.id,
-		depth,
 		role: described.role,
 		text: described.text,
 		timestamp: Date.parse(entry.timestamp),
 		onActiveBranch,
 		kind: described.kind,
 	};
-	if (entry.parentId) row.parentId = entry.parentId;
+	if (parentRowId) row.parentId = parentRowId;
 	if (node.label) row.label = node.label;
 	if (isLeaf) row.isLeaf = true;
 	return row;
@@ -53,7 +52,19 @@ interface Described {
 	text: string;
 }
 
-/** Convert a session entry into role/kind/text; `undefined` = never shown. */
+/**
+ * Convert a session entry into role/kind/text; `undefined` = never shown.
+ *
+ * Kinds follow pi's /tree filters: `message` (user / assistant), `tool`
+ * (tool results), `system` (system prompts, bash executions, compactions,
+ * branch summaries — structural rows pi always shows; branches in real
+ * sessions hang off the system prompts, so hiding them would flatten the
+ * tree), `meta` (bookkeeping pi hides by default). Texts use pi's bracket
+ * style (`[system]`, `[branch summary]: …`) so the dialog reads like /tree.
+ *
+ * 分类和 pi 一致：system 提示词 / 压缩 / 分支摘要是树的骨架，默认要显示；
+ * 只有 model / thinking / name 这些记账条目默认隐藏。
+ */
 function describeEntry(entry: SessionEntry): Described | undefined {
 	switch (entry.type) {
 		case "message": {
@@ -70,24 +81,28 @@ function describeEntry(entry: SessionEntry): Described | undefined {
 				}
 				case "toolResult":
 					return { role: "tool", kind: "tool", text: `${m.toolName}: ${textOf(m.content)}` };
+				case "bashExecution": {
+					const command = (m as { command?: string }).command ?? "";
+					return { role: "system", kind: "system", text: `[bash]: ${singleLine(command)}` };
+				}
 				default:
-					// system prompts, bash executions and other AgentMessages
-					return { role: "system", kind: "meta", text: `${String(m.role)} message` };
+					// system prompts（pi 的类型里没列 "system"，实际文件里有）和其他 AgentMessage：`[system]` 这种标签。
+					return { role: "system", kind: "system", text: `[${String(m.role)}]` };
 			}
 		}
 		case "custom_message":
 			if (!entry.display) return undefined;
 			return { role: "user", kind: "message", text: `[${entry.customType}] ${textOf(entry.content)}` };
 		case "compaction":
-			return { role: "system", kind: "meta", text: `compaction: ${singleLine(entry.summary)}` };
+			return { role: "system", kind: "system", text: `[compaction: ${Math.round(entry.tokensBefore / 1000)}k tokens]` };
 		case "branch_summary":
-			return { role: "system", kind: "meta", text: `branch summary: ${singleLine(entry.summary)}` };
+			return { role: "system", kind: "system", text: `[branch summary]: ${singleLine(entry.summary)}` };
 		case "model_change":
-			return { role: "system", kind: "meta", text: `model → ${entry.modelId}` };
+			return { role: "system", kind: "meta", text: `[model: ${entry.modelId}]` };
 		case "thinking_level_change":
-			return { role: "system", kind: "meta", text: `thinking → ${entry.thinkingLevel}` };
+			return { role: "system", kind: "meta", text: `[thinking: ${entry.thinkingLevel}]` };
 		case "session_info":
-			return { role: "system", kind: "meta", text: `name → ${entry.name ?? ""}` };
+			return { role: "system", kind: "meta", text: `[name: ${entry.name ?? ""}]` };
 		case "custom":
 		case "label":
 			return undefined;
@@ -219,19 +234,43 @@ function isUserPrompt(entry: SessionEntry): boolean {
 	return entry.type === "custom_message" || (entry.type === "message" && entry.message.role === "user");
 }
 
-/** Filter tree rows (mirrors /tree ctrl+d/t/u/l/a). */
+/**
+ * Filter tree rows (mirrors /tree ctrl+d/t/u/l/a: default hides bookkeeping
+ * only, no-tools also drops tool results). Rows whose parent was filtered out
+ * are re-parented to their nearest kept ancestor, so the result is still a
+ * forest the tree lines can be drawn from.
+ *
+ * 过滤掉中间节点后，子节点挂到最近一个保留下来的祖先上，树线才画得出来。
+ */
 export function applyTreeFilter(rows: TreeRow[], filter: TreeFilter): TreeRow[] {
-	switch (filter) {
-		case "all":
-			return rows;
-		case "default":
-			// /tree default: user + assistant messages, no tool results, no bookkeeping entries.
-			return rows.filter((r) => r.kind === "message");
-		case "tools":
-			return rows.filter((r) => r.kind === "message" || r.kind === "tool");
-		case "user-only":
-			return rows.filter((r) => r.kind === "message" && r.role === "user");
-		case "labeled":
-			return rows.filter((r) => r.label !== undefined);
+	if (filter === "all") return rows;
+	const keep = (r: TreeRow): boolean => {
+		switch (filter) {
+			case "default":
+				return r.kind !== "meta";
+			case "no-tools":
+				return r.kind !== "meta" && r.kind !== "tool";
+			case "user-only":
+				return r.kind === "message" && r.role === "user";
+			case "labeled":
+				return r.label !== undefined;
+		}
+	};
+	// rows 是先序排列的，父节点一定先于子节点出现，所以一遍就能算出新的 parentId。
+	const nearestKept = new Map<string, string | undefined>();
+	const out: TreeRow[] = [];
+	for (const r of rows) {
+		const parent = r.parentId ? nearestKept.get(r.parentId) : undefined;
+		if (!keep(r)) {
+			nearestKept.set(r.entryId, parent);
+			continue;
+		}
+		nearestKept.set(r.entryId, r.entryId);
+		if (parent === r.parentId) out.push(r);
+		else {
+			const { parentId: _dropped, ...rest } = r;
+			out.push(parent ? { ...rest, parentId: parent } : rest);
+		}
 	}
+	return out;
 }

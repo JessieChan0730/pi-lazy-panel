@@ -37,7 +37,8 @@ export class PromptBar {
 	private _focused = false;
 
 	constructor(private readonly o: PromptBarOptions) {
-		this.input = new Input();
+		// 前面已经有自己的 label（如 "搜索: "），去掉 pi-tui Input 默认的 "> " 提示符。
+		this.input = new Input({ prompt: "" });
 		this.input.onSubmit = (v) => this.o.onSubmit(v);
 		this.input.onEscape = () => this.o.onCancel();
 	}

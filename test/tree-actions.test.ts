@@ -11,7 +11,8 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { labelNode } from "../src/actions/tree-actions.ts";
-import { effectiveLeafIds, loadNodeText, loadTree } from "../src/data/tree.ts";
+import { applyTreeFilter, effectiveLeafIds, loadNodeText, loadTree } from "../src/data/tree.ts";
+import { treePrefixes } from "../src/ui/tree-lines.ts";
 
 type AnyMessage = Parameters<SessionManager["appendMessage"]>[0];
 
@@ -115,4 +116,57 @@ test("loadTree marks the rows Enter treats as the leaf (isLeaf), following the l
 	const rows = await loadTree(s.file);
 	assert.equal(rows.find((r) => r.entryId === s.errorId)?.isLeaf, undefined);
 	assert.equal(rows.find((r) => r.entryId === s.errorId)?.onActiveBranch, true);
+});
+
+test("loadTree keeps the system prompts branches hang off, so the default filter still draws a tree (real /tree shape)", async (t) => {
+	const dir = mkdtempSync(join(tmpdir(), "lazy-panel-"));
+	t.after(() => rmSync(dir, { recursive: true, force: true }));
+	// pi 的真实结构：model_change → system → user → assistant，restore 回 system 后再继续会追加第二条 system 消息，
+	// 分支就挂在 system 节点上。之前 system 归 meta 被默认过滤掉，整棵树会被压平。
+	const m = SessionManager.create(dir, dir);
+	const modelId = m.appendModelChange("x", "m1");
+	const sysId = m.appendMessage({ role: "system", content: "", timestamp: 1 } as unknown as AnyMessage);
+	const u1 = m.appendMessage({ role: "user", content: [{ type: "text", text: "hi" }], timestamp: 2 } as unknown as AnyMessage);
+	// pi 只在出现第一条 assistant 消息后才把文件写到磁盘，所以第一条分支上要有一条回复。
+	const a1 = m.appendMessage({
+		role: "assistant",
+		content: [{ type: "text", text: "hello" }],
+		api: "x",
+		provider: "x",
+		model: "x",
+		usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+		stopReason: "stop",
+		timestamp: 3,
+	} as unknown as AnyMessage);
+	m.branch(sysId);
+	const sys2 = m.appendMessage({ role: "system", content: "", timestamp: 4 } as unknown as AnyMessage);
+	const u2 = m.appendMessage({ role: "user", content: [{ type: "text", text: "again" }], timestamp: 5 } as unknown as AnyMessage);
+	// jump back to a1 with a summary of the abandoned branch: pi hangs the branch_summary under a1
+	const bs = m.branchWithSummary(a1, "summary");
+	const file = m.getSessionFile()!;
+
+	const all = await loadTree(file);
+	const byId = (rows: typeof all, id: string) => rows.find((r) => r.entryId === id)!;
+	assert.equal(byId(all, modelId).kind, "meta");
+	assert.equal(byId(all, modelId).text, "[model: m1]");
+	assert.equal(byId(all, sysId).kind, "system");
+	assert.equal(byId(all, sysId).text, "[system]");
+	assert.equal(byId(all, bs).text, "[branch summary]: summary");
+	assert.equal(byId(all, sysId).parentId, modelId);
+
+	const rows = applyTreeFilter(all, "default");
+	assert.deepEqual(
+		rows.map((r) => [r.entryId, r.parentId]),
+		[
+			[sysId, undefined], // model_change dropped → system becomes the root
+			[u1, sysId],
+			[a1, u1],
+			[bs, a1],
+			[sys2, sysId],
+			[u2, sys2],
+		],
+	);
+	// the branch point is visible: both children of the first system prompt get connectors
+	assert.deepEqual(treePrefixes(rows), ["", "├⊟ ", "│     ", "│     ", "└⊟ ", "      "]);
+	assert.equal(applyTreeFilter(all, "user-only").length, 2);
 });

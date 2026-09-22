@@ -20,7 +20,7 @@
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { ACTION_DESCRIPTIONS, HELP_GROUPS, SCOPE_TITLES } from "../../config/keymap.ts";
+import { ACTION_DESCRIPTIONS, HELP_GROUPS, isDisabledIn, SCOPE_TITLES } from "../../config/keymap.ts";
 import { labelsFor } from "../../config/keys.ts";
 import type { ActionId, Keymap, KeyScope, PaneId } from "../../types.ts";
 import { fit, frame, overlayCentered } from "../frame.ts";
@@ -43,7 +43,7 @@ export function buildHelpLines(keymap: Keymap, focus: PaneId): HelpLine[] {
 	for (const scope of scopes) {
 		if (out.length) out.push({ kind: "blank" });
 		out.push({ kind: "header", text: SCOPE_TITLES[scope] });
-		out.push(...buildScopeLines(keymap, scope));
+		out.push(...buildScopeLines(keymap, scope, focus));
 	}
 	return out;
 }
@@ -51,21 +51,22 @@ export function buildHelpLines(keymap: Keymap, focus: PaneId): HelpLine[] {
 /**
  * Binding lines of one scope. Actions that belong to a HELP_GROUPS entry are
  * merged into one line (placed where the first bound member appears) as long as
- * at least two members are bound in this scope.
+ * at least two members are bound in this scope. Global actions switched off in
+ * `focus` (see DISABLED_GLOBAL_ACTIONS) are left out.
  *
  * 同组动作合并成一行；组内只剩一个绑定时退回单独一行，避免描述和键位对不上。
  */
-function buildScopeLines(keymap: Keymap, scope: KeyScope): HelpLine[] {
+function buildScopeLines(keymap: Keymap, scope: KeyScope, focus: PaneId): HelpLine[] {
 	const out: HelpLine[] = [];
 	const consumed = new Set<ActionId>();
-	const actions = Object.keys(keymap[scope]) as ActionId[];
+	const bound = (a: ActionId) => labelsFor(keymap, scope, a).length > 0 && !(scope === "global" && isDisabledIn(focus, a));
+	const actions = (Object.keys(keymap[scope]) as ActionId[]).filter(bound);
 	for (const action of actions) {
 		if (consumed.has(action)) continue;
 		const labels = labelsFor(keymap, scope, action);
-		if (labels.length === 0) continue;
 
 		const group = HELP_GROUPS.find((g) => g.actions.includes(action));
-		const members = group ? group.actions.filter((a) => labelsFor(keymap, scope, a).length > 0) : [];
+		const members = group ? group.actions.filter(bound) : [];
 		if (group && members.length >= 2) {
 			for (const m of members) consumed.add(m);
 			const keys = members.flatMap((m) => labelsFor(keymap, scope, m));

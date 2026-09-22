@@ -19,8 +19,12 @@ export type ListScope = "current-folder" | "all";
 /** Sort order of the sessions pane (mirrors pi's /resume picker). */
 export type SessionSortMode = "threaded" | "recent" | "fuzzy";
 
-/** Input mode of the panel, shown in the footer (vim-like). `restore` = the summary menu / custom prompt of TREE Enter is open. */
-export type PanelMode = "normal" | "search" | "label" | "restore" | "visual" | "preview";
+/**
+ * Input mode of the panel, shown in the footer (vim-like). `restore` = the
+ * summary menu / custom prompt of TREE Enter is open, `tree` = the full tree
+ * dialog (`a` in the tree pane) is open.
+ */
+export type PanelMode = "normal" | "search" | "label" | "restore" | "tree" | "visual" | "preview";
 
 /** A `key description` pair shown as a hint in the footer or a prompt bar. */
 export type KeyHint = [key: string, text: string];
@@ -74,11 +78,20 @@ export interface SessionRow {
 export interface TreeRow {
 	/** Entry id inside the session. */
 	entryId: string;
+	/**
+	 * Nearest ancestor that is also a row, undefined for roots. Entries that
+	 * never become rows (labels, hidden by the filter…) are skipped over, so the
+	 * rows always form a consistent forest the UI can draw guide lines for.
+	 */
 	parentId?: string;
-	depth: number;
 	role: "user" | "assistant" | "system" | "tool";
-	/** Coarse category used by the tree filters. */
-	kind: "message" | "tool" | "meta";
+	/**
+	 * Coarse category used by the tree filters (same split as pi's /tree):
+	 * `message` user / assistant, `tool` tool results, `system` structural
+	 * entries always shown (system prompt, bash, compaction, branch summary),
+	 * `meta` bookkeeping hidden by default (model / thinking / name changes).
+	 */
+	kind: "message" | "tool" | "system" | "meta";
 	/** User-defined label on this entry (/tree shift+t). */
 	label?: string;
 	/** Truncated single-line text. */
@@ -94,8 +107,8 @@ export interface TreeRow {
 	isLeaf?: boolean;
 }
 
-/** Tree pane filters (mirror /tree ctrl+d/t/u/l/a). */
-export type TreeFilter = "default" | "tools" | "user-only" | "labeled" | "all";
+/** Tree filters (mirror /tree ctrl+d/t/u/l/a: `no-tools` is pi's ctrl+t). */
+export type TreeFilter = "default" | "no-tools" | "user-only" | "labeled" | "all";
 
 /** A message block rendered in the content (right) pane. */
 export interface ContentBlock {
@@ -182,13 +195,11 @@ export type ActionId =
 	| "tree-restore"
 	| "tree-copy"
 	| "tree-label"
-	| "tree-filter-default"
-	| "tree-filter-tools"
-	| "tree-filter-user"
-	| "tree-filter-labeled"
-	| "tree-filter-all";
+	| "tree-open";
 // content pane is read-only and only uses the shared navigation actions
 // (move-down / move-up / go-top / go-bottom), see docs/design.md.
+// Tree filters (d/t/u/L/a) and search live in the tree dialog (`tree-open`),
+// not in the small tree pane.
 
 /**
  * A single key chord in pi-tui key syntax, e.g. "j", "ctrl+d", "tab".

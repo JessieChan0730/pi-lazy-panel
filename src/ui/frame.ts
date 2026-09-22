@@ -43,6 +43,12 @@ export function metaBudget(width: number, title: string): number {
 	return Math.max(0, width - 8 - visibleWidth(title));
 }
 
+/**
+ * Body line that `frame()` draws as a horizontal divider (`├────┤`) instead of
+ * a `│ … │` row. Used by dialogs with a header / list / hints layout.
+ */
+export const FRAME_DIVIDER = "\u0000divider";
+
 /** Build a bordered frame around `body`. Body lines are clipped/padded to the inner size. */
 export function frame(body: string[], o: FrameOptions): string[] {
 	const { width, height } = o;
@@ -53,7 +59,9 @@ export function frame(body: string[], o: FrameOptions): string[] {
 	const rows = height - 2;
 	const lines: string[] = [top];
 	for (let i = 0; i < rows; i++) {
-		lines.push(o.border("│") + fit(body[i] ?? "", inner) + o.border("│"));
+		const line = body[i] ?? "";
+		if (line === FRAME_DIVIDER) lines.push(o.border(`├${"─".repeat(inner)}┤`));
+		else lines.push(o.border("│") + fit(line, inner) + o.border("│"));
 	}
 	lines.push(bottom);
 	return lines;

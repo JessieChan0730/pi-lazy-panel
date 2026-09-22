@@ -62,11 +62,8 @@ export const DEFAULT_KEYMAP: Keymap = {
 		"tree-copy": "y",
 		// 打标签用 T，和 pi 自带 /tree 的 shift+T 一致；这样 l 留给全局的“下一个面板”。
 		"tree-label": "T",
-		"tree-filter-default": "d",
-		"tree-filter-tools": "t",
-		"tree-filter-user": "u",
-		"tree-filter-labeled": "L",
-		"tree-filter-all": "a",
+		// 小面板只显示部分数据，搜索 / 过滤放在 a 打开的完整树对话框里。
+		"tree-open": "a",
 	},
 
 	// 只读面板：只保留上下滚动 + 顶部/底部（搜索 / 帮助等走 global）。
@@ -114,18 +111,29 @@ export const ACTION_DESCRIPTIONS: Record<ActionId, string> = {
 	"tree-restore": "Restore conversation to this node (asks about a branch summary)",
 	"tree-copy": "Copy node text",
 	"tree-label": "Add / edit label",
-	"tree-filter-default": "Filter: default",
-	"tree-filter-tools": "Filter: tools",
-	"tree-filter-user": "Filter: user messages only",
-	"tree-filter-labeled": "Filter: labeled only",
-	"tree-filter-all": "Filter: everything",
+	"tree-open": "Open the full tree dialog (search / filters live there)",
 };
+
+/**
+ * Global actions that do nothing in a given pane. The small tree pane only
+ * shows a slice of the tree, so `/` search (and n / N) are left to the tree
+ * dialog; pressing them in the pane just points at `a`.
+ *
+ * 小面板里禁用的全局动作：按下时 footer 提示去对话框里用，? 帮助里也不列出。
+ */
+export const DISABLED_GLOBAL_ACTIONS: Partial<Record<PaneId, ActionId[]>> = {
+	tree: ["search", "search-next", "search-prev"],
+};
+
+/** Is `action` (a global binding) switched off while `pane` is focused? */
+export function isDisabledIn(pane: PaneId, action: ActionId): boolean {
+	return DISABLED_GLOBAL_ACTIONS[pane]?.includes(action) ?? false;
+}
 
 /**
  * Actions merged into a single help line (`?` overlay).
  *
- * 帮助面板里同类操作合并成一行，省空间：例如 1/2/3 显示成 `1..3  Focus pane by number`，
- * 树过滤显示成 `d/t/u/L/a  Filter: default / tools / user / labeled / all`。
+ * 帮助面板里同类操作合并成一行，省空间：例如 1/2/3 显示成 `1..3  Focus pane by number`。
  * 合并只影响帮助展示，不影响键位解析。组内只要有 ≥2 个动作在当前 scope 绑定了键位就合并，
  * 否则退回单条展示；用户自定义键位一样会如实显示。
  */
@@ -143,16 +151,12 @@ export const HELP_GROUPS: HelpGroup[] = [
 	{ actions: ["search-next", "search-prev"], text: "Next / previous search match" },
 	{ actions: ["go-top", "go-bottom"], text: "Go to top / bottom" },
 	{ actions: ["scroll-content-down", "scroll-content-up"], text: "Scroll content pane down / up" },
-	{
-		actions: ["tree-filter-default", "tree-filter-tools", "tree-filter-user", "tree-filter-labeled", "tree-filter-all"],
-		text: "Filter: default / tools / user / labeled / all",
-	},
 ];
 
 /** Actions shown as footer hints per pane, in display order (first few that fit). */
 export const FOOTER_HINTS: Record<PaneId, ActionId[]> = {
 	sessions: ["search", "help", "focus-next", "scope-current", "scope-all", "session-resume", "session-delete", "session-rename", "quit"],
-	tree: ["search", "help", "focus-next", "tree-restore", "tree-label", "tree-copy", "quit"],
+	tree: ["help", "focus-next", "tree-restore", "tree-open", "tree-label", "tree-copy", "quit"],
 	content: ["search", "help", "focus-next", "go-top", "go-bottom", "quit"],
 };
 

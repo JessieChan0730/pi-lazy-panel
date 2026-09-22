@@ -186,14 +186,15 @@ test("? opens the help overlay for the focused pane and ? / Esc close it", () =>
 	h.panel.handleInput("?");
 	assert.equal(h.panel.state.helpOpen, false);
 
-	// tree pane help lists tree actions
+	// tree pane help lists tree actions; filters and search moved to the tree dialog (a)
 	h.panel.handleInput("l");
 	h.panel.handleInput("?");
 	lines = h.text(100);
 	assert.ok(lines.some((l) => l.includes("HELP · Tree pane")));
 	assert.ok(lines.some((l) => l.includes("Restore conversation")));
-	assert.ok(lines.some((l) => l.includes("d/t/u/L/a") && l.includes("Filter: default / tools / user / labeled / all")));
-	assert.equal(lines.some((l) => l.includes("Filter: tools")), false);
+	assert.ok(lines.some((l) => l.includes("Open the full tree dialog")));
+	assert.equal(lines.some((l) => /Filter:/.test(l)), false, "tree filters are no longer pane bindings");
+	assert.equal(lines.some((l) => l.includes("Search in the focused pane")), false, "search is disabled in the tree pane");
 	h.panel.handleInput("\x1b");
 	assert.equal(h.panel.state.helpOpen, false);
 
@@ -295,7 +296,7 @@ function settle(): Promise<void> {
 }
 
 function treeRow(i: number, onActiveBranch = true, over: Partial<TreeRow> = {}): TreeRow {
-	return { entryId: `e${i}`, depth: 0, role: i % 2 ? "assistant" : "user", kind: "message", text: `msg ${i}`, timestamp: 0, onActiveBranch, ...over };
+	return { entryId: `e${i}`, role: i % 2 ? "assistant" : "user", kind: "message", text: `msg ${i}`, timestamp: 0, onActiveBranch, ...over };
 }
 
 function block(i: number): ContentBlock {
@@ -536,6 +537,62 @@ function labelDialog(lines: string[]): { top: number; title: string; input: stri
 	if (top < 0) return undefined;
 	return { top, title: lines[top]!, input: lines[top + 1] ?? "" };
 }
+
+test("/ is disabled in the tree pane (footer points at a), and a opens the full tree dialog", async () => {
+	const h = makeTreeActionPanel();
+	await h.panel.load();
+	h.panel.handleInput("2");
+	h.panel.handleInput("k"); // the cursor starts on the leaf e2; move up to e1
+	assert.equal(h.panel.state.cursor.tree, 1);
+	// footer hints of the tree pane no longer start with / Search but list a Tree
+	const footer = h.text().at(-1)!;
+	assert.ok(footer.includes("a Tree"), footer);
+	assert.ok(!footer.includes("/ Search"), footer);
+
+	// / and n / N do nothing here but leave a hint
+	h.panel.handleInput("/");
+	assert.equal(h.panel.state.mode, "normal");
+	assert.ok(h.text().at(-1)!.includes("press a to open the tree dialog"), h.text().at(-1));
+	h.panel.handleInput("n");
+	assert.equal(h.panel.state.mode, "normal");
+	// the old filter keys are unbound: they neither change the filter nor dispatch anything
+	h.panel.handleInput("u");
+	assert.equal(h.panel.state.treeFilter, "default");
+	assert.equal(h.text().at(-1)!.includes("not implemented"), false, h.text().at(-1));
+
+	// a: big box with a search row, a divider, the rows (cursor on the pane's node) and a hint row
+	h.panel.handleInput("a");
+	assert.equal(h.panel.state.mode, "tree");
+	const lines = h.text(100);
+	const top = lines.findIndex((l) => l.includes("┌─ TREE "));
+	assert.ok(top >= 0, lines.join("\n"));
+	assert.ok(lines[top]!.includes("2/3 · default"), lines[top]);
+	assert.ok(lines[top + 1]!.includes(SEARCH_LABEL), lines[top + 1]);
+	assert.ok(lines[top + 2]!.includes("├──"), lines[top + 2]);
+	assert.ok(lines[top + 3]!.includes("user: msg 0") && !lines[top + 3]!.includes("›"), lines[top + 3]);
+	assert.ok(lines[top + 4]!.includes("› ") && lines[top + 4]!.includes("assistant: msg 1"), lines[top + 4]);
+	// the box starts at column 2, so its bottom border is the first "└" found there (the pane borders sit at column 0)
+	const bottom = lines.findIndex((l, i) => i > top && l.slice(2).startsWith("└"));
+	assert.ok(lines[bottom - 1]!.includes("Esc/q close"), lines[bottom - 1]);
+	assert.ok(lines[bottom - 2]!.includes("├──"), lines[bottom - 2]);
+	// the box spans the terminal minus a 2-column margin and the footer shows its hints
+	assert.equal(lines[top]!.indexOf("┌"), 2);
+	assert.ok(lines.at(-1)!.includes("TREE") && lines.at(-1)!.includes("Esc/q close"), lines.at(-1));
+	for (const l of h.panel.render(100)) assert.equal(visibleWidth(l), 100);
+
+	// other keys are swallowed for now; Esc / q close it and the pane is untouched
+	h.panel.handleInput("j");
+	h.panel.handleInput("y");
+	assert.equal(h.copies.length, 0);
+	assert.equal(h.panel.state.cursor.tree, 1);
+	h.panel.handleInput("\x1b");
+	assert.equal(h.panel.state.mode, "normal");
+	assert.equal(h.closed(), false);
+	h.panel.handleInput("a");
+	h.panel.handleInput("q");
+	assert.equal(h.panel.state.mode, "normal");
+	assert.equal(h.closed(), false);
+});
 
 test("T opens a centered Label dialog; Enter saves and refreshes the row, empty removes, Esc cancels", async () => {
 	const h = makeTreeActionPanel();
