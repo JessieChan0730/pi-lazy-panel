@@ -2,8 +2,8 @@
 
 Source of truth: `src/config/keymap.ts`. Override any binding in
 `~/.pi/agent/lazy-panel.json` under `keymap.<scope>.<action-id>` (scopes:
-`global`, `sessions`, `tree`, `content`). Action ids are the `ActionId` union in
-`src/types.ts`.
+`global`, `sessions`, `tree`, `content`, `tree-dialog`). Action ids are the
+`ActionId` union in `src/types.ts`.
 
 ## Customising keys
 
@@ -26,6 +26,11 @@ Source of truth: `src/config/keymap.ts`. Override any binding in
 - Pane bindings shadow global ones for the same key (e.g. `n` is *new session*
   in the sessions pane but *next match* elsewhere). `h` / `l` are not shadowed
   by any default pane binding, so pane switching works the same everywhere.
+- The tree dialog resolves `tree-dialog` first, then `tree`, then `global`: its
+  own keys (`d` `t` `u` `l` `a` `q`) shadow the pane's and the global ones
+  (`a` filters instead of opening, `l` is the labeled filter instead of *next
+  pane*, `q` closes the dialog instead of quitting), everything else is the
+  tree pane's binding.
 - Invalid chords or unknown scopes are skipped and reported in the footer when
   the panel opens.
 - Multi-key sequences wait up to 1 s for the next key; `Esc` discards a
@@ -78,7 +83,10 @@ open one, `─` an alternative that was never continued; rows inside a branch
 are indented two columns per level (four levels at most, `… ` beyond). Side
 branches start folded, the active branch open. Search (`/`, `n`, `N`) and the
 filters live in the tree dialog (`a`), which draws the same rows with pi-style
-guide lines. Pressing `/` in the pane just points at `a`.
+guide lines. Pressing `/` in the pane just points at `a`. A filter chosen in
+the dialog stays on: the pane lists the same filtered tree and its header says
+so (`2/12 · user-only`); the panel opens with pi's own `treeFilterMode`
+setting (the filter `/tree` starts with).
 
 | Key             | Action                                              |
 | --------------- | --------------------------------------------------- |
@@ -88,23 +96,32 @@ guide lines. Pressing `/` in the pane just points at `a`.
 | ~~`z`~~         | ~~Fold / unfold the branch under the cursor: on a `▸` / `▾` row it toggles, anywhere inside a branch it folds that branch and jumps to its head (vim's `zc`); the trunk of a linear conversation has nothing to fold~~ |
 | ~~`y`~~         | ~~Copy node text (full text, like `Ctrl+x` in `/tree`)~~ |
 | ~~`T`~~         | ~~Add / edit label in a centered dialog, like lazygit's commit popup (`Enter` save, `Esc` cancel, empty removes; same as `Shift+T` in `/tree`)~~ |
-| ~~`a`~~         | ~~Open the tree dialog: the whole tree in a big box (search row on top, key hints at the bottom), same fold state as the pane; `Esc` / `q` close it~~ |
+| ~~`a`~~         | ~~Open the tree dialog: the whole tree in a big box (search row on top, key hints at the bottom), same fold state as the pane; see below for its keys~~ |
 
 ## Tree dialog (`a` from the tree pane)
 
-Keys inside the dialog are the next task; today only `Esc` / `q` (close) work
-and everything else is swallowed. The dialog lists the same rows as the pane
-(folded branches left out, a folded row shows `⊞` on its connector like
-`/tree`). Planned: `/` search (live), `j` `k` `↑` `↓`, `y` copy, `T` label,
-`d` `t` `u` `L` `a` filters, `Enter` restore, `z` fold / unfold (the same
-fold state as the pane).
+The whole tree in a big box: a search row on top, the rows in the middle
+(pi-style guide lines, a folded row shows `⊞` on its connector), key hints at
+the bottom (the footer repeats them, so there is no `?` help inside). The
+dialog has its own cursor; the pane's cursor moves to it when the dialog
+closes. Keys are resolved with the `tree-dialog` scope first, then the tree
+pane's bindings, then the global ones, so `j` `k`, `gg` `G`, `Enter`, `y`,
+`T`, `z` and `/` are the pane's keys (and follow a rebinding of those) while
+the dialog's own keys live under `keymap."tree-dialog"`. Pane switching (`h`
+`Tab` `1`..`3`), the list scope (`C` `A`), `n` `N`, `?` and quitting the panel
+(`Ctrl+c`) do nothing here.
 
 | Key             | Action                                              |
 | --------------- | --------------------------------------------------- |
-| ~~`Esc` / `q`~~ | ~~Close the dialog~~                                |
-| `/`             | Focus the search row (live filtering)               |
-| `d` `t` `u` `L` `a` | Filter: default (hide bookkeeping) / no tool results / user-only / labeled / all |
-| `z`             | Fold / unfold the branch under the cursor (shared with the pane) |
+| ~~`j` `k` `↑` `↓`~~ | ~~Move the dialog's cursor~~                    |
+| ~~`gg` / `G`~~  | ~~Top / bottom~~                                    |
+| ~~`/`~~         | ~~Focus the search row; typing filters the rows live, like `/tree`: every word must appear in the row's label / role / text (case-insensitive), `tag:x` narrows to labels, `after:2026-09-01` / `before:2026-09-20` to dates. `Esc` hands the keys back to the list and keeps the query (the rows stay narrowed); `/` again edits it, deleting the text clears it. `Enter` means nothing in the search row. While a query is active every match is shown (folds are cleared, like `/tree`); the folds come back once the query is empty or the dialog closes~~ |
+| ~~`Enter`~~     | ~~Restore to the row, exactly like the pane (summary menu included)~~ |
+| ~~`y`~~         | ~~Copy the row's text~~                             |
+| ~~`T`~~         | ~~Add / edit the row's label (the Label dialog opens over the tree dialog)~~ |
+| ~~`z`~~         | ~~Fold / unfold the branch under the cursor (same rule and same fold state as the pane)~~ |
+| ~~`d` `t` `u` `l` `a`~~ | ~~Filter: default (hide bookkeeping) / no tool results / user only / labeled only / all; `t` `u` `l` `a` toggle back to default when pressed again (pi's `Ctrl+d/t/u/l/a`). The tree is reloaded, folds are cleared, and the pane shows the same filter afterwards~~ |
+| ~~`Esc` / `q`~~ | ~~Close (on the list): the pane's cursor lands on the dialog's row (unfolding what hides it) and the content pane follows. In the search row `Esc` only leaves the row and `q` is just a letter~~ |
 
 ## Content pane (read-only)
 

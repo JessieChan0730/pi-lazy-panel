@@ -53,7 +53,7 @@ npm run uninstall:pi   # pi remove .，从 pi 中移除
 src/
 ├── index.ts                  # 入口：registerCommand("/lazy-history")，用 ctx.ui.custom 打开全屏面板
 ├── types.ts                  # 共享类型（只放类型，禁止运行时代码）
-├── constants.ts              # 常量：扩展 id、命令名、布局比例、面板 id
+├── constants.ts              # 常量：扩展 id、命令名、布局比例、面板 id、键位 scope（KEY_SCOPES = global + 面板 + tree-dialog）
 ├── ui/                       # 渲染层：pi-tui Component。不做 I/O，不调用 pi 会话 API
 │   ├── app.ts                # 根组件 LazyPanel + PanelState；数据通过 DataSource 接口注入
 │   ├── frame.ts              # 纯函数：画边框（FRAME_DIVIDER 哨兵行画 ├──┤）、左右拼列、按可见宽度补齐/截断、居中叠加弹窗（overlayCentered）、弹窗宽度（dialogWidth）
@@ -71,7 +71,7 @@ src/
 │       ├── label-dialog.ts   # T 打标签：InputDialog 的预设（标题 + footer 提示）；给 session 起名等场景照此加预设
 │       ├── select-dialog.ts  # 通用的居中选择菜单（j/k/方向键移动、Enter 确认、Esc 取消，高度 = 选项数 + 2）：标题 / 选项 / 回调在 open 时传入
 │       ├── restore-dialog.ts # TREE Enter 的预设：Summarize branch? 三选菜单的标题 / 选项 / 提示 + 自定义摘要指令输入框的标题 / 提示
-│       ├── tree-dialog.ts    # a 打开的完整树对话框：顶部搜索行、中间画树线的树（和面板共用折叠状态，折叠的段头画 ⊞）、底部提示，几乎占满终端；目前只有 Esc/q 关闭，搜索 / 过滤 / 移动 / z / y / T / Enter 是下个任务
+│       ├── tree-dialog.ts    # a 打开的完整树对话框：顶部搜索行（PromptBar，实时搜索，Esc 退出搜索框但关键字保留、Enter 无含义；没焦点时只显示关键字或 `/ to search`）、中间画树线的树（和面板共用折叠状态，折叠的段头画 ⊞）、底部提示（来自 keymap，对话框里不做 ? 帮助），几乎占满终端。只管画、搜索框和自己的光标；行的搜索 / 过滤 / 折叠由 app.ts 算好 setRows，按键也由 app.ts 按 tree-dialog scope 解析后调用它的方法
 │       ├── confirm-dialog.ts # 删除 / fork 前的确认框（TODO，可基于 SelectDialog）
 │       ├── help-overlay.ts   # ? 快捷键帮助：居中弹窗，内容来自最终 keymap
 │       └── session-info-dialog.ts  # i 会话信息弹窗（TODO）
@@ -80,26 +80,27 @@ src/
 │   └── tree-actions.ts       # restore / label / copy（已完成；restore 把 No summary / Summarize / custom prompt 透传给 navigateTree）
 ├── data/                     # 数据层：只读适配 pi 的 SessionManager，产出纯数据行，无 UI
 │   ├── sessions.ts           # SessionManager.list/listAll -> SessionRow[]；sortSessions
-│   ├── tree.ts               # getTree -> TreeRow[]（parentId 指向最近的"也是行"的祖先，含 isLeaf 标记；kind 分 message/tool/system/meta，和 pi /tree 一致）；applyTreeFilter（default 只藏 meta、no-tools 再藏工具结果，过滤后重新挂父节点）；isEffectiveLeaf
-│   ├── tree-fold.ts          # 纯函数：折叠（z）：foldableIds（段头 = 父节点有多个子节点且自己有后代；单根不可折叠）、defaultFolded（旁支默认折叠）、applyTreeFold（隐藏折叠段的后代）、foldTarget（z 作用的段头：自己或最近的可折叠祖先）
+│   ├── tree.ts               # getTree -> TreeRow[]（parentId 指向最近的"也是行"的祖先，含 isLeaf 标记；kind 分 message/tool/system/meta，和 pi /tree 一致）；applyTreeFilter（default 只藏 meta、no-tools 再藏工具结果，删行后重新挂父节点走 tree-fold.ts 的 filterTreeRows）；isEffectiveLeaf
+│   ├── tree-fold.ts          # 纯函数：filterTreeRows（删行并把幸存的行挂到最近保留的祖先上，过滤和搜索共用）；折叠（z）：foldableIds（段头 = 父节点有多个子节点且自己有后代；单根不可折叠）、defaultFolded（旁支默认折叠）、applyTreeFold（隐藏折叠段的后代）、foldTarget（z 作用的段头：自己或最近的可折叠祖先）；对话框用的 nearestListedIndex（行被藏掉时光标落到最近还列出来的祖先）、foldedAncestors（关对话框时要展开的段）
 │   ├── content.ts            # getBranch -> ContentBlock[]；loadSessionInfo；resolveContentLeaf
-│   └── search.ts             # 纯函数：解析 name:/model:/path:/tag:/after:/before: 查询（TODO）
+│   └── search.ts             # 纯函数：parseSearchQuery 解析 name:/model:/path:/tag:/after:/before: + 自由文本；matchTreeRow（树对话框的实时搜索：每个词都要出现在 label + role + 正文里，tag: 只看 label，after:/before: 看时间）；会话 / 正文匹配 TODO
 ├── config/
-│   ├── keymap.ts             # 默认键位 + 动作描述 + footer 提示顺序（纯数据）；DISABLED_GLOBAL_ACTIONS 列出在某个面板里关掉的全局动作（TREE 里的 / n N）
-│   ├── keys.ts               # 纯函数：chord 解析（ctrl+d / G / gg）、按键匹配、按 scope 解析 ActionId
+│   ├── keymap.ts             # 默认键位 + 动作描述 + footer 提示顺序（纯数据），含 tree-dialog scope（d/t/u/l/a 过滤、q 关闭）；DISABLED_ACTIONS 列出在某个 scope 里关掉的外层动作（TREE 里的 / n N，对话框里的切面板 / C A / n N / quit / help / tree-open）；TREE_DIALOG_FOOTER 是对话框提示的顺序
+│   ├── keys.ts               # 纯函数：chord 解析（ctrl+d / G / gg）、按键匹配、按 scope 解析 ActionId；scopeChain 定义查找顺序（对话框 → tree → global，面板 → global）
 │   ├── config.ts             # 唯一知道 ~/.pi/agent/lazy-panel.json 的模块，深合并用户配置（null 解绑）
-│   └── pi-settings.ts        # 唯一读 pi 自己 settings.json 的模块（SettingsManager.create 只读），目前只取 branchSummary.skipPrompt
+│   └── pi-settings.ts        # 唯一读 pi 自己 settings.json 的模块（SettingsManager.create 只读），目前取 branchSummary.skipPrompt 和 treeFilterMode（TREE 的初始过滤）
 └── utils/
     └── format.ts             # 纯格式化：时间、token、费用、路径缩写
 
 test/
 ├── smoke.test.ts             # 键位表、搜索解析的冒烟测试
-├── keymap.test.ts            # chord 解析、多键序列、用户配置合并
-├── panel.test.ts             # LazyPanel 行为：焦点切换、C/A、? 帮助、/ 搜索栏、自定义键位、y/T/Enter（含摘要菜单）、InputDialog / SelectDialog
+├── keymap.test.ts            # chord 解析、多键序列、scope 链（tree-dialog → tree → global）、用户配置合并
+├── panel.test.ts             # LazyPanel 行为：焦点切换、C/A、? 帮助、/ 搜索栏、自定义键位、y/T/Enter（含摘要菜单）、树对话框（移动、搜索、过滤、z 折叠、y/T/Enter、关闭后面板光标跟随）、InputDialog / SelectDialog
 ├── tree-actions.test.ts      # 临时会话文件上验证 loadNodeText / labelNode 的分流、loadTree 的 isLeaf 标记
 ├── session-actions.test.ts   # 临时会话文件上验证 isEffectiveLeaf / resumeSession / restoreNode 的分流与摘要选项透传
-├── pi-settings.test.ts       # 临时目录上验证 branchSummary.skipPrompt 的全局 / 项目两级读取
-└── ui.test.ts                # 格式化、frame 几何、树过滤
+├── pi-settings.test.ts       # 临时目录上验证 branchSummary.skipPrompt 的全局 / 项目两级读取、treeFilterMode 映射
+├── search.test.ts            # parseSearchQuery 的限定词解析、matchTreeRow 的匹配规则
+└── ui.test.ts                # 格式化、frame 几何、树过滤 / 折叠、TreeDialog 搜索行
 
 docs/keybindings.md           # 默认快捷键表，新增 ActionId 时同步更新
 docs/design.md                # 产品设计（原 计划.md）
@@ -110,7 +111,7 @@ AGENTS.md                     # 仅指向本文件，规则统一在这里维护
 
 数据流：`sessions.ts` → `SessionRow[]` → SESSIONS 面板；选中行驱动 `tree.ts` → `TreeRow[]` → `tree-fold.ts` 隐藏折叠段（`PanelState.treeFolded`，默认旁支折叠）→ TREE 面板；选中节点（或活动叶子）驱动 `content.ts` → `ContentBlock[]` → CONTENT 面板。所有 UI 状态集中在 `PanelState`（`src/ui/app.ts`）。
 
-快捷键是间接绑定：按键 → `resolveKeys`（`src/config/keys.ts`，先面板 scope 再 global，支持 `gg` 这类多键序列） → `ActionId`（`src/types.ts`） → `LazyPanel.dispatch`。默认值在 `src/config/keymap.ts`，`loadConfig` 深合并用户覆盖。新增动作时要同时改：`ActionId`、默认键位、`ACTION_DESCRIPTIONS`、`dispatch` 里的分发、`docs/keybindings.md`。
+快捷键是间接绑定：按键 → `resolveKeys`（`src/config/keys.ts`，按 `scopeChain` 的顺序查：面板 scope 再 global，树对话框是 tree-dialog → tree → global，支持 `gg` 这类多键序列） → `ActionId`（`src/types.ts`） → `LazyPanel.dispatch`（对话框里是 `dispatchInTreeDialog`）。默认值在 `src/config/keymap.ts`，`loadConfig` 深合并用户覆盖。新增动作时要同时改：`ActionId`、默认键位、`ACTION_DESCRIPTIONS`、`dispatch` 里的分发、`docs/keybindings.md`。
 
 ## 代码风格/合作规范
 

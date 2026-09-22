@@ -167,18 +167,30 @@
 3. ~~添加一个 a 快捷键，使用打开一个对话框，其中显示完整的树形结构，UI 可以参考 herdr 中 prefix + g 打开的对话框的效果~~
 4. ~~对话框样式是顶部为搜索框，中间为完成的树形结构，底部是快捷键提示，可以做的足够大~~
 5. ~~外面的tree面板保留 y/T 快捷键的功能，删除掉 / 和 d/t/u/l/a 这两个快捷键的功能(这个两个功能移动到对话框)，因为只是部分数据，所以搜索和过滤没啥作用~~
-6. 对话框快捷键盘（下个任务，本次只做了 Esc/q 关闭）：
+6. ~~对话框快捷键盘~~（2026-09-22 完成，见下面的实现说明）：
 
-- / 搜索，聚焦到搜索框，实时搜索，用户输入关键字，下面列表实时改变
-- y: 复制消息内容（类似于 /tree 里面 ctrl + x 快捷键的功能）
-- T: 给某个节点添加 label，在面板中央弹出一个输入框（类似 lazygit commit 的弹窗；和 /tree 里面 shift+t 快捷键一致；不用 l 是为了把 l
-- d/t/u/l/a: 过滤（过滤 类似 /tree ：filters ctrl+d/t/u/l/a 快捷键的功能)
-- j/k/方向键：上下移动
-- q: 退出对话框
-- exit: 如果当前聚焦在搜索框，则退出搜索框，聚焦在树形列表上，如果在树形列表上则直接退出对话框
-- enter: 和外面的tree面板表现一样即可
-- 折叠 / 展开分支：和 pi /tree 一样，连接符上 `⊟` 表示可折叠、`⊞` 表示已折叠，折叠后隐藏该节点的所有后代；pi 只允许折叠"分支段的起点"（根节点，或父节点有多个子节点的节点），键位是 ctrl+← 折叠 / ctrl+→ 展开（不可折叠时改为跳到上 / 下一个分支段起点）。对话框里键位不和面板冲突，可以直接用 h 折叠 / l 展开。
+- ~~/ 搜索，聚焦到搜索框，实时搜索，用户输入关键字，下面列表实时改变~~
+- ~~y: 复制消息内容（类似于 /tree 里面 ctrl + x 快捷键的功能）~~
+- ~~T: 给某个节点添加 label，在面板中央弹出一个输入框（类似 lazygit commit 的弹窗；和 /tree 里面 shift+t 快捷键一致；不用 l 是为了把 l~~
+- ~~d/t/u/l/a: 过滤（过滤 类似 /tree ：filters ctrl+d/t/u/l/a 快捷键的功能)~~（labeled 就用小写 l，和 pi 的 ctrl+l 一致）
+- ~~j/k/方向键：上下移动~~
+- ~~q: 退出对话框~~
+- ~~exit: 如果当前聚焦在搜索框，则退出搜索框，聚焦在树形列表上，如果在树形列表上则直接退出对话框~~（搜索框里 Esc 只退出搜索模式，关键字和过滤结果保留，再按 / 接着改；Enter 在搜索框里没有含义）
+- ~~enter: 和外面的tree面板表现一样即可~~
+- ~~折叠 / 展开分支：和 pi /tree 一样，连接符上 `⊟` 表示可折叠、`⊞` 表示已折叠，折叠后隐藏该节点的所有后代；pi 只允许折叠"分支段的起点"（根节点，或父节点有多个子节点的节点），键位是 ctrl+← 折叠 / ctrl+→ 展开（不可折叠时改为跳到上 / 下一个分支段起点）。对话框里键位不和面板冲突，可以直接用 h 折叠 / l 展开。~~（2026-09-22 调整：h / l 去掉，只留 z、和面板一样切换；l 让给 labeled 过滤）
 - ~o: 切换展示视图~ 这个暂时不做
+
+实现说明（2026-09-22，对话框快捷键）：
+
+- 键位走 keymap：新增 `tree-dialog` scope（`constants.ts` 的 `TREE_DIALOG_SCOPE` / `KEY_SCOPES`，`types.ts` 的 `KeyScope` 由它推导），`keys.ts` 新增 `scopeChain`：对话框里先查 `tree-dialog`、再查 `tree`、最后 `global`，所以 j/k/gg/G、Enter、y、T、z 直接沿用 tree 面板的绑定（用户改了面板键位对话框跟着变），`/` 沿用 global 的 search。对话框独有的动作：`tree-filter-default` / `-no-tools` / `-user` / `-labeled` / `-all`（d/t/u/l/a）、`tree-dialog-close`（q），用户配置写在 `keymap."tree-dialog"` 下，对话框自己的键遮住面板 / global 的同一个键（a 变成 all 过滤、l 变成 labeled 过滤而不是切面板、q 关的是对话框；h 没有对话框绑定，被 DISABLED_ACTIONS 吞掉）。`DISABLED_GLOBAL_ACTIONS` 改名 `DISABLED_ACTIONS`（按 scope 列出关掉的外层动作）：对话框里切面板、C/A、n/N、quit（含 ctrl+c）、help（? 不开帮助，键都在底部一行）、tree-open 全部吞掉。Esc 不走 keymap：搜索框里只退出搜索框（关键字和过滤结果保留，再按 / 接着改），列表上直接关对话框（两级规则）。
+- 面板侧（`app.ts` 的 `handleTreeDialogInput` / `dispatchInTreeDialog`）：搜索框聚焦时所有键交给输入框；否则按上面的链解析，gg 之类的多键序列复用面板的 pending 缓冲。y / T / Enter 的实现改成接收 `TreeTarget`（文件 + 行）：面板传光标行、对话框传自己选中的行；Label 弹窗 / Summarize 菜单画在对话框上面（渲染顺序改为树对话框 → 输入框 / 菜单 → 帮助），关掉后 mode 回到 `tree`（`baseMode()`），restore 失败也留在对话框里。footer 在弹窗打开时也显示状态文字（之前只显示弹窗提示，copy / restore 的结果在对话框里看不见）；打开对话框时清掉面板里的旧提示。
+- 搜索：`TreeDialog` 持有搜索框（`PromptBar`，`reset` 加了"光标放末尾"参数），每次按键把查询通过 `onQueryChange` 报给面板；面板用 `data/search.ts` 的 `parseSearchQuery` + `matchTreeRow` 过滤 `tree`（和 pi /tree 一样：每个词都要出现在 label + role + 正文里、不分大小写；正文是整条消息压成一行的文本，渲染时才截断，所以比 pi 只看前 200 字符更全；`tag:` 只看 label，`after:` / `before:` 看时间，`name:` / `model:` / `path:` 是会话搜索的、这里忽略；`parseSearchQuery` 现在真的拆 `key:value`，供以后的 SESSIONS 搜索复用），再经 `tree-fold.ts` 的 `filterTreeRows`（从 `applyTreeFilter` 里抽出来的"删行并重新挂父节点"）和 `applyTreeFold` 交回 `setRows`。标题的 `n/m` 是匹配行里的位置 / 数量。搜索期间折叠全部清空（pi 的做法，否则折叠段里的匹配看不见），第一次开始搜索时记住原折叠集合（`foldedBeforeSearch`），关键字删光或关对话框时恢复；搜索期间用 z 折的段下一次改关键字就被清掉（pi 一样）。Esc 退出搜索框回到列表、关键字保留（列表仍是过滤后的结果），再按 / 光标停在原关键字末尾接着改、删光即清除；Enter 在搜索框里没有含义。搜索框没焦点时那一行只显示关键字原文（不画光标），空的时候显示 `/ to search`（键名来自 keymap）。
+- 折叠：z 和面板一样（`toggleFold` 抽成共用，对话框以搜索后的行为基准找段头）。折叠状态和面板共用（`state.treeFolded`）；光标所在行被搜索 / 过滤 / 折叠藏掉时落到最近还列出来的祖先上，没有就落到最后一行（`nearestListedIndex`，pi 的 `findNearestVisibleIndex`）。
+- 过滤：d 直接回 default，t/u/L/a 再按一次回 default（pi 的 toggle）。过滤是面板级状态 `state.treeFilter`：重新 `loadTree(file, filter)`，折叠全部清空（pi 一样；不清的话 L 过滤下折叠的旁支会把带标签的行藏起来），面板的 TREE 之后也显示同一棵过滤后的树，标题在非 default 时显示 `2/12 · user-only`（`tree-pane.ts` 的 `treeMeta`，放不下就只留位置）。pi 自己的 `treeFilterMode` 设置（内置 /tree 的默认过滤，`labeled-only` 对应这里的 `labeled`）作为面板打开时的初始过滤（`pi-settings.ts`）。
+- 关闭：q / Esc 后面板光标跳到对话框选中的行，藏在折叠段里就把它的祖先展开（`foldedAncestors`），右侧 CONTENT 跟着高亮。
+- 提示：对话框底部一行和 footer 都由最终 keymap 生成（`keymap.ts` 的 `TREE_DIALOG_FOOTER` + `TREE_DIALOG_HINT_TEXT`，`d/t/u/l/a filter` 这类合并成一条），放不下的从后面丢（100 列时 `T label` 先没了，`q close` 排得靠前）；对话框里不做 ? 帮助（键已经都在底部一行了），`help-overlay.ts` 的 `focus` 顺手改成了 `KeyScope`、按 `scopeChain` 列各层的键。
+- 测试：`test/panel.test.ts` 加了对话框的移动 / y / T / Enter（含菜单、失败后留在对话框）/ 搜索（实时过滤、Esc 保留关键字回列表、Enter 无效、删光后折叠恢复、关闭时展开并选中）/ 标签与 `tag:` 搜索 / 过滤（toggle、折叠清空、面板标题）/ z / 被禁用的全局键（含 h、?）；`test/ui.test.ts` 加了 `nearestListedIndex`、`foldedAncestors`、`filterTreeRows`、`treeMeta`、`TreeDialog` 搜索行；新增 `test/search.test.ts`；`test/keymap.test.ts` 加了 scope 链和 `tree-dialog` 覆盖；`test/pi-settings.test.ts` 加了 `treeFilterMode`。
+- 调整（2026-09-22，按反馈）：去掉 h / l（`tree-fold-or-up` / `tree-unfold-or-down` 连同 `segmentStartAbove` / `segmentStartBelow` 一并删除），labeled 过滤改为小写 l；对话框里去掉 ?；搜索框里 Esc 不再清关键字、Enter 没有含义。
 
 实现说明（2026-09-22，对话框 UI 对齐 pi /tree）：
 
