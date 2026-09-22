@@ -66,7 +66,7 @@
 
 - 分层：`data/tree.ts` 新增 `loadNodeText`（和 `/tree` ctrl+x 一样：消息取全部 text 片段原文、bash 执行取命令、没正文的 assistant 回复取 errorMessage、compaction / branch summary 取摘要）；`actions/tree-actions.ts` 实现 `copyNodeText`（pi 的 `copyToClipboard`）和 `labelNode`；UI 通过 `LazyPanel` 新增的 `ActionSource` 接口调用，面板本身仍不做 I/O，`index.ts` 负责组装。
 - 打标签落盘：如果目标就是 pi 当前打开的会话，走 `pi.setLabel` 让 pi 内存里的 SessionManager 同步；其他历史会话用 `SessionManager.open(file).appendLabelChange` 直接追加 label 条目到 .jsonl。保存后重新加载 TREE，光标停在同一节点上，行首显示 `[label]`；在 `L`（labeled）过滤下清掉标签会让该行消失，光标夹回范围内。
-- 输入框：抽出通用的底部一行输入 `ui/widgets/prompt-bar.ts`（包装 pi-tui `Input`），搜索栏和 `ui/widgets/label-bar.ts`（`Label: ` 前缀，预填当前标签）都基于它；新增 `PanelMode` 的 `label` 模式，该模式下所有按键交给输入框。
+- 输入框：抽出通用的底部一行输入 `ui/widgets/prompt-bar.ts`（包装 pi-tui `Input`），搜索栏和 `ui/widgets/label-bar.ts`（`Label:` 前缀，预填当前标签）都基于它；新增 `PanelMode` 的 `label` 模式，该模式下所有按键交给输入框。
 - 反馈都在 footer：`copied node text to clipboard` / `selected entry has no text to copy` / `label set: xxx` / `label removed` / 失败原因。
 - 测试：`test/panel.test.ts` 加了 y / T 的面板行为测试（含错误分支和无 actions 的情况）；新增 `test/tree-actions.test.ts` 在临时目录里建真实会话文件，验证 `loadNodeText` 和 `labelNode` 的落盘与 `pi.setLabel` 分流。
 
@@ -138,6 +138,46 @@
 - "光标就是活动叶子"的判断放到数据层：`data/tree.ts` 新增 `effectiveLeafIds`（从叶子沿活动分支往上走一次算出整组），`isEffectiveLeaf` 改为查这个集合，`loadTree` 给对应行打 `TreeRow.isLeaf`，面板据此决定弹不弹菜单；actions 里的 `restoreNode` 仍自己再判一次（用的是 pi 内存里的 manager，更准）。当前会话在无摘要跳转后的短暂过期问题记在 issues.md。
 - actions：`restoreNode(ctx, file, entryId, options = { summarize: false })`，`options` 原样透传给 `navigateTree`（没有自定义指令时不带 `customInstructions` 键）。摘要期间面板是隐藏的，所以 `navigateTo` 用 `ctx.ui.setStatus("lazy-panel", "summarizing branch…")` 把进度写到 pi 自己的 footer，结束（含失败）后清掉；其他会话在 `withSession` 的新 ctx 上做同样的事。
 - 测试：`test/panel.test.ts` 加了叶子行不弹菜单 / 菜单显示与 j/k/Esc / No summary / Summarize 期间 footer 与按键忽略 / custom prompt 往返与空指令 / `skipSummaryPrompt` / 摘要失败留在 footer，以及 `SelectDialog` 的组件测试；`test/session-actions.test.ts` 加了 `summarize` / `customInstructions` 透传、`setStatus` 进度、取消时的报错；`test/tree-actions.test.ts` 加了 `loadTree` 的 `isLeaf` 标记；新增 `test/pi-settings.test.ts` 用临时目录验证全局 / 项目两级 `skipPrompt` 和 `projectTrusted`。
+
+### tree 面板调整（2026-09-22）
+
+刚刚看了一下pi 的 /tree 命令的显示方案，发现是使用的树形结构，如下：
+
+```txt
+ • [system]
+  ├⊟ [hello] user: hi
+  │     [第三] assistant: Hello! I'm here to help you with your PiLazyPanel project. What would you like to work on today?
+  ├⊟ [system]
+  │  ├⊟ user: hi
+  │  │     assistant: Hello! I'm an assistant that can help you with coding tasks, file operations, and various other things. How can I assist you today?
+  │  │     user: hi
+  │  │     assistant: Hello again! What can I help you with today?
+  │  └⊟ user: hi
+  │        assistant: Hello! 👋   I'm here to help you with your PiLazyPanel project. Feel free to ask me to: - Read and understand files - Execute commands - Edit co
+  │        ├─ [branch summary]: No content to summarize
+  │        └⊟ user: hi
+  │              assistant: Hello! 👋   I'm here to help with your PiLazyPanel project. What would you like to work on today? I can: - Explore or debug code files - R
+  └─ [branch summary]: The user explored a different conversation branch before returning here. Summary of that exploration:    ## Goal The user initiated a greeting
+```
+
+目前此插件的 tree 面板用的还是缩进的方式，这有点不美观，所以需要做如下修改：
+
+1. tree 面板左侧可以添加这些树形结构的线条
+2. 目前tree面板太小了，肯定不能无限缩进，所以当层级超过3或者4层的时候可以省略，效果可以是... 或者其他的也行
+3. 添加一个 a 快捷键，使用打开一个对话框，其中显示完整的树形结构，UI 可以参考 herdr 中 prefix + g 打开的对话框的效果
+4. 对话框样式是顶部为搜索框，中间为完成的树形结构，底部是快捷键提示，可以做的足够大
+5. 外面的tree面板保留 y/T 快捷键的功能，删除掉 / 和 d/t/u/l/a 这两个快捷键的功能(这个两个功能移动到对话框)，因为只是部分数据，所以搜索和过滤没啥作用
+6. 对话框快捷键盘：
+
+- / 搜索，聚焦到搜索框，实时搜索，用户输入关键字，下面列表实时改变
+- y: 复制消息内容（类似于 /tree 里面 ctrl + x 快捷键的功能）
+- T: 给某个节点添加 label，在面板中央弹出一个输入框（类似 lazygit commit 的弹窗；和 /tree 里面 shift+t 快捷键一致；不用 l 是为了把 l
+- d/t/u/l/a: 过滤（过滤 类似 /tree ：filters ctrl+d/t/u/l/a 快捷键的功能)
+- j/k/方向键：上下移动
+- q: 退出对话框
+- exit: 如果当前聚焦在搜索框，则退出搜索框，聚焦在树形列表上，如果在树形列表上则直接退出对话框
+- enter: 和外面的tree面板表现一样即可
+- o: 切换展示视图
 
 ### 跨平台适配（分支 `feat/windows-support`，2026-09-21）
 
