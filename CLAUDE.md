@@ -66,7 +66,7 @@ src/
 │   └── widgets/
 │       ├── footer.ts         # 底部一行：模式 + 当前面板快捷键提示（弹窗打开时显示弹窗的提示）
 │       ├── prompt-bar.ts     # 底部一行输入的通用组件（包装 pi-tui Input），搜索栏和树对话框的搜索行基于它
-│       ├── search-bar.ts     # 底部搜索输入：显示 `搜索:`（匹配/高亮 TODO；TREE 面板里禁用，去树对话框搜）
+│       ├── search-bar.ts     # 底部搜索输入：显示 `搜索:`（匹配/高亮 TODO；三个面板都能打开）
 │       ├── input-dialog.ts   # 通用的居中单行输入弹窗（包装 pi-tui Input，3 行高）：标题 / 预填值 / 提示 / 回调在 open 时传入
 │       ├── label-dialog.ts   # T 打标签：InputDialog 的预设（标题 + footer 提示）；给 session 起名等场景照此加预设
 │       ├── select-dialog.ts  # 通用的居中选择菜单（j/k/方向键移动、Enter 确认、Esc 取消，高度 = 选项数 + 2）：标题 / 选项 / 回调在 open 时传入
@@ -85,7 +85,7 @@ src/
 │   ├── content.ts            # getBranch -> ContentBlock[]；loadSessionInfo；resolveContentLeaf
 │   └── search.ts             # 纯函数：parseSearchQuery 解析 name:/model:/path:/tag:/after:/before: + 自由文本；matchTreeRow（树对话框的实时搜索：每个词都要出现在 label + role + 正文里，tag: 只看 label，after:/before: 看时间）；会话 / 正文匹配 TODO
 ├── config/
-│   ├── keymap.ts             # 默认键位 + 动作描述 + footer 提示顺序（纯数据），含 tree-dialog scope（d/t/u/l/a 过滤、q 关闭）；DISABLED_ACTIONS 列出在某个 scope 里关掉的外层动作（TREE 里的 / n N，对话框里的切面板 / C A / n N / quit / help / tree-open）；TREE_DIALOG_FOOTER 是对话框提示的顺序
+│   ├── keymap.ts             # 默认键位 + 动作描述 + footer 提示顺序（纯数据），含 tree-dialog scope（d/t/u/l/a 过滤、q 关闭）；DISABLED_ACTIONS 列出在某个 scope 里关掉的外层动作（对话框里的切面板 / C A / n N / quit / help / tree-open）；TREE_DIALOG_FOOTER 是对话框提示的顺序
 │   ├── keys.ts               # 纯函数：chord 解析（ctrl+d / G / gg）、按键匹配、按 scope 解析 ActionId；scopeChain 定义查找顺序（对话框 → tree → global，面板 → global）
 │   ├── config.ts             # 唯一知道 ~/.pi/agent/lazy-panel.json 的模块，深合并用户配置（null 解绑）
 │   └── pi-settings.ts        # 唯一读 pi 自己 settings.json 的模块（SettingsManager.create 只读），目前取 branchSummary.skipPrompt 和 treeFilterMode（TREE 的初始过滤）

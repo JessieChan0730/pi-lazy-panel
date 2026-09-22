@@ -50,8 +50,8 @@ Source of truth: `src/config/keymap.ts`. Override any binding in
 | ~~`?`~~         | ~~Help overlay for the focused pane (`?`/`Esc`/`q` close, `j`/`k` scroll)~~ |
 | ~~`q` / `Ctrl+c`~~ | ~~Quit the panel~~                      |
 | ~~`Esc`~~       | ~~Discard pending keys → clear search → quit~~ |
-| `/`         | Search bar for the focused pane (`Enter` run, `Esc` cancel); off in the tree pane, use `a` there |
-| `n` / `N`   | Next / previous search match (off in the tree pane) |
+| `/`         | Search bar for the focused pane (`Enter` run, `Esc` cancel); matching is still TODO |
+| `n` / `N`   | Next / previous search match |
 
 `C` and `A` are one-way: pressing `A` while already on *All* does nothing.
 
@@ -81,9 +81,10 @@ Source of truth: `src/config/keymap.ts`. Override any binding in
 The pane shows the tree as a folded outline: `▸` a folded side branch, `▾` an
 open one, `─` an alternative that was never continued; rows inside a branch
 are indented two columns per level (four levels at most, `… ` beyond). Side
-branches start folded, the active branch open. Search (`/`, `n`, `N`) and the
-filters live in the tree dialog (`a`), which draws the same rows with pi-style
-guide lines. Pressing `/` in the pane just points at `a`. A filter chosen in
+branches start folded, the active branch open. The filters live in the tree
+dialog (`a`), which draws the same rows with pi-style guide lines and has its
+own live search row. `/` in the pane opens the usual search bar (matching is
+still TODO). A filter chosen in
 the dialog stays on: the pane lists the same filtered tree and its header says
 so (`2/12 · user-only`); the panel opens with pi's own `treeFilterMode`
 setting (the filter `/tree` starts with).
