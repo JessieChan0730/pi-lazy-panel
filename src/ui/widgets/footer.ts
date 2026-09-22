@@ -7,8 +7,8 @@
  * Shows the current mode and the most relevant bindings for the focused pane.
  * Hints are derived from the resolved keymap, so custom bindings show up here.
  * When search mode is active the panel renders the search bar instead; while a
- * dialog owns the keyboard (label mode) the panel passes the dialog's own
- * hints via `hints`.
+ * dialog owns the keyboard (label / restore mode) the panel passes the
+ * dialog's own hints via `hints`.
  */
 
 import type { Theme } from "@earendil-works/pi-coding-agent";

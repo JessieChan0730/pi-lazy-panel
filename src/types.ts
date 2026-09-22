@@ -19,11 +19,29 @@ export type ListScope = "current-folder" | "all";
 /** Sort order of the sessions pane (mirrors pi's /resume picker). */
 export type SessionSortMode = "threaded" | "recent" | "fuzzy";
 
-/** Input mode of the panel, shown in the footer (vim-like). */
-export type PanelMode = "normal" | "search" | "label" | "visual" | "preview";
+/** Input mode of the panel, shown in the footer (vim-like). `restore` = the summary menu / custom prompt of TREE Enter is open. */
+export type PanelMode = "normal" | "search" | "label" | "restore" | "visual" | "preview";
 
 /** A `key description` pair shown as a hint in the footer or a prompt bar. */
 export type KeyHint = [key: string, text: string];
+
+/**
+ * What Enter did (SESSIONS resume / TREE restore):
+ * `switched` = pi now shows another session, `restored` = the leaf moved to the
+ * chosen node, `unchanged` = pi was already there. Failures throw instead.
+ */
+export type EnterOutcome = "switched" | "restored" | "unchanged";
+
+/**
+ * How TREE Enter leaves the branch it abandons — the three choices of pi's
+ * `/tree`: no summary, a model-written summary of the abandoned branch, or a
+ * summary written with extra instructions. Passed through to `ctx.navigateTree`.
+ */
+export interface RestoreOptions {
+	summarize: boolean;
+	/** Extra instructions for the summarizer ("Summarize with custom prompt"). */
+	customInstructions?: string;
+}
 
 // ---------------------------------------------------------------------------
 // Data rows
@@ -68,6 +86,12 @@ export interface TreeRow {
 	timestamp: number;
 	/** Whether this entry is on the currently active branch. */
 	onActiveBranch: boolean;
+	/**
+	 * Restoring here would leave the conversation where it already is (the leaf,
+	 * or a message followed only by bookkeeping entries — see `isEffectiveLeaf`),
+	 * so Enter skips the summary menu.
+	 */
+	isLeaf?: boolean;
 }
 
 /** Tree pane filters (mirror /tree ctrl+d/t/u/l/a). */

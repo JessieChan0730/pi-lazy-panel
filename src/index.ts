@@ -6,13 +6,15 @@
  *
  *   config/   keymap + user configuration
  *   data/     read-only adapters over pi's SessionManager (sessions, tree, content)
- *   actions/  side-effecting operations (resume, delete, rename, fork, export, ...)
+ *   actions/  side-effecting operations (resume, restore, label, copy, delete, fork, ...)
  *   ui/       TUI components (panes, dialogs, footer, search bar)
  */
 
 import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { copyNodeText, labelNode } from "./actions/tree-actions.ts";
+import { resumeSession } from "./actions/session-actions.ts";
+import { copyNodeText, labelNode, restoreNode } from "./actions/tree-actions.ts";
 import { loadConfig } from "./config/config.ts";
+import { loadPiSettings } from "./config/pi-settings.ts";
 import { COMMAND_NAME } from "./constants.ts";
 import { loadContent } from "./data/content.ts";
 import { listSessions, sortSessions } from "./data/sessions.ts";
@@ -28,17 +30,24 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 			const config = await loadConfig(getAgentDir());
+			// pi 自己的 branchSummary.skipPrompt 打开时，TREE Enter 和内置 /tree 一样不弹摘要菜单。
+			const piSettings = loadPiSettings(ctx.cwd, getAgentDir(), ctx.isProjectTrusted());
 			const data: DataSource = {
 				listSessions: async (scope, sort) => sortSessions(await listSessions({ cwd: ctx.cwd, scope }), sort),
 				loadTree: async (file, filter) => applyTreeFilter(await loadTree(file), filter),
 				loadContent: (file, leafEntryId) =>
 					loadContent(leafEntryId ? { sessionFile: file, leafEntryId } : { sessionFile: file }),
 			};
-			// 副作用统一走 actions 层；打标签时如果是当前会话就通过 pi.setLabel 同步 pi 内存状态。
+			// 副作用统一走 actions 层；目标是当前会话时用 pi 内存里的 API（setLabel / navigateTree），
+			// 其他历史会话则直接读写文件或先 switchSession。
 			const actions: ActionSource = {
 				copyNodeText,
 				setNodeLabel: (file, entryId, label) => labelNode(pi, ctx, file, entryId, label),
+				resumeSession: (file) => resumeSession(ctx, file),
+				restoreNode: (file, entryId, options) => restoreNode(ctx, file, entryId, options),
 			};
+			// overlay 句柄在面板显示后才拿到；Enter 等待 pi 切换时用它暂时隐藏面板。
+			let setHidden: ((hidden: boolean) => void) | undefined;
 
 			await ctx.ui.custom<void>(
 				(tui, theme, _keybindings, done) => {
@@ -49,9 +58,11 @@ export default function (pi: ExtensionAPI) {
 						getHeight: () => tui.terminal.rows,
 						requestRender: () => tui.requestRender(),
 						onClose: () => done(),
+						setHidden: (hidden) => setHidden?.(hidden),
 						keymap: config.keymap,
 						initialState: { scope: config.defaultScope, sort: config.defaultSort },
 						leftColumnRatio: config.leftColumnRatio,
+						skipSummaryPrompt: piSettings.skipBranchSummaryPrompt,
 						// 配置文件有问题时在底部提示，但不阻止面板打开。
 						...(config.warnings.length ? { status: config.warnings[0] } : {}),
 					});
@@ -63,6 +74,9 @@ export default function (pi: ExtensionAPI) {
 					// being embedded in the editor slot (which would overflow the terminal).
 					overlay: true,
 					overlayOptions: { anchor: "top-left", width: "100%", maxHeight: "100%", margin: 0 },
+					onHandle: (handle) => {
+						setHidden = (hidden) => handle.setHidden(hidden);
+					},
 				},
 			);
 		},

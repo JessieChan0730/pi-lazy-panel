@@ -1,12 +1,12 @@
 /**
  * Tree actions — side effects triggered from the tree pane.
  *
- *   restore -> ctx.navigateTree(entryId, { summarize, customInstructions })
- *              after the user picks: No summary | Summarize | Summarize with custom prompt (TODO)
- *   copy    -> copyToClipboard(full entry text)            (/tree ctrl+x)
- *   label   -> pi.setLabel / SessionManager.appendLabelChange (/tree shift+T)
+ *   restore -> ctx.navigateTree(entryId, { summarize, customInstructions })   (/tree Enter)
+ *              other session: ctx.switchSession first, then navigate inside withSession
+ *   copy    -> copyToClipboard(full entry text)                               (/tree ctrl+x)
+ *   label   -> pi.setLabel / SessionManager.appendLabelChange                 (/tree shift+T)
  *
- * No dialogs here: the caller collects input / confirmation first.
+ * No dialogs here: the caller collects the summary choice / label first.
  */
 
 import {
@@ -15,22 +15,114 @@ import {
 	type ExtensionCommandContext,
 	SessionManager,
 } from "@earendil-works/pi-coding-agent";
-import { loadNodeText } from "../data/tree.ts";
-import type { TreeRow } from "../types.ts";
+import { EXTENSION_ID, SUMMARIZING_STATUS } from "../constants.ts";
+import { isEffectiveLeaf, loadNodeText } from "../data/tree.ts";
+import type { EnterOutcome, RestoreOptions } from "../types.ts";
+import { isCurrentSession, openSessionFile, resumeSession } from "./session-actions.ts";
 
-export type RestoreSummaryMode = "none" | "summarize" | "summarize-custom";
+/** The slice of the command context `restoreNode` needs; the `withSession` context has the same shape. */
+export type RestoreContext = Pick<
+	ExtensionCommandContext,
+	"sessionManager" | "switchSession" | "navigateTree" | "isIdle" | "abort" | "waitForIdle" | "ui"
+>;
 
-export interface RestoreOptions {
-	mode: RestoreSummaryMode;
-	customInstructions?: string;
+type NavigateContext = Pick<RestoreContext, "navigateTree" | "isIdle" | "abort" | "waitForIdle" | "ui">;
+
+/** How long to wait for pi to settle after aborting the current response before giving up. */
+const IDLE_TIMEOUT_MS = 15_000;
+
+/** Enter without a choice (the node is the leaf, or pi's `branchSummary.skipPrompt`): no summary. */
+const NO_SUMMARY: RestoreOptions = { summarize: false };
+
+/**
+ * Continue the conversation from `entryId` of `sessionFile` (what `/tree` does on Enter).
+ *
+ * 分流和打标签一致：目标是当前会话就直接走 pi 内存里的 `navigateTree`；是其他历史会话就先
+ * `switchSession`，再在 pi 给 `withSession` 的新 ctx 里 navigate（切换后旧 ctx 已失效，不能复用）。
+ * 光标节点就是活动叶子时不重复 restore，等价于直接进入该会话。
+ * `options` 就是 /tree 的三个选择：不做摘要 / 让模型总结被放弃的分支 / 带自定义指令总结。
+ *
+ * Throws when the file / entry does not exist, pi is busy for too long, the
+ * summary needs a model pi does not have, or the switch / navigation was
+ * cancelled. A failed navigation *after* a successful switch cannot be thrown
+ * back to the panel (pi has already torn it down), so it is reported through
+ * the new session's `ui.notify` and the outcome is `switched`.
+ */
+export async function restoreNode(
+	ctx: RestoreContext,
+	sessionFile: string,
+	entryId: string,
+	options: RestoreOptions = NO_SUMMARY,
+): Promise<EnterOutcome> {
+	const current = isCurrentSession(ctx, sessionFile);
+	const manager = current ? ctx.sessionManager : openSessionFile(sessionFile);
+	if (!manager.getEntry(entryId)) throw new Error(`entry ${entryId} not found in session`);
+	if (isEffectiveLeaf(manager, entryId)) return resumeSession(ctx, sessionFile);
+	if (current) {
+		await navigateTo(ctx, entryId, options);
+		return "restored";
+	}
+	let outcome: EnterOutcome = "restored";
+	await resumeSession(ctx, sessionFile, {
+		withSession: async (next) => {
+			try {
+				await navigateTo(next, entryId, options);
+			} catch (err) {
+				outcome = "switched";
+				next.ui.notify(`restore failed: ${(err as Error).message}`, "error");
+			}
+		},
+	});
+	return outcome;
 }
 
-export async function restoreToNode(
-	_ctx: ExtensionCommandContext,
-	_row: TreeRow,
-	_options: RestoreOptions,
-): Promise<void> {
-	// TODO
+/**
+ * `navigateTree` refuses to run while pi is still streaming, so do what the
+ * built-in /tree does once the user has committed: abort the response, wait for
+ * pi to go idle, then move the leaf.
+ *
+ * 摘要要等模型写完，这期间面板是隐藏的，所以进度写到 pi 自己的 footer 上（`ui.setStatus`），
+ * 结束后清掉。扩展 ctx 的 `navigateTree` 把摘要被中止（aborted）也折叠成 `cancelled: true`，
+ * 这里分不出是被中止还是被别的扩展否决，只能统一报 cancelled。
+ */
+async function navigateTo(ctx: NavigateContext, entryId: string, options: RestoreOptions): Promise<void> {
+	if (!ctx.isIdle()) {
+		ctx.abort();
+		await withTimeout(ctx.waitForIdle(), IDLE_TIMEOUT_MS, "pi is still busy; try again once the current response has stopped");
+	}
+	if (options.summarize) ctx.ui.setStatus(EXTENSION_ID, SUMMARIZING_STATUS);
+	try {
+		const result = await ctx.navigateTree(entryId, navigateOptions(options));
+		if (result.cancelled) {
+			throw new Error(options.summarize ? "branch summary cancelled" : "restore cancelled by an extension");
+		}
+	} finally {
+		if (options.summarize) ctx.ui.setStatus(EXTENSION_ID, undefined);
+	}
+}
+
+/** The `navigateTree` options for a choice; `customInstructions` is only set when there is one. */
+function navigateOptions(options: RestoreOptions): { summarize: boolean; customInstructions?: string } {
+	return options.customInstructions
+		? { summarize: options.summarize, customInstructions: options.customInstructions }
+		: { summarize: options.summarize };
+}
+
+/** Reject with `message` if `promise` has not settled within `ms`. */
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+	return new Promise<T>((resolve, reject) => {
+		const timer = setTimeout(() => reject(new Error(message)), ms);
+		promise.then(
+			(value) => {
+				clearTimeout(timer);
+				resolve(value);
+			},
+			(err) => {
+				clearTimeout(timer);
+				reject(err);
+			},
+		);
+	});
 }
 
 /**
@@ -60,7 +152,7 @@ export async function labelNode(
 	label: string | undefined,
 ): Promise<void> {
 	const value = label?.trim() || undefined;
-	if (ctx.sessionManager.getSessionFile() === sessionFile) {
+	if (isCurrentSession(ctx, sessionFile)) {
 		pi.setLabel(entryId, value);
 		return;
 	}

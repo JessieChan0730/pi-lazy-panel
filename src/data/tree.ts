@@ -14,11 +14,12 @@ import { resolveContentLeaf } from "./content.ts";
 export async function loadTree(sessionFile: string): Promise<TreeRow[]> {
 	const manager = SessionManager.open(sessionFile);
 	const activeIds = new Set(manager.getBranch(resolveContentLeaf(manager)).map((e) => e.id));
+	const leafIds = effectiveLeafIds(manager);
 	const rows: TreeRow[] = [];
 	// Like pi's /tree: depth only grows at branch points, so a linear chain
 	// stays flush-left instead of drifting right one column per entry.
 	const visit = (node: SessionTreeNode, depth: number) => {
-		const row = toRow(node, depth, activeIds.has(node.entry.id));
+		const row = toRow(node, depth, activeIds.has(node.entry.id), leafIds.has(node.entry.id));
 		if (row) rows.push(row);
 		const childDepth = node.children.length > 1 ? depth + 1 : depth;
 		for (const child of node.children) visit(child, childDepth);
@@ -27,7 +28,7 @@ export async function loadTree(sessionFile: string): Promise<TreeRow[]> {
 	return rows;
 }
 
-function toRow(node: SessionTreeNode, depth: number, onActiveBranch: boolean): TreeRow | undefined {
+function toRow(node: SessionTreeNode, depth: number, onActiveBranch: boolean, isLeaf: boolean): TreeRow | undefined {
 	const entry = node.entry;
 	const described = describeEntry(entry);
 	if (!described) return undefined;
@@ -42,6 +43,7 @@ function toRow(node: SessionTreeNode, depth: number, onActiveBranch: boolean): T
 	};
 	if (entry.parentId) row.parentId = entry.parentId;
 	if (node.label) row.label = node.label;
+	if (isLeaf) row.isLeaf = true;
 	return row;
 }
 
@@ -162,6 +164,59 @@ export function loadNodeText(sessionFile: string, entryId: string): string | und
 function fullText(content: string | Part[]): string {
 	if (typeof content === "string") return content;
 	return content.map((p) => (p.type === "text" ? (p.text ?? "") : "")).join("");
+}
+
+/** Entry types that only record metadata; moving the leaf past them never changes the conversation. */
+const BOOKKEEPING_TYPES: ReadonlySet<SessionEntry["type"]> = new Set([
+	"label",
+	"session_info",
+	"model_change",
+	"thinking_level_change",
+	"custom",
+]);
+
+/**
+ * Would restoring to `entryId` leave the conversation where it already is?
+ *
+ * True when the entry is the session's leaf, or when it sits on the active
+ * branch with nothing but bookkeeping entries after it (pi appends labels,
+ * /name, model / thinking changes and extension state as new leaves, so right
+ * after `T` the last message is no longer the raw leaf). User messages are
+ * exempt: pi restores those by moving the leaf to their parent and putting the
+ * prompt back into the editor, which is a real change.
+ *
+ * 光标停在活动叶子上时 Enter 不应该再 restore 一次，否则会把刚打的 label /
+ * 刚切的模型这些尾部条目甩到分支外。
+ */
+export function isEffectiveLeaf(manager: Pick<SessionManager, "getLeafId" | "getBranch">, entryId: string): boolean {
+	return effectiveLeafIds(manager).has(entryId);
+}
+
+/**
+ * Every entry `isEffectiveLeaf` holds for, computed in one pass: the leaf
+ * itself, then the entries above it for as long as everything after them is
+ * bookkeeping (user prompts never qualify, see `isEffectiveLeaf`).
+ *
+ * 从叶子沿活动分支往上走一次算出整组，loadTree 给每行标 isLeaf 时不用逐行重算。
+ */
+export function effectiveLeafIds(manager: Pick<SessionManager, "getLeafId" | "getBranch">): Set<string> {
+	const ids = new Set<string>();
+	const leafId = manager.getLeafId();
+	if (!leafId) return ids;
+	ids.add(leafId);
+	const branch = manager.getBranch(leafId);
+	for (let i = branch.length - 1; i >= 0; i--) {
+		const entry = branch[i]!;
+		if (entry.id !== leafId && !isUserPrompt(entry)) ids.add(entry.id);
+		// 这一条不是记账条目：再往上的节点后面就不再"只剩记账条目"了。
+		if (!BOOKKEEPING_TYPES.has(entry.type)) break;
+	}
+	return ids;
+}
+
+/** Entries pi restores into the editor (the leaf moves to their parent), so restoring to them is never a no-op. */
+function isUserPrompt(entry: SessionEntry): boolean {
+	return entry.type === "custom_message" || (entry.type === "message" && entry.message.role === "user");
 }
 
 /** Filter tree rows (mirrors /tree ctrl+d/t/u/l/a). */

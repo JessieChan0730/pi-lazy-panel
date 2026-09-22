@@ -16,3 +16,9 @@ export const LEFT_COLUMN_RATIO = 0.25;
 
 /** Identifiers for the three focusable panes. */
 export const PANE_IDS = ["sessions", "tree", "content"] as const;
+
+/**
+ * Progress text while pi writes a branch summary for TREE Enter. Shown in the
+ * panel footer and, because the panel is hidden meanwhile, in pi's own footer.
+ */
+export const SUMMARIZING_STATUS = "summarizing branch…";

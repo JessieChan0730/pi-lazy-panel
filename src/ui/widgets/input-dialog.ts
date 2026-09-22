@@ -20,7 +20,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Input, truncateToWidth } from "@earendil-works/pi-tui";
 import type { KeyHint } from "../../types.ts";
-import { frame, metaBudget, overlayCentered } from "../frame.ts";
+import { dialogWidth, frame, metaBudget, overlayCentered } from "../frame.ts";
 
 /** Box height: top border, input, bottom border. */
 export const INPUT_DIALOG_HEIGHT = 3;
@@ -133,9 +133,4 @@ export class InputDialog {
 		if (value) input.handleInput(END_KEY);
 		return input;
 	}
-}
-
-/** Width of the box for a `termW`-column terminal. */
-export function dialogWidth(termW: number): number {
-	return Math.max(24, Math.min(termW - 4, 60));
 }

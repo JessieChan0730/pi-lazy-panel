@@ -10,11 +10,14 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { DEFAULT_KEYMAP } from "../src/config/keymap.ts";
 import { mergeKeymap } from "../src/config/config.ts";
-import type { ContentBlock, SessionRow, TreeRow } from "../src/types.ts";
+import { SUMMARIZING_STATUS } from "../src/constants.ts";
+import type { ContentBlock, RestoreOptions, SessionRow, TreeRow } from "../src/types.ts";
 import { type ActionSource, type DataSource, LazyPanel } from "../src/ui/app.ts";
 import { InputDialog } from "../src/ui/widgets/input-dialog.ts";
 import { LABEL_DIALOG_TITLE } from "../src/ui/widgets/label-dialog.ts";
+import { CUSTOM_PROMPT_TITLE, SUMMARY_MENU, SUMMARY_MENU_TITLE } from "../src/ui/widgets/restore-dialog.ts";
 import { SEARCH_LABEL } from "../src/ui/widgets/search-bar.ts";
+import { SelectDialog } from "../src/ui/widgets/select-dialog.ts";
 
 /** Styling is irrelevant here; return text unchanged so assertions stay simple. */
 const fakeTheme = {
@@ -291,8 +294,8 @@ function settle(): Promise<void> {
 	return new Promise((r) => setTimeout(r, 80));
 }
 
-function treeRow(i: number, onActiveBranch = true): TreeRow {
-	return { entryId: `e${i}`, depth: 0, role: i % 2 ? "assistant" : "user", kind: "message", text: `msg ${i}`, timestamp: 0, onActiveBranch };
+function treeRow(i: number, onActiveBranch = true, over: Partial<TreeRow> = {}): TreeRow {
+	return { entryId: `e${i}`, depth: 0, role: i % 2 ? "assistant" : "user", kind: "message", text: `msg ${i}`, timestamp: 0, onActiveBranch, ...over };
 }
 
 function block(i: number): ContentBlock {
@@ -436,15 +439,23 @@ test("content pane scrolls by line with j/k, gg/G, and J/K from the sessions pan
 	h.panel.dispose();
 });
 
-/** Panel whose tree rows come from a mutable map of labels, plus a recording ActionSource. */
-function makeTreeActionPanel(actions?: Partial<ActionSource>) {
+/**
+ * Panel whose tree rows come from a mutable map of labels, plus a recording ActionSource.
+ * e2 is the active leaf (Enter on it restores without asking); e0 / e1 go through the summary menu.
+ */
+function makeTreeActionPanel(actions?: Partial<ActionSource>, opts: { skipSummaryPrompt?: boolean } = {}) {
 	const labels = new Map<string, string>();
 	const copies: Array<{ file: string; entryId: string }> = [];
 	const labelCalls: Array<{ file: string; entryId: string; label: string | undefined }> = [];
+	const enters: Array<{ kind: "resume" | "restore"; file: string; entryId?: string; options?: RestoreOptions }> = [];
+	const hidden: boolean[] = [];
+	let closed = false;
 	const data: DataSource = {
 		listSessions: async () => [row(1, "/a")],
 		loadTree: async (_file, filter) => {
-			const rows = [treeRow(0), treeRow(1), treeRow(2)].map((r) => (labels.has(r.entryId) ? { ...r, label: labels.get(r.entryId)! } : r));
+			const rows = [treeRow(0), treeRow(1), treeRow(2, true, { isLeaf: true })].map((r) =>
+				labels.has(r.entryId) ? { ...r, label: labels.get(r.entryId)! } : r,
+			);
 			return filter === "labeled" ? rows.filter((r) => r.label !== undefined) : rows;
 		},
 		loadContent: async () => [block(0), block(1), block(2)],
@@ -459,10 +470,38 @@ function makeTreeActionPanel(actions?: Partial<ActionSource>) {
 			if (label) labels.set(entryId, label);
 			else labels.delete(entryId);
 		},
+		resumeSession: async (file) => {
+			enters.push({ kind: "resume", file });
+			return "switched";
+		},
+		restoreNode: async (file, entryId, options) => {
+			enters.push({ kind: "restore", file, entryId, options });
+			return "restored";
+		},
 		...actions,
 	};
-	const panel = new LazyPanel({ theme: fakeTheme, data, actions: source, getHeight: () => 20, requestRender: () => {}, onClose: () => {} });
-	return { panel, copies, labelCalls, labels, text: (width = 100) => panel.render(width).map((l) => stripTerminalSequences(l)) };
+	const panel = new LazyPanel({
+		theme: fakeTheme,
+		data,
+		actions: source,
+		getHeight: () => 20,
+		requestRender: () => {},
+		onClose: () => {
+			closed = true;
+		},
+		setHidden: (h) => hidden.push(h),
+		...(opts.skipSummaryPrompt !== undefined ? { skipSummaryPrompt: opts.skipSummaryPrompt } : {}),
+	});
+	return {
+		panel,
+		copies,
+		labelCalls,
+		labels,
+		enters,
+		hidden,
+		closed: () => closed,
+		text: (width = 100) => panel.render(width).map((l) => stripTerminalSequences(l)),
+	};
 }
 
 test("y in the tree pane copies the node under the cursor and reports the result in the footer", async () => {
@@ -578,7 +617,270 @@ test("label errors land in the footer and a panel without actions says so", asyn
 	bare.panel.handleInput("y");
 	await flush();
 	assert.ok(bare.text().at(-1)!.includes("actions unavailable"));
+	// Enter in either pane says so too and keeps the panel open
+	bare.panel.handleInput("\r");
+	await flush();
+	assert.ok(bare.text().at(-1)!.includes("restore: actions unavailable"), bare.text().at(-1));
+	bare.panel.handleInput("1");
+	bare.panel.handleInput("\r");
+	await flush();
+	assert.ok(bare.text().at(-1)!.includes("resume: actions unavailable"), bare.text().at(-1));
 	bare.panel.dispose();
+});
+
+test("Enter in the sessions pane resumes the session under the cursor and closes the panel", async () => {
+	const h = makeTreeActionPanel();
+	await h.panel.load();
+	assert.equal(h.panel.state.focus, "sessions");
+	h.panel.handleInput("\r");
+	await flush();
+	assert.deepEqual(h.enters, [{ kind: "resume", file: "/tmp/s1.jsonl" }]);
+	assert.equal(h.closed(), true);
+	// hidden while pi switched; a successful switch closes the panel instead of showing it again
+	assert.deepEqual(h.hidden, [true]);
+});
+
+test("Enter in the tree pane on the active leaf restores without asking (switching session first is the action's job)", async () => {
+	const h = makeTreeActionPanel();
+	await h.panel.load();
+	h.panel.handleInput("2");
+	assert.equal(h.panel.state.cursor.tree, 2, "the cursor starts on the leaf");
+	h.panel.handleInput("\r");
+	await flush();
+	assert.equal(summaryMenu(h.text()), undefined, "no menu for the leaf");
+	assert.deepEqual(h.enters, [{ kind: "restore", file: "/tmp/s1.jsonl", entryId: "e2", options: { summarize: false } }]);
+	assert.equal(h.closed(), true);
+});
+
+/** The centered "Summarize branch?" menu in rendered `lines`: its title line and the entry lines, or undefined when closed. */
+function summaryMenu(lines: string[]): { top: number; title: string; items: string[]; selected: string | undefined } | undefined {
+	const top = lines.findIndex((l) => l.includes(`┌─ ${SUMMARY_MENU_TITLE} `));
+	if (top < 0) return undefined;
+	const items = lines.slice(top + 1, top + 1 + SUMMARY_MENU.length);
+	const selected = items.find((l) => l.includes("›"));
+	return { top, title: lines[top]!, items, selected: selected?.replace(/.*›\s*/, "").trim() };
+}
+
+test("Enter on another node opens the Summarize branch? menu: j/k move, Esc goes back to the tree, No summary restores", async () => {
+	const h = makeTreeActionPanel();
+	await h.panel.load();
+	h.panel.handleInput("2");
+	h.panel.handleInput("k"); // cursor on e1
+	await flush();
+	h.panel.handleInput("\r");
+	assert.equal(h.panel.state.mode, "restore");
+	let lines = h.text();
+	const menu = summaryMenu(lines);
+	assert.ok(menu, "the menu should be drawn");
+	// drawn over the middle of the panel, naming the node; three entries in pi's order, cursor on the first
+	assert.ok(menu.top > 2 && menu.top < lines.length - 6, `menu row ${menu.top} of ${lines.length}`);
+	assert.ok(menu.title.includes("assistant: msg 1"), menu.title);
+	for (const [i, m] of SUMMARY_MENU.entries()) assert.ok(menu.items[i]!.includes(m.label), `${i}: ${menu.items[i]}`);
+	assert.ok(menu.items[0]!.startsWith("No summary") || menu.selected?.startsWith("No summary"), menu.items[0]);
+	assert.ok(lines[menu.top + SUMMARY_MENU.length + 1]!.includes("└"), "bottom border right under the last entry");
+	const footer = lines.at(-1)!;
+	assert.ok(footer.includes("RESTORE") && footer.includes("Enter select") && footer.includes("Esc cancel"), footer);
+	for (const l of h.panel.render(100)) assert.equal(visibleWidth(l), 100);
+
+	// j / k move the menu cursor, not the tree cursor; other keys are swallowed
+	h.panel.handleInput("j");
+	assert.ok(summaryMenu(h.text())!.selected?.startsWith("Summarize"), "j moves down");
+	h.panel.handleInput("j");
+	h.panel.handleInput("j");
+	assert.ok(summaryMenu(h.text())!.selected?.startsWith("Summarize with custom prompt"), "clamped at the bottom");
+	h.panel.handleInput("k");
+	h.panel.handleInput("\x1b[A"); // up arrow
+	assert.ok(summaryMenu(h.text())!.selected?.startsWith("No summary"), "k / ↑ move up");
+	h.panel.handleInput("q");
+	h.panel.handleInput("l");
+	assert.equal(h.closed(), false);
+	assert.equal(h.panel.state.focus, "tree");
+	assert.equal(h.panel.state.cursor.tree, 1);
+
+	// Esc: back to the tree, nothing restored
+	h.panel.handleInput("\x1b");
+	assert.equal(h.panel.state.mode, "normal");
+	assert.equal(summaryMenu(h.text()), undefined, "menu closes on Esc");
+	assert.deepEqual(h.enters, []);
+	assert.deepEqual(h.hidden, []);
+	assert.equal(h.closed(), false);
+
+	// Enter again, pick "No summary"
+	h.panel.handleInput("\r");
+	h.panel.handleInput("\r");
+	await flush();
+	assert.deepEqual(h.enters, [{ kind: "restore", file: "/tmp/s1.jsonl", entryId: "e1", options: { summarize: false } }]);
+	assert.equal(h.closed(), true);
+	lines = h.text();
+	assert.equal(summaryMenu(lines), undefined);
+});
+
+test("Summarize: the footer says summarizing branch… while pi writes the summary, then the panel closes", async () => {
+	let finish: (() => void) | undefined;
+	const h = makeTreeActionPanel({
+		restoreNode: (file, entryId, options) =>
+			new Promise((resolve) => {
+				h.enters.push({ kind: "restore", file, entryId, options });
+				finish = () => resolve("restored");
+			}),
+	});
+	await h.panel.load();
+	h.panel.handleInput("2");
+	h.panel.handleInput("k");
+	await flush();
+	h.panel.handleInput("\r");
+	h.panel.handleInput("j"); // Summarize
+	h.panel.handleInput("\r");
+	assert.deepEqual(h.enters, [{ kind: "restore", file: "/tmp/s1.jsonl", entryId: "e1", options: { summarize: true } }]);
+	assert.equal(h.panel.state.mode, "normal");
+	assert.ok(h.text().at(-1)!.includes(SUMMARIZING_STATUS), h.text().at(-1));
+	assert.deepEqual(h.hidden, [true]);
+	// keys are ignored meanwhile, like any other Enter
+	h.panel.handleInput("q");
+	h.panel.handleInput("\r");
+	assert.equal(h.closed(), false);
+	assert.equal(h.enters.length, 1);
+	finish!();
+	await flush();
+	assert.equal(h.closed(), true);
+});
+
+test("Summarize with custom prompt opens a one-line input; Esc returns to the menu, Enter summarizes with the text", async () => {
+	const h = makeTreeActionPanel();
+	await h.panel.load();
+	h.panel.handleInput("2");
+	h.panel.handleInput("k");
+	await flush();
+	h.panel.handleInput("\r");
+	h.panel.handleInput("G"); // swallowed by the menu (only j/k/arrows move)
+	assert.ok(summaryMenu(h.text())!.selected?.startsWith("No summary"));
+	h.panel.handleInput("j");
+	h.panel.handleInput("j");
+	h.panel.handleInput("\r");
+	// the menu is replaced by the custom prompt, still in restore mode
+	assert.equal(h.panel.state.mode, "restore");
+	let lines = h.text();
+	assert.equal(summaryMenu(lines), undefined);
+	const promptTop = lines.findIndex((l) => l.includes(`┌─ ${CUSTOM_PROMPT_TITLE} `));
+	assert.ok(promptTop > 0, "the custom prompt should be drawn");
+	assert.ok(lines[promptTop]!.includes("assistant: msg 1"), lines[promptTop]);
+	assert.ok(lines.at(-1)!.includes("Enter summarize") && lines.at(-1)!.includes("Esc back"), lines.at(-1));
+	for (const l of h.panel.render(100)) assert.equal(visibleWidth(l), 100);
+
+	// Esc: back to the menu with the cursor still on the custom entry (pi loops back to the selector too)
+	h.panel.handleInput("\x1b");
+	assert.equal(h.panel.state.mode, "restore");
+	const menu = summaryMenu(h.text());
+	assert.ok(menu, "menu reopens after Esc in the prompt");
+	assert.ok(menu.selected?.startsWith("Summarize with custom prompt"), menu.selected);
+	assert.deepEqual(h.enters, []);
+
+	// Enter with instructions
+	h.panel.handleInput("\r");
+	for (const ch of "focus on x") h.panel.handleInput(ch);
+	assert.equal(h.panel.state.cursor.tree, 1, "typing goes to the prompt, not the keymap");
+	lines = h.text();
+	assert.ok(lines[lines.findIndex((l) => l.includes(`┌─ ${CUSTOM_PROMPT_TITLE} `)) + 1]!.includes("focus on x"));
+	h.panel.handleInput("\r");
+	await flush();
+	assert.equal(h.panel.state.mode, "normal");
+	assert.deepEqual(h.enters, [
+		{ kind: "restore", file: "/tmp/s1.jsonl", entryId: "e1", options: { summarize: true, customInstructions: "focus on x" } },
+	]);
+	assert.equal(h.closed(), true);
+
+	// a blank prompt means pi's default instructions
+	const blank = makeTreeActionPanel();
+	await blank.panel.load();
+	blank.panel.handleInput("2");
+	blank.panel.handleInput("k");
+	await flush();
+	blank.panel.handleInput("\r");
+	blank.panel.handleInput("j");
+	blank.panel.handleInput("j");
+	blank.panel.handleInput("\r");
+	blank.panel.handleInput(" ");
+	blank.panel.handleInput("\r");
+	await flush();
+	assert.deepEqual(blank.enters.at(-1)?.options, { summarize: true });
+	assert.equal(blank.closed(), true);
+});
+
+test("pi's branchSummary.skipPrompt skips the menu and restores without a summary", async () => {
+	const h = makeTreeActionPanel(undefined, { skipSummaryPrompt: true });
+	await h.panel.load();
+	h.panel.handleInput("2");
+	h.panel.handleInput("g");
+	h.panel.handleInput("g");
+	await flush();
+	h.panel.handleInput("\r");
+	await flush();
+	assert.equal(summaryMenu(h.text()), undefined);
+	assert.deepEqual(h.enters, [{ kind: "restore", file: "/tmp/s1.jsonl", entryId: "e0", options: { summarize: false } }]);
+	assert.equal(h.closed(), true);
+});
+
+test("a failed Enter stays in the footer, shows the panel again and keeps it usable", async () => {
+	const h = makeTreeActionPanel({
+		restoreNode: async (_file, _entryId, options) => {
+			throw new Error(options.summarize ? "No model available for summarization" : "entry e1 not found in session");
+		},
+		resumeSession: async () => {
+			throw new Error("session file not found: /tmp/s1.jsonl");
+		},
+	});
+	await h.panel.load();
+	h.panel.handleInput("2");
+	h.panel.handleInput("k");
+	await flush();
+	h.panel.handleInput("\r");
+	h.panel.handleInput("\r"); // No summary
+	await flush();
+	assert.equal(h.closed(), false);
+	assert.deepEqual(h.hidden, [true, false]);
+	assert.ok(h.text().at(-1)!.includes("restore failed: entry e1 not found"), h.text().at(-1));
+	// keys work again afterwards
+	h.panel.handleInput("k");
+	assert.equal(h.panel.state.cursor.tree, 0);
+
+	// a summary that pi refuses (no model) is reported the same way
+	h.panel.handleInput("\r");
+	h.panel.handleInput("j");
+	h.panel.handleInput("\r");
+	await flush();
+	assert.equal(h.closed(), false);
+	assert.ok(h.text().at(-1)!.includes("restore failed: No model available"), h.text().at(-1));
+
+	h.panel.handleInput("1");
+	h.panel.handleInput("\r");
+	await flush();
+	assert.equal(h.closed(), false);
+	assert.ok(h.text().at(-1)!.includes("resume failed: session file not found"), h.text().at(-1));
+	h.panel.dispose();
+});
+
+test("keys are ignored while an Enter action is waiting for pi", async () => {
+	let finish: (() => void) | undefined;
+	const h = makeTreeActionPanel({
+		resumeSession: () =>
+			new Promise((resolve) => {
+				finish = () => resolve("switched");
+			}),
+	});
+	await h.panel.load();
+	h.panel.handleInput("\r");
+	assert.ok(h.text().at(-1)!.includes("resume…"), h.text().at(-1));
+	assert.deepEqual(h.hidden, [true]);
+	// q would normally quit; a second Enter would start another resume
+	h.panel.handleInput("q");
+	h.panel.handleInput("\r");
+	h.panel.handleInput("l");
+	assert.equal(h.closed(), false);
+	assert.equal(h.panel.state.focus, "sessions");
+	assert.ok(finish, "the action should have been started once");
+	finish!();
+	await flush();
+	assert.equal(h.closed(), true);
 });
 
 test("InputDialog is a reusable 3-row prompt: title / value / subject / hints come from open()", () => {
@@ -612,4 +914,55 @@ test("InputDialog is a reusable 3-row prompt: title / value / subject / hints co
 	assert.equal(cancelled, 1);
 	dlg.close();
 	assert.equal(dlg.isOpen, false);
+});
+
+test("SelectDialog is a reusable centered menu: items / cursor / subject / hints come from open()", () => {
+	const picked: number[] = [];
+	let cancelled = 0;
+	const dlg = new SelectDialog({ theme: fakeTheme, onChange: () => {} });
+	assert.equal(dlg.isOpen, false);
+	assert.deepEqual(dlg.hints, []);
+
+	dlg.open({
+		title: "Delete?",
+		items: ["Yes", "No"],
+		initialIndex: 1,
+		subject: "session A",
+		hints: [["Enter", "pick"]],
+		onSelect: (i) => picked.push(i),
+		onCancel: () => cancelled++,
+	});
+	assert.equal(dlg.isOpen, true);
+	assert.equal(dlg.selectedIndex, 1);
+	assert.deepEqual(dlg.hints, [["Enter", "pick"]]);
+	const lines = dlg.render(40).map((l) => stripTerminalSequences(l));
+	assert.equal(lines.length, 4, "border + one row per entry + border");
+	for (const l of dlg.render(40)) assert.equal(visibleWidth(l), 40);
+	assert.ok(lines[0]!.includes("┌─ Delete? ") && lines[0]!.includes("session A"), lines[0]);
+	assert.ok(lines[1]!.includes("  Yes") && !lines[1]!.includes("›"), lines[1]);
+	assert.ok(lines[2]!.includes("› No"), lines[2]);
+	assert.ok(lines[3]!.startsWith("└"), lines[3]);
+
+	// j / k / arrows move and clamp; Enter reports the index; Esc cancels; other keys do nothing
+	dlg.handleInput("j");
+	assert.equal(dlg.selectedIndex, 1);
+	dlg.handleInput("k");
+	assert.equal(dlg.selectedIndex, 0);
+	dlg.handleInput("\x1b[B");
+	assert.equal(dlg.selectedIndex, 1);
+	dlg.handleInput("x");
+	assert.equal(dlg.selectedIndex, 1);
+	dlg.handleInput("\r");
+	assert.deepEqual(picked, [1]);
+	dlg.handleInput("\x1b");
+	assert.equal(cancelled, 1);
+
+	// a second open swaps the spec; an out-of-range initial index is clamped
+	dlg.open({ title: "Sort", items: ["a", "b", "c"], initialIndex: 9, hints: [], onSelect: (i) => picked.push(i), onCancel: () => cancelled++ });
+	assert.equal(dlg.selectedIndex, 2);
+	assert.ok(stripTerminalSequences(dlg.render(30)[0]!).includes("┌─ Sort "));
+	dlg.close();
+	assert.equal(dlg.isOpen, false);
+	dlg.handleInput("\r");
+	assert.deepEqual(picked, [1], "a closed dialog ignores input");
 });

@@ -2,7 +2,7 @@
  * Session actions — side effects triggered from the sessions pane.
  *
  * Each function wraps the equivalent pi command / API:
- *   resume  -> ctx.switchSession
+ *   resume  -> ctx.switchSession                                  (done)
  *   delete  -> remove the .jsonl (prefer `trash` CLI like pi does)
  *   rename  -> session info entry (/name)
  *   fork    -> ctx.fork(entryId, { position: "before" })
@@ -16,14 +16,51 @@
  * Destructive actions (delete, fork) must be confirmed by the caller first
  * (see ../ui/widgets/confirm-dialog.ts). These functions do not prompt.
  *
- * TODO: implement each action.
+ * TODO: implement the remaining actions.
  */
 
-import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import type { SessionRow } from "../types.ts";
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
+import { type ExtensionCommandContext, SessionManager } from "@earendil-works/pi-coding-agent";
+import type { EnterOutcome, SessionRow } from "../types.ts";
 
-export async function resumeSession(_ctx: ExtensionCommandContext, _row: SessionRow): Promise<void> {
-	// TODO
+/** The slice of the command context `resumeSession` needs (tests pass plain objects). */
+export type ResumeContext = Pick<ExtensionCommandContext, "sessionManager" | "switchSession">;
+
+/** Post-switch work, run by pi against the replacement session's own context. */
+export type SwitchOptions = NonNullable<Parameters<ExtensionCommandContext["switchSession"]>[1]>;
+
+/** Is `sessionFile` the session pi currently has open? (Same rule as labelling: compare resolved paths.) */
+export function isCurrentSession(ctx: Pick<ExtensionCommandContext, "sessionManager">, sessionFile: string): boolean {
+	const current = ctx.sessionManager.getSessionFile();
+	return current !== undefined && resolve(current) === resolve(sessionFile);
+}
+
+/**
+ * Open a history session file for reading.
+ * Throws a readable error when the file is gone or unparsable, so callers can
+ * report it before pi starts tearing the current session down.
+ */
+export function openSessionFile(sessionFile: string): SessionManager {
+	if (!existsSync(sessionFile)) throw new Error(`session file not found: ${sessionFile}`);
+	return SessionManager.open(sessionFile);
+}
+
+/**
+ * Switch pi to `sessionFile` (what `/resume` does when a session is picked).
+ *
+ * 目标就是当前会话时什么都不做（返回 `unchanged`）；否则先确认文件能打开，再交给
+ * `ctx.switchSession`。pi 自己会先中断正在输出的回复再切换（和内置 /resume 一样，不额外确认）。
+ * 切换成功后传入的 `ctx` 就失效了，后续要在新会话里做的事只能放进 `options.withSession`。
+ *
+ * Throws when the file cannot be opened or pi / another extension cancelled the switch.
+ */
+export async function resumeSession(ctx: ResumeContext, sessionFile: string, options?: SwitchOptions): Promise<EnterOutcome> {
+	if (isCurrentSession(ctx, sessionFile)) return "unchanged";
+	openSessionFile(sessionFile);
+	const result = await ctx.switchSession(sessionFile, options);
+	if (result.cancelled) throw new Error("switch cancelled by pi or an extension");
+	return "switched";
 }
 
 export async function deleteSessions(_ctx: ExtensionCommandContext, _rows: SessionRow[]): Promise<void> {

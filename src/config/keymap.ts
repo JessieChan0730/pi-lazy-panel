@@ -111,7 +111,7 @@ export const ACTION_DESCRIPTIONS: Record<ActionId, string> = {
 	"session-sort": "Cycle sort: threaded / recent / fuzzy",
 	"session-new": "New session",
 	"session-info": "Session info",
-	"tree-restore": "Restore conversation to this node",
+	"tree-restore": "Restore conversation to this node (asks about a branch summary)",
 	"tree-copy": "Copy node text",
 	"tree-label": "Add / edit label",
 	"tree-filter-default": "Filter: default",

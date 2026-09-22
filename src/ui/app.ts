@@ -25,6 +25,10 @@
  *   - j/k、gg/G：SESSIONS / TREE 移动光标，CONTENT 按行滚动；SESSIONS 里 J/K 滚动右侧内容
  *   - SESSIONS 光标变化 → 重新加载 TREE + CONTENT；TREE 光标变化 → CONTENT 高亮并滚到对应消息
  *   - TREE：y 复制节点全文（走注入的 ActionSource），T 居中弹出 Label 输入框（类似 lazygit 的 commit 弹窗），回车保存 / Esc 取消 / 空值清除
+ *   - Enter：SESSIONS 里切到光标所在会话（/resume）；TREE 里以光标节点为叶子恢复（/tree restore）：先居中弹出
+ *     Summarize branch? 三选菜单（No summary / Summarize / Summarize with custom prompt，自定义指令再弹一个输入框），
+ *     光标就在活动叶子上或 pi 设置了 branchSummary.skipPrompt 时不问、直接进入；
+ *     成功后关闭面板，失败原因留在 footer 里、面板不关；等待 pi 切换 / 写摘要期间面板隐藏且不响应按键
  *   - 其余面板动作（删除、fork…）只做分发，具体实现留给后续任务
  */
 
@@ -32,14 +36,16 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, Focusable } from "@earendil-works/pi-tui";
 import { type Binding, compileKeymap, labelsFor, matchesKeyId, resolveKeys } from "../config/keys.ts";
 import { DEFAULT_KEYMAP, FOCUS_ACTIONS, PANE_TITLES } from "../config/keymap.ts";
-import { LEFT_COLUMN_RATIO, PANE_IDS } from "../constants.ts";
+import { LEFT_COLUMN_RATIO, PANE_IDS, SUMMARIZING_STATUS } from "../constants.ts";
 import type {
 	ActionId,
 	ContentBlock,
+	EnterOutcome,
 	Keymap,
 	ListScope,
 	PaneId,
 	PanelMode,
+	RestoreOptions,
 	SessionRow,
 	SessionSortMode,
 	TreeFilter,
@@ -53,7 +59,16 @@ import { renderFooter } from "./widgets/footer.ts";
 import { helpLineCount, overlayHelp } from "./widgets/help-overlay.ts";
 import { InputDialog } from "./widgets/input-dialog.ts";
 import { LABEL_DIALOG_HINTS, LABEL_DIALOG_TITLE } from "./widgets/label-dialog.ts";
+import {
+	CUSTOM_PROMPT_HINTS,
+	CUSTOM_PROMPT_INDEX,
+	CUSTOM_PROMPT_TITLE,
+	SUMMARY_MENU,
+	SUMMARY_MENU_HINTS,
+	SUMMARY_MENU_TITLE,
+} from "./widgets/restore-dialog.ts";
 import { renderSearchStatus, SearchBar } from "./widgets/search-bar.ts";
+import { SelectDialog } from "./widgets/select-dialog.ts";
 
 /** Mutable UI state of the panel. Kept in one place for easy debugging. */
 export interface PanelState {
@@ -104,30 +119,44 @@ export interface DataSource {
 
 /**
  * Side effects injected by the entry point (they wrap src/actions/*).
- * 面板本身不做 I/O：复制、打标签都通过这里交给 actions 层。
+ * 面板本身不做 I/O：复制、打标签、恢复会话都通过这里交给 actions 层。
  */
 export interface ActionSource {
 	/** Copy the node's full text to the clipboard; `false` = the entry has no text. */
 	copyNodeText(sessionFile: string, entryId: string): Promise<boolean>;
 	/** Set, or clear with `undefined`, the label of a node. */
 	setNodeLabel(sessionFile: string, entryId: string, label: string | undefined): Promise<void>;
+	/** Enter in SESSIONS: make pi show this session (/resume). Rejects with the reason on failure. */
+	resumeSession(sessionFile: string): Promise<EnterOutcome>;
+	/**
+	 * Enter in TREE: continue the conversation from this node (/tree restore),
+	 * switching session first if needed; `options` is the summary choice.
+	 */
+	restoreNode(sessionFile: string, entryId: string, options: RestoreOptions): Promise<EnterOutcome>;
 }
 
 export interface LazyPanelOptions {
 	theme: Theme;
 	data: DataSource;
-	/** Optional: without it y / T report that actions are unavailable. */
+	/** Optional: without it y / T / Enter report that actions are unavailable. */
 	actions?: ActionSource;
 	/** Terminal height available to the panel, re-read on every render. */
 	getHeight: () => number;
 	requestRender: () => void;
 	onClose: () => void;
+	/**
+	 * Temporarily hide / show the panel while pi switches sessions, so prompts pi
+	 * raises meanwhile (e.g. "session cwd not found") are visible and get the keys.
+	 */
+	setHidden?: (hidden: boolean) => void;
 	/** Resolved keymap (defaults deep-merged with the user file). */
 	keymap?: Keymap;
 	initialState?: Partial<PanelState>;
 	leftColumnRatio?: number;
 	/** Initial footer status, e.g. config warnings. */
 	status?: string;
+	/** pi's `branchSummary.skipPrompt`: TREE Enter restores without asking (no summary). */
+	skipSummaryPrompt?: boolean;
 }
 
 /** Max time between keys of a multi-key sequence such as "gg". */
@@ -135,6 +164,14 @@ const PENDING_TIMEOUT_MS = 1000;
 
 /** Delay before (re)loading the session under the cursor while the user is still moving. */
 const SESSION_LOAD_DEBOUNCE_MS = 40;
+
+/** Node TREE Enter is restoring to while its menu / custom prompt is open. */
+interface RestoreTarget {
+	file: string;
+	entryId: string;
+	/** "role: text" of the node, shown in the dialog title bars. */
+	subject: string;
+}
 
 export class LazyPanel implements Component, Focusable {
 	readonly state: PanelState;
@@ -150,10 +187,16 @@ export class LazyPanel implements Component, Focusable {
 	private disposed = false;
 	private readonly ratio: number;
 	private readonly searchBar: SearchBar;
-	/** Shared centered text prompt: labelling a node now, renaming a session later. */
+	/** Shared centered text prompt: labelling a node, the custom summary instructions, renaming a session later. */
 	private readonly inputDialog: InputDialog;
+	/** Shared centered menu: the "Summarize branch?" choice now, confirmations and pickers later. */
+	private readonly selectDialog: SelectDialog;
 	/** Node being labelled while `mode === "label"`. */
 	private labelTarget: { file: string; entryId: string } | undefined;
+	/** Node being restored to while `mode === "restore"`. */
+	private restoreTarget: RestoreTarget | undefined;
+	/** True while an Enter action is waiting for pi (keys are ignored, the panel is hidden). */
+	private entering = false;
 	/** Raw key chunks of an unfinished multi-key sequence. */
 	private pending: string[] = [];
 	private pendingTimer: ReturnType<typeof setTimeout> | undefined;
@@ -180,6 +223,10 @@ export class LazyPanel implements Component, Focusable {
 			onChange: () => this.o.requestRender(),
 		});
 		this.inputDialog = new InputDialog({
+			theme: o.theme,
+			onChange: () => this.o.requestRender(),
+		});
+		this.selectDialog = new SelectDialog({
 			theme: o.theme,
 			onChange: () => this.o.requestRender(),
 		});
@@ -366,15 +413,24 @@ export class LazyPanel implements Component, Focusable {
 	handleInput(data: string): void {
 		if (this.disposed) return;
 
+		// 正在等 pi 切换会话 / 跳转节点：面板已隐藏，这期间的按键一律忽略，避免半途关掉面板。
+		if (this.entering) return;
+
 		// 搜索模式：所有按键交给输入框（Enter/Esc 由 SearchBar 回调处理）。
 		if (this.state.mode === "search") {
 			this.searchBar.handleInput(data);
 			return;
 		}
 
-		// 居中输入弹窗打开时（打标签等）：同理全部交给弹窗。
+		// 居中输入弹窗打开时（打标签、自定义摘要指令）：同理全部交给弹窗。
 		if (this.inputDialog.isOpen) {
 			this.inputDialog.handleInput(data);
+			return;
+		}
+
+		// 居中选择菜单打开时（Summarize branch?）：j/k/Enter/Esc 都由菜单处理。
+		if (this.selectDialog.isOpen) {
+			this.selectDialog.handleInput(data);
 			return;
 		}
 
@@ -521,6 +577,12 @@ export class LazyPanel implements Component, Focusable {
 				return;
 			case "tree-label":
 				this.openLabelInput();
+				return;
+			case "session-resume":
+				void this.resumeSession();
+				return;
+			case "tree-restore":
+				this.restoreTreeNode();
 				return;
 			default:
 				this.setStatus(`${action}: not implemented yet`);
@@ -729,6 +791,159 @@ export class LazyPanel implements Component, Focusable {
 	}
 
 	// -----------------------------------------------------------------------
+	// Enter: resume a session / restore to a tree node
+	// -----------------------------------------------------------------------
+
+	/** Enter in SESSIONS: switch pi to the session under the cursor (/resume), then close. */
+	private async resumeSession(): Promise<void> {
+		const row = this.sessions[this.state.cursor.sessions];
+		if (!row) {
+			this.setStatus("no session selected");
+			return;
+		}
+		const actions = this.o.actions;
+		if (!actions) {
+			this.setStatus("resume: actions unavailable");
+			return;
+		}
+		await this.enter("resume", () => actions.resumeSession(row.file));
+	}
+
+	/**
+	 * Enter in TREE: continue from the node under the cursor (/tree restore), then close.
+	 *
+	 * 和 pi 内置 /tree 一样先问怎么处理被放弃的分支（Summarize branch? 菜单）；光标就在
+	 * 活动叶子上时 Enter 等于直接进入该会话，不问；pi 的 branchSummary.skipPrompt 打开时也不问。
+	 */
+	private restoreTreeNode(): void {
+		const target = this.currentTreeNode();
+		if (!target) return;
+		if (!this.o.actions) {
+			this.setStatus("restore: actions unavailable");
+			return;
+		}
+		const restore: RestoreTarget = {
+			file: target.file,
+			entryId: target.row.entryId,
+			subject: `${target.row.role}: ${target.row.text}`,
+		};
+		if (target.row.isLeaf || this.o.skipSummaryPrompt) {
+			void this.runRestore(restore, { summarize: false });
+			return;
+		}
+		this.openSummaryMenu(restore, 0);
+	}
+
+	/** The three-way menu of /tree; `index` is where the cursor starts (Esc from the custom prompt comes back onto that entry). */
+	private openSummaryMenu(target: RestoreTarget, index: number): void {
+		this.restoreTarget = target;
+		this.state.mode = "restore";
+		this.selectDialog.open({
+			title: SUMMARY_MENU_TITLE,
+			items: SUMMARY_MENU.map((m) => m.label),
+			initialIndex: index,
+			subject: target.subject,
+			hints: SUMMARY_MENU_HINTS,
+			onSelect: (i) => this.chooseSummary(i),
+			// Esc：退回 tree 面板，什么都不做（pi 是退回 tree 选择器）。
+			onCancel: () => this.closeRestoreDialogs(),
+		});
+		this.o.requestRender();
+	}
+
+	/** Enter in the menu: restore right away, or ask for the custom instructions first. */
+	private chooseSummary(index: number): void {
+		const target = this.restoreTarget;
+		const choice = SUMMARY_MENU[index]?.choice;
+		this.closeRestoreDialogs();
+		if (!target || !choice) return;
+		switch (choice) {
+			case "none":
+				void this.runRestore(target, { summarize: false });
+				return;
+			case "summarize":
+				void this.runRestore(target, { summarize: true });
+				return;
+			case "custom":
+				this.openCustomPrompt(target);
+				return;
+		}
+	}
+
+	/** "Summarize with custom prompt": a one-line prompt for the summarizer instructions (pi uses a multi-line editor). */
+	private openCustomPrompt(target: RestoreTarget): void {
+		this.restoreTarget = target;
+		this.state.mode = "restore";
+		this.inputDialog.open({
+			title: CUSTOM_PROMPT_TITLE,
+			subject: target.subject,
+			hints: CUSTOM_PROMPT_HINTS,
+			onSubmit: (v) => this.submitCustomPrompt(v),
+			// Esc：退回三选菜单，光标停在 custom prompt 那一项，和 pi 一致。
+			onCancel: () => {
+				this.closeRestoreDialogs();
+				this.openSummaryMenu(target, CUSTOM_PROMPT_INDEX);
+			},
+		});
+		this.inputDialog.focused = this._focused;
+		this.o.requestRender();
+	}
+
+	/** Enter in the custom prompt: summarize with the instructions (blank = pi's default prompt). */
+	private submitCustomPrompt(value: string): void {
+		const target = this.restoreTarget;
+		this.closeRestoreDialogs();
+		if (!target) return;
+		const instructions = value.trim();
+		void this.runRestore(target, instructions ? { summarize: true, customInstructions: instructions } : { summarize: true });
+	}
+
+	private closeRestoreDialogs(): void {
+		this.state.mode = "normal";
+		this.selectDialog.close();
+		this.inputDialog.close();
+		this.inputDialog.focused = false;
+		this.restoreTarget = undefined;
+		this.o.requestRender();
+	}
+
+	/** Hand the choice to the actions layer; a summary takes a while, so the footer says so meanwhile. */
+	private async runRestore(target: RestoreTarget, options: RestoreOptions): Promise<void> {
+		const actions = this.o.actions;
+		if (!actions) return;
+		await this.enter(
+			"restore",
+			() => actions.restoreNode(target.file, target.entryId, options),
+			options.summarize ? SUMMARIZING_STATUS : undefined,
+		);
+	}
+
+	/**
+	 * Run an action that hands control back to pi.
+	 *
+	 * 等待期间把面板藏起来并忽略按键：pi 切换时可能自己弹提示（比如会话目录不存在要不要
+	 * 继续），藏起来它才看得见、按键才到得了它。成功就关闭面板；失败把原因写进 footer，
+	 * 面板重新显示出来。`progress` 是等待期间 footer 的文字，默认 `${what}…`。
+	 */
+	private async enter(what: string, run: () => Promise<EnterOutcome>, progress?: string): Promise<void> {
+		if (this.entering) return;
+		this.entering = true;
+		this.setStatus(progress ?? `${what}…`);
+		this.o.setHidden?.(true);
+		try {
+			await run();
+			if (this.disposed) return;
+			this.close();
+		} catch (err) {
+			if (this.disposed) return;
+			this.o.setHidden?.(false);
+			this.setStatus(`${what} failed: ${(err as Error).message}`);
+		} finally {
+			this.entering = false;
+		}
+	}
+
+	// -----------------------------------------------------------------------
 	// Lifecycle
 	// -----------------------------------------------------------------------
 
@@ -822,22 +1037,26 @@ export class LazyPanel implements Component, Focusable {
 		if (this.state.helpOpen) {
 			lines = overlayHelp(lines, { keymap: this.keymap, focus: this.state.focus, scroll: this.state.helpScroll, theme }, width);
 		}
-		// 输入弹窗打开时画在三个面板上面（lazygit commit 弹窗的效果）。
+		// 弹窗打开时画在三个面板上面（lazygit commit 弹窗的效果）；输入框和菜单不会同时打开。
 		if (this.inputDialog.isOpen) {
 			lines = this.inputDialog.overlay(lines, width);
+		}
+		if (this.selectDialog.isOpen) {
+			lines = this.selectDialog.overlay(lines, width);
 		}
 		return [...lines, this.renderBottom(width)].map((l) => fit(l, width));
 	}
 
-	/** Footer row: search bar while typing, the dialog's keys in label mode, search status after Enter, otherwise hints. */
+	/** Footer row: search bar while typing, the open dialog's keys, search status after Enter, otherwise hints. */
 	private renderBottom(width: number): string {
 		if (this.state.mode === "search") {
 			return this.searchBar.render(width)[0] ?? "";
 		}
 		const footer = { mode: this.state.mode, focus: this.state.focus, keymap: this.keymap, scope: this.state.scope, theme: this.o.theme };
 		// 弹窗打开时 footer 只显示弹窗自己的按键提示（如 Enter save / Esc cancel / empty removes）。
-		if (this.inputDialog.isOpen) {
-			return renderFooter({ ...footer, hints: this.inputDialog.hints }, width)[0]!;
+		const dialog = this.inputDialog.isOpen ? this.inputDialog : this.selectDialog.isOpen ? this.selectDialog : undefined;
+		if (dialog) {
+			return renderFooter({ ...footer, hints: dialog.hints }, width)[0]!;
 		}
 		if (this.state.searchQuery) {
 			return renderSearchStatus({ query: this.state.searchQuery, current: 0, total: 0, theme: this.o.theme }, width);

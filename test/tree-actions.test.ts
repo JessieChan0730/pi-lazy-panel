@@ -11,7 +11,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { labelNode } from "../src/actions/tree-actions.ts";
-import { loadNodeText, loadTree } from "../src/data/tree.ts";
+import { effectiveLeafIds, loadNodeText, loadTree } from "../src/data/tree.ts";
 
 type AnyMessage = Parameters<SessionManager["appendMessage"]>[0];
 
@@ -88,4 +88,31 @@ test("labelNode persists to the file for other sessions and goes through pi.setL
 		[s.assistantId, "x"],
 		[s.assistantId, undefined],
 	]);
+});
+
+test("loadTree marks the rows Enter treats as the leaf (isLeaf), following the label entries pi appends", async (t) => {
+	const dir = mkdtempSync(join(tmpdir(), "lazy-panel-"));
+	t.after(() => rmSync(dir, { recursive: true, force: true }));
+	const s = makeSession(dir);
+	const leafOf = async () => (await loadTree(s.file)).filter((r) => r.isLeaf).map((r) => r.entryId);
+
+	// user → assistant → assistant(error): only the raw leaf
+	assert.deepEqual(await leafOf(), [s.errorId]);
+
+	// a label on the last message is appended as a new leaf entry; the message still counts as the leaf
+	const m = SessionManager.open(s.file);
+	const labelId = m.appendLabelChange(s.errorId, "here");
+	assert.deepEqual([...effectiveLeafIds(m)], [labelId, s.errorId]);
+	assert.deepEqual(await leafOf(), [s.errorId]);
+
+	// a new user message after it moves the leaf on: the raw leaf always counts (pi: "Already at this point"),
+	// but a user message that is not the raw leaf never does
+	const nextId = m.appendMessage({ role: "user", content: [{ type: "text", text: "next" }], timestamp: 4 } as unknown as AnyMessage);
+	assert.deepEqual(await leafOf(), [nextId]);
+	m.appendLabelChange(nextId, "after");
+	assert.deepEqual(await leafOf(), []);
+	// earlier rows stay on the active branch without being the leaf
+	const rows = await loadTree(s.file);
+	assert.equal(rows.find((r) => r.entryId === s.errorId)?.isLeaf, undefined);
+	assert.equal(rows.find((r) => r.entryId === s.errorId)?.onActiveBranch, true);
 });

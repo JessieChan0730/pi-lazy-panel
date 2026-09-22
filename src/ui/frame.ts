@@ -92,6 +92,11 @@ export function overlayCentered(base: string[], box: string[], width: number, te
 	return out;
 }
 
+/** Width of a centered dialog box (input prompt, menu) for a `termW`-column terminal. */
+export function dialogWidth(termW: number): number {
+	return Math.max(24, Math.min(termW - 4, 60));
+}
+
 /** Place `left` and `right` column line arrays side by side. Both must already be the right width. */
 export function sideBySide(left: string[], right: string[], leftWidth: number, rightWidth: number): string[] {
 	const n = Math.max(left.length, right.length);
