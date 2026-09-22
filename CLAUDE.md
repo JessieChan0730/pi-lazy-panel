@@ -56,19 +56,21 @@ src/
 ├── constants.ts              # 常量：扩展 id、命令名、布局比例、面板 id
 ├── ui/                       # 渲染层：pi-tui Component。不做 I/O，不调用 pi 会话 API
 │   ├── app.ts                # 根组件 LazyPanel + PanelState；数据通过 DataSource 接口注入
-│   ├── frame.ts              # 纯函数：画边框、左右拼列、按可见宽度补齐/截断、居中叠加弹窗（overlayCentered）、弹窗宽度（dialogWidth）
+│   ├── frame.ts              # 纯函数：画边框（FRAME_DIVIDER 哨兵行画 ├──┤）、左右拼列、按可见宽度补齐/截断、居中叠加弹窗（overlayCentered）、弹窗宽度（dialogWidth）
+│   ├── tree-lines.ts         # 纯函数：按 parentId 算 pi /tree 风格的树线前缀（treePrefixes），小面板折叠深层级（capPrefix）
 │   ├── panes/
 │   │   ├── sessions-pane.ts  # 左上 SESSIONS 面板
-│   │   ├── tree-pane.ts      # 左下 TREE 面板
+│   │   ├── tree-pane.ts      # 左下 TREE 面板：树线最多 3 层，更深折叠成 `… `；renderTreeRow（光标 › + 树线 + 活动路径 • + [label] + 时间 + role + 正文）和树对话框共用
 │   │   └── content-pane.ts   # 右侧 CONTENT 面板，用 pi-tui 的 Markdown 渲染消息
 │   └── widgets/
 │       ├── footer.ts         # 底部一行：模式 + 当前面板快捷键提示（弹窗打开时显示弹窗的提示）
-│       ├── prompt-bar.ts     # 底部一行输入的通用组件（包装 pi-tui Input），搜索栏基于它
-│       ├── search-bar.ts     # 底部搜索输入：显示 `搜索:`（匹配/高亮 TODO）
+│       ├── prompt-bar.ts     # 底部一行输入的通用组件（包装 pi-tui Input），搜索栏和树对话框的搜索行基于它
+│       ├── search-bar.ts     # 底部搜索输入：显示 `搜索:`（匹配/高亮 TODO；TREE 面板里禁用，去树对话框搜）
 │       ├── input-dialog.ts   # 通用的居中单行输入弹窗（包装 pi-tui Input，3 行高）：标题 / 预填值 / 提示 / 回调在 open 时传入
 │       ├── label-dialog.ts   # T 打标签：InputDialog 的预设（标题 + footer 提示）；给 session 起名等场景照此加预设
 │       ├── select-dialog.ts  # 通用的居中选择菜单（j/k/方向键移动、Enter 确认、Esc 取消，高度 = 选项数 + 2）：标题 / 选项 / 回调在 open 时传入
 │       ├── restore-dialog.ts # TREE Enter 的预设：Summarize branch? 三选菜单的标题 / 选项 / 提示 + 自定义摘要指令输入框的标题 / 提示
+│       ├── tree-dialog.ts    # a 打开的完整树对话框：顶部搜索行、中间不折叠的树、底部提示，几乎占满终端；目前只有 Esc/q 关闭，搜索 / 过滤 / 移动 / y / T / Enter 是下个任务
 │       ├── confirm-dialog.ts # 删除 / fork 前的确认框（TODO，可基于 SelectDialog）
 │       ├── help-overlay.ts   # ? 快捷键帮助：居中弹窗，内容来自最终 keymap
 │       └── session-info-dialog.ts  # i 会话信息弹窗（TODO）
@@ -77,11 +79,11 @@ src/
 │   └── tree-actions.ts       # restore / label / copy（已完成；restore 把 No summary / Summarize / custom prompt 透传给 navigateTree）
 ├── data/                     # 数据层：只读适配 pi 的 SessionManager，产出纯数据行，无 UI
 │   ├── sessions.ts           # SessionManager.list/listAll -> SessionRow[]；sortSessions
-│   ├── tree.ts               # getTree -> TreeRow[]（含 isLeaf 标记）；applyTreeFilter（d/t/u/l/a）；isEffectiveLeaf
+│   ├── tree.ts               # getTree -> TreeRow[]（parentId 指向最近的"也是行"的祖先，含 isLeaf 标记；kind 分 message/tool/system/meta，和 pi /tree 一致）；applyTreeFilter（default 只藏 meta、no-tools 再藏工具结果，过滤后重新挂父节点）；isEffectiveLeaf
 │   ├── content.ts            # getBranch -> ContentBlock[]；loadSessionInfo；resolveContentLeaf
 │   └── search.ts             # 纯函数：解析 name:/model:/path:/tag:/after:/before: 查询（TODO）
 ├── config/
-│   ├── keymap.ts             # 默认键位 + 动作描述 + footer 提示顺序（纯数据）
+│   ├── keymap.ts             # 默认键位 + 动作描述 + footer 提示顺序（纯数据）；DISABLED_GLOBAL_ACTIONS 列出在某个面板里关掉的全局动作（TREE 里的 / n N）
 │   ├── keys.ts               # 纯函数：chord 解析（ctrl+d / G / gg）、按键匹配、按 scope 解析 ActionId
 │   ├── config.ts             # 唯一知道 ~/.pi/agent/lazy-panel.json 的模块，深合并用户配置（null 解绑）
 │   └── pi-settings.ts        # 唯一读 pi 自己 settings.json 的模块（SettingsManager.create 只读），目前只取 branchSummary.skipPrompt

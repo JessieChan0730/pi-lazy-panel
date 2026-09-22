@@ -162,12 +162,12 @@
 
 目前此插件的 tree 面板用的还是缩进的方式，这有点不美观，所以需要做如下修改：
 
-1. tree 面板左侧可以添加这些树形结构的线条
-2. 目前tree面板太小了，肯定不能无限缩进，所以当层级超过3或者4层的时候可以省略，效果可以是... 或者其他的也行
-3. 添加一个 a 快捷键，使用打开一个对话框，其中显示完整的树形结构，UI 可以参考 herdr 中 prefix + g 打开的对话框的效果
-4. 对话框样式是顶部为搜索框，中间为完成的树形结构，底部是快捷键提示，可以做的足够大
-5. 外面的tree面板保留 y/T 快捷键的功能，删除掉 / 和 d/t/u/l/a 这两个快捷键的功能(这个两个功能移动到对话框)，因为只是部分数据，所以搜索和过滤没啥作用
-6. 对话框快捷键盘：
+1. ~~tree 面板左侧可以添加这些树形结构的线条~~
+2. ~~目前tree面板太小了，肯定不能无限缩进，所以当层级超过3或者4层的时候可以省略，效果可以是... 或者其他的也行~~
+3. ~~添加一个 a 快捷键，使用打开一个对话框，其中显示完整的树形结构，UI 可以参考 herdr 中 prefix + g 打开的对话框的效果~~
+4. ~~对话框样式是顶部为搜索框，中间为完成的树形结构，底部是快捷键提示，可以做的足够大~~
+5. ~~外面的tree面板保留 y/T 快捷键的功能，删除掉 / 和 d/t/u/l/a 这两个快捷键的功能(这个两个功能移动到对话框)，因为只是部分数据，所以搜索和过滤没啥作用~~
+6. 对话框快捷键盘（下个任务，本次只做了 Esc/q 关闭）：
 
 - / 搜索，聚焦到搜索框，实时搜索，用户输入关键字，下面列表实时改变
 - y: 复制消息内容（类似于 /tree 里面 ctrl + x 快捷键的功能）
@@ -177,7 +177,29 @@
 - q: 退出对话框
 - exit: 如果当前聚焦在搜索框，则退出搜索框，聚焦在树形列表上，如果在树形列表上则直接退出对话框
 - enter: 和外面的tree面板表现一样即可
-- o: 切换展示视图
+- 折叠 / 展开分支：和 pi /tree 一样，连接符上 `⊟` 表示可折叠、`⊞` 表示已折叠，折叠后隐藏该节点的所有后代；pi 只允许折叠"分支段的起点"（根节点，或父节点有多个子节点的节点），键位是 ctrl+← 折叠 / ctrl+→ 展开（不可折叠时改为跳到上 / 下一个分支段起点）。对话框里键位不和面板冲突，可以直接用 h 折叠 / l 展开。
+- ~o: 切换展示视图~ 这个暂时不做
+
+实现说明（2026-09-22，对话框 UI 对齐 pi /tree）：
+
+- 拿本机一份有分支的真实会话对比后发现：pi 的分支实际挂在 `[system]` 系统提示词节点下（每次 /resume 或 /tree restore 再继续对话，pi 会先追加一条新的 system 消息），插件之前把 system 消息归到 `meta` 默认隐藏，过滤后重新挂父节点就把整棵树压平成了几条独立的链，树线一根都画不出来。现在 `TreeRow.kind` 拆成四类和 pi 一致：`message`（user / assistant）、`tool`（工具结果）、`system`（system 提示词、bash 执行、compaction、branch summary，pi 默认就显示的骨架节点）、`meta`（model / thinking / name 这些记账条目，pi 默认隐藏）。`TreeFilter` 的 `tools` 改名 `no-tools`（对应 pi 的 ctrl+t）：`default` 只隐藏 meta（和 pi 默认一样能看到工具结果），`no-tools` 再去掉工具结果。
+- 行文字改成 pi 的中括号标签风格：`[system]`、`[bash]: cmd`、`[compaction: 12k tokens]`、`[branch summary]: …`、`[model: xxx]`、`[thinking: off]`、`[name: xxx]`；system 行不再带 `system: ` 前缀，整行 muted。
+- 活动路径标记：和 pi 一样，活动分支上的节点在文字前加 accent 色的 `• `，一眼能看出当前对话走的是哪条路；非活动分支仍然 dim。
+- 对话框和小面板共用 `renderTreeRow`，所以两边同步变化；小面板仍然只保留最里面 3 层树线，外面折叠成 `… `。
+
+实现说明（2026-09-22，1–5 项）：
+
+- 树线：先看了 pi 0.85.1 `tree-selector.js` 的 `flattenTree` / `render`，规则照搬到新模块 `ui/tree-lines.ts` 的 `treePrefixes`：父节点有多个子节点时子节点带 `├` / `└` 连接符，连接符第二格 `⊟` 表示有子节点、`─` 表示叶子；分叉处缩进 +1 层，分叉后的第一代再 +1 层做视觉分组，单链不缩进；连接符行的后代在该列画 `│`，最后一个兄弟之后改画空白；每层 3 列。多个根时挂在虚拟根下、不画连接符（和 pi 一致）。
+- 数据层：`TreeRow` 去掉 `depth`，`parentId` 改为指向"最近的一个也是行的祖先"（label 这类不显示的条目被跳过），树线全靠 `parentId` 画。`applyTreeFilter` 过滤掉中间节点后把子节点挂到最近保留的祖先上（`rows` 是先序的，一遍算完），过滤后仍是一片合法的森林。
+- 小面板（`ui/panes/tree-pane.ts`）：`renderTreeRow` 抽成共用函数（光标 `› ` + 树线 + `[label]` + 时间 + `role:` + 正文），`capPrefix` 只保留最里面 `MAX_LEVELS`（3）层、更外面的折叠成 `… `；标题右侧不再显示过滤名，只显示 `2/12`。
+- 对话框（`ui/widgets/tree-dialog.ts`，`TreeDialog`）：`a` 打开，占满终端只留 2 列 / 1 行边距；顶部一行是 `搜索:` 输入框（`PromptBar`，本次静态）、`├──┤` 分隔线、中间是不折叠的完整树（光标从面板当前节点开始）、再一条分隔线、底部一行按键提示；标题右侧显示 `3/12 · default`。`frame.ts` 新增 `FRAME_DIVIDER` 哨兵：body 里出现它就画 `├────┤`。`PanelMode` 新增 `tree`（footer 左侧显示 `TREE`，右侧显示对话框的提示）。本次只有 Esc / q 关闭，其他按键一律吞掉。
+- 键位：`tree` scope 删掉 `tree-filter-*` 五个动作（`ActionId`、默认键位、`ACTION_DESCRIPTIONS`、`HELP_GROUPS`、footer 提示一并移除），新增 `tree-open`（默认 `a`，footer 显示 `a Tree`）。`/`、`n`、`N` 是 global 绑定，不能靠删键位去掉，所以 `keymap.ts` 新增 `DISABLED_GLOBAL_ACTIONS`：TREE 聚焦时这三个动作不执行，footer 提示 `search: not available here, press a to open the tree dialog`，? 帮助里也不列出。`state.treeFilter` 保留（对话框过滤下个任务用）。
+- 顺手：`PromptBar` 的 pi-tui `Input` 改成 `prompt: ""`，去掉输入框前多余的 `> `（搜索栏之前一直是 `搜索: > `）。
+- 测试：`test/ui.test.ts` 加了 `treePrefixes` / `capPrefix` 的几何测试、`applyTreeFilter` 重新挂父节点、小面板折叠层级而对话框不折叠、`FRAME_DIVIDER`；`test/panel.test.ts` 加了 TREE 里 `/`、`n`、`u` 不起作用且 footer 提示、`a` 打开对话框的布局（搜索行 / 分隔线 / 光标行 / 提示行 / 边距）、其他键被吞、Esc / q 关闭；帮助弹窗测试改为断言不再出现 Filter 和搜索。
+
+### 优化选中
+
+感觉有个可以优化的小点，比如我打开插件，选择进入 session 中的第二个会话，随后什么也不干再次输入 /lazy-history 打开此插件，发现 session 还是选中了第一个对话，这里能不能优化一下，打开的时候应该自动选中当前的对话，如果是一个新的对话，则选择第一个就行.
 
 ### 跨平台适配（分支 `feat/windows-support`，2026-09-21）
 

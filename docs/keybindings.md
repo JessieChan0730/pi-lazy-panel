@@ -45,8 +45,8 @@ Source of truth: `src/config/keymap.ts`. Override any binding in
 | ~~`?`~~         | ~~Help overlay for the focused pane (`?`/`Esc`/`q` close, `j`/`k` scroll)~~ |
 | ~~`q` / `Ctrl+c`~~ | ~~Quit the panel~~                      |
 | ~~`Esc`~~       | ~~Discard pending keys → clear search → quit~~ |
-| `/`         | Search bar for the focused pane (`Enter` run, `Esc` cancel) |
-| `n` / `N`   | Next / previous search match               |
+| `/`         | Search bar for the focused pane (`Enter` run, `Esc` cancel); off in the tree pane, use `a` there |
+| `n` / `N`   | Next / previous search match (off in the tree pane) |
 
 `C` and `A` are one-way: pressing `A` while already on *All* does nothing.
 
@@ -73,6 +73,9 @@ Source of truth: `src/config/keymap.ts`. Override any binding in
 
 ## Tree pane
 
+The pane only shows a slice of the tree, so search (`/`, `n`, `N`) and the
+filters live in the tree dialog (`a`). Pressing `/` in the pane just points at `a`.
+
 | Key             | Action                                              |
 | --------------- | --------------------------------------------------- |
 | ~~`j` `k` `↑` `↓`~~ | ~~Move cursor~~                                 |
@@ -80,7 +83,21 @@ Source of truth: `src/config/keymap.ts`. Override any binding in
 | ~~`Enter`~~     | ~~Restore to node, like `/tree`: a centered menu asks *No summary / Summarize / Summarize with custom prompt* (`j`/`k`/`↑`/`↓` move, `Enter` pick, `Esc` back to the tree); the custom prompt is a one-line input (`Enter` summarize, `Esc` back to the menu). Switches to that session first when needed. No menu when the node already is the leaf (Enter just closes the panel) or pi's `branchSummary.skipPrompt` is on~~ |
 | ~~`y`~~         | ~~Copy node text (full text, like `Ctrl+x` in `/tree`)~~ |
 | ~~`T`~~         | ~~Add / edit label in a centered dialog, like lazygit's commit popup (`Enter` save, `Esc` cancel, empty removes; same as `Shift+T` in `/tree`)~~ |
-| `d` `t` `u` `L` `a` | Filter: default / tools / user-only / labeled / all |
+| ~~`a`~~         | ~~Open the tree dialog: the whole tree in a big box (search row on top, key hints at the bottom); `Esc` / `q` close it~~ |
+
+## Tree dialog (`a` from the tree pane)
+
+Keys inside the dialog are the next task; today only `Esc` / `q` (close) work
+and everything else is swallowed. Planned: `/` search (live), `j` `k` `↑` `↓`,
+`y` copy, `T` label, `d` `t` `u` `L` `a` filters, `Enter` restore, `h` / `l`
+fold / unfold a branch (`⊟` foldable, `⊞` folded, like `/tree`).
+
+| Key             | Action                                              |
+| --------------- | --------------------------------------------------- |
+| ~~`Esc` / `q`~~ | ~~Close the dialog~~                                |
+| `/`             | Focus the search row (live filtering)               |
+| `d` `t` `u` `L` `a` | Filter: default (hide bookkeeping) / no tool results / user-only / labeled / all |
+| `h` / `l`       | Fold / unfold the branch under the cursor           |
 
 ## Content pane (read-only)
 
