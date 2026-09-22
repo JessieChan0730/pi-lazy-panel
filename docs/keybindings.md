@@ -57,6 +57,11 @@ Source of truth: `src/config/keymap.ts`. Override any binding in
 
 ## Sessions pane
 
+The panel opens with the cursor on the session pi currently has open (so
+TREE / CONTENT show the current conversation); a brand-new session that is
+not listed yet leaves the cursor on the first row. `C` / `A` still start at
+the top after switching scope.
+
 | Key           | Action                                          |
 | ------------- | ----------------------------------------------- |
 | ~~`j` `k` `↑` `↓`~~ | ~~Move cursor~~                           |
