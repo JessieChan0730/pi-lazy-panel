@@ -56,7 +56,7 @@ src/
 ├── constants.ts              # 常量：扩展 id、命令名、布局比例、面板 id
 ├── ui/                       # 渲染层：pi-tui Component。不做 I/O，不调用 pi 会话 API
 │   ├── app.ts                # 根组件 LazyPanel + PanelState；数据通过 DataSource 接口注入
-│   ├── frame.ts              # 纯函数：画边框、左右拼列、按可见宽度补齐/截断、居中叠加弹窗（overlayCentered）
+│   ├── frame.ts              # 纯函数：画边框、左右拼列、按可见宽度补齐/截断、居中叠加弹窗（overlayCentered）、弹窗宽度（dialogWidth）
 │   ├── panes/
 │   │   ├── sessions-pane.ts  # 左上 SESSIONS 面板
 │   │   ├── tree-pane.ts      # 左下 TREE 面板
@@ -67,28 +67,34 @@ src/
 │       ├── search-bar.ts     # 底部搜索输入：显示 `搜索:`（匹配/高亮 TODO）
 │       ├── input-dialog.ts   # 通用的居中单行输入弹窗（包装 pi-tui Input，3 行高）：标题 / 预填值 / 提示 / 回调在 open 时传入
 │       ├── label-dialog.ts   # T 打标签：InputDialog 的预设（标题 + footer 提示）；给 session 起名等场景照此加预设
-│       ├── confirm-dialog.ts # 删除 / fork 前的确认框（TODO）
+│       ├── select-dialog.ts  # 通用的居中选择菜单（j/k/方向键移动、Enter 确认、Esc 取消，高度 = 选项数 + 2）：标题 / 选项 / 回调在 open 时传入
+│       ├── restore-dialog.ts # TREE Enter 的预设：Summarize branch? 三选菜单的标题 / 选项 / 提示 + 自定义摘要指令输入框的标题 / 提示
+│       ├── confirm-dialog.ts # 删除 / fork 前的确认框（TODO，可基于 SelectDialog）
 │       ├── help-overlay.ts   # ? 快捷键帮助：居中弹窗，内容来自最终 keymap
 │       └── session-info-dialog.ts  # i 会话信息弹窗（TODO）
-├── actions/                  # 副作用层：每个函数包装一个 pi 命令/API，不弹窗，由调用方先确认（TODO）
-│   ├── session-actions.ts    # resume / delete / rename / fork / export / import / share / clone …
-│   └── tree-actions.ts       # restore / label / copy
+├── actions/                  # 副作用层：每个函数包装一个 pi 命令/API，不弹窗，由调用方先确认
+│   ├── session-actions.ts    # resume（已完成）/ delete / rename / fork / export / import / share / clone …（TODO）
+│   └── tree-actions.ts       # restore / label / copy（已完成；restore 把 No summary / Summarize / custom prompt 透传给 navigateTree）
 ├── data/                     # 数据层：只读适配 pi 的 SessionManager，产出纯数据行，无 UI
 │   ├── sessions.ts           # SessionManager.list/listAll -> SessionRow[]；sortSessions
-│   ├── tree.ts               # getTree -> TreeRow[]；applyTreeFilter（d/t/u/l/a）
+│   ├── tree.ts               # getTree -> TreeRow[]（含 isLeaf 标记）；applyTreeFilter（d/t/u/l/a）；isEffectiveLeaf
 │   ├── content.ts            # getBranch -> ContentBlock[]；loadSessionInfo；resolveContentLeaf
 │   └── search.ts             # 纯函数：解析 name:/model:/path:/tag:/after:/before: 查询（TODO）
 ├── config/
 │   ├── keymap.ts             # 默认键位 + 动作描述 + footer 提示顺序（纯数据）
 │   ├── keys.ts               # 纯函数：chord 解析（ctrl+d / G / gg）、按键匹配、按 scope 解析 ActionId
-│   └── config.ts             # 唯一知道 ~/.pi/agent/lazy-panel.json 的模块，深合并用户配置（null 解绑）
+│   ├── config.ts             # 唯一知道 ~/.pi/agent/lazy-panel.json 的模块，深合并用户配置（null 解绑）
+│   └── pi-settings.ts        # 唯一读 pi 自己 settings.json 的模块（SettingsManager.create 只读），目前只取 branchSummary.skipPrompt
 └── utils/
     └── format.ts             # 纯格式化：时间、token、费用、路径缩写
 
 test/
 ├── smoke.test.ts             # 键位表、搜索解析的冒烟测试
 ├── keymap.test.ts            # chord 解析、多键序列、用户配置合并
-├── panel.test.ts             # LazyPanel 行为：焦点切换、C/A、? 帮助、/ 搜索栏、自定义键位
+├── panel.test.ts             # LazyPanel 行为：焦点切换、C/A、? 帮助、/ 搜索栏、自定义键位、y/T/Enter（含摘要菜单）、InputDialog / SelectDialog
+├── tree-actions.test.ts      # 临时会话文件上验证 loadNodeText / labelNode 的分流、loadTree 的 isLeaf 标记
+├── session-actions.test.ts   # 临时会话文件上验证 isEffectiveLeaf / resumeSession / restoreNode 的分流与摘要选项透传
+├── pi-settings.test.ts       # 临时目录上验证 branchSummary.skipPrompt 的全局 / 项目两级读取
 └── ui.test.ts                # 格式化、frame 几何、树过滤
 
 docs/keybindings.md           # 默认快捷键表，新增 ActionId 时同步更新
@@ -115,6 +121,7 @@ AGENTS.md                     # 仅指向本文件，规则统一在这里维护
 9. `/lazy-history` 仅适用于 TUI 模式；请务必在 `src/index.ts` 中保留 `ctx.mode !== "tui"` 的条件判断。
 10. 模块之间尽量低耦合
 11. 更新 design, progress, keybindings 这些文档，提交消息固定为 `chore(doc): update doc by $progress` 后面 $变量 根据实际修改的文档来定
+12. 新增功能一定要考虑跨平台，不要使用某些特定平台的特性，比如路径使用`~/` 这个在 windows下是会报错的。
 
 ## 重要文档
 

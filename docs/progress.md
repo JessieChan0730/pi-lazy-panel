@@ -93,6 +93,52 @@
 - 新增场景的做法：写一个预设（标题 + 提示），在动作里 `this.inputDialog.open({...})` 并把 `state.mode` 设成对应模式（footer 左侧显示的大写模式名）。
 - 测试：`test/panel.test.ts` 加了 `InputDialog` 的组件测试（3 行、宽度、二次 open 换 spec 和回调）；T 测试补了底边框紧贴输入行的断言。
 
+### Enter 恢复会话 / 跳转节点（2026-09-22）
+
+背景：目前插件只能"看"，不能"用"。三个面板的浏览、y 复制、T 打标签都有了，但选中一个会话或节点之后没有办法进入它。这一步要把 `/resume` 和 `/tree` 两个核心命令的本体接进来，让面板真正可用。
+
+- ~~SESSIONS 面板 Enter：切换到光标所在会话（对应 `/resume`），成功后关闭面板回到 pi 对话。~~
+- ~~TREE 面板 Enter：以光标所在节点为叶子恢复会话（对应 `/tree` 的 restore），成功后关闭面板。pi 自带的 `/tree` 在离开分支时会问 No summary / Summarize / Summarize with custom prompt，本次只做 No summary，选择弹窗后续再加。~~
+- ~~分流：目标是 pi 当前打开的会话时走 pi 内存里的 API；目标是其他历史会话时先切会话再 restore。分流方式和 T 打标签的 `pi.setLabel` / `SessionManager.open` 一致，尽量复用。~~
+- ~~光标节点就是当前活动叶子时，Enter 等价于直接切到该会话，不重复 restore。~~
+- ~~如果 pi 正在流式输出或有未完成的工具调用，切换前是否需要确认，取决于 pi API 的行为，动手前先查 `node_modules/@earendil-works/pi-coding-agent/docs/extensions.md`，不猜。~~
+- ~~失败原因（文件不存在、节点不存在、API 拒绝）在 footer 提示，不关闭面板。~~
+- ~~键位：Enter 在 SESSIONS / TREE 两个 scope 各绑一个 ActionId，同步更新 `ACTION_DESCRIPTIONS`、? 帮助、footer 提示和 `docs/keybindings.md`。~~
+- ~~测试：`test/panel.test.ts` 补面板行为（Enter 调用 actions、失败不关闭）；`test/tree-actions.test.ts` 或新建 `test/session-actions.test.ts` 用临时会话文件验证分流。~~
+
+实现说明（2026-09-22）：
+
+- 先查了 pi 0.85.1 的行为（`docs/extensions.md` + `dist/core/agent-session.js`、`dist/modes/interactive/interactive-mode.js`）：`ctx.switchSession` 内部会先 `session.abort()` 再切换，内置 `/resume` 不做确认；`ctx.navigateTree` 在流式输出时直接抛错 "Wait for the current response to finish…"，内置 `/tree` 的做法是用户选定节点后先中断当前回复再跳。插件照搬：SESSIONS Enter 直接交给 `switchSession`；TREE Enter 在 `!ctx.isIdle()` 时先 `ctx.abort()` + `ctx.waitForIdle()`（最多等 15s，超时进 footer）。两者都不弹确认框，和 pi 自带命令一致。
+- 分层：`actions/session-actions.ts` 的 `resumeSession`（目标是当前会话直接返回 `unchanged`；否则先 `existsSync` + `SessionManager.open` 确认文件能读，再 `switchSession`，被取消就抛错）；`actions/tree-actions.ts` 的 `restoreNode`（当前会话走 `ctx.navigateTree(id, { summarize: false })`；其他会话 `switchSession(file, { withSession })`，在 pi 交给 `withSession` 的新 ctx 里 navigate——切换后旧 ctx 已失效，不能复用）。"是不是当前会话"抽成 `isCurrentSession`（比较 `path.resolve` 后的路径），打标签也改用它。
+- "光标就是活动叶子"的判断：pi 把 label / `/name` / 模型切换这些记账条目也追加成新叶子，刚打完标签的最后一条消息已经不是 `getLeafId()`。`data/tree.ts` 新增 `isEffectiveLeaf`：节点就是叶子，或它在活动分支上且后面只剩记账条目（label、session_info、model_change、thinking_level_change、custom）就算"已在叶子"，不再 restore（否则会把这些尾部条目甩到分支外，比如把刚切的模型切回去）。用户消息不适用：pi 恢复到用户消息是把叶子移到它父节点并把内容填回编辑器，属于真正的变化。
+- 面板：`ActionSource` 新增 `resumeSession` / `restoreNode`；`dispatch` 里 `session-resume` / `tree-restore` 走统一的 `enter()`：等待期间 footer 显示 `resume…` / `restore…`，面板通过 `LazyPanelOptions.setHidden`（`index.ts` 用 `ctx.ui.custom` 的 `onHandle` 拿到 overlay 句柄）暂时隐藏且忽略所有按键——pi 切换时可能自己弹提示（会话目录已不存在时问要不要在当前目录继续），面板藏起来它才看得见、按键才到得了它。成功后 `close()`；失败重新显示面板，footer 显示 `resume failed: …` / `restore failed: …`。切换成功时 pi 会在 `session_shutdown` 后自己收掉扩展的 overlay，面板随后的 `done()` 只是让 `ctx.ui.custom` 的 promise 结束。
+- 切换成功但在新会话里 restore 失败：面板已被 pi 收掉，抛不回 footer，改用新 ctx 的 `ui.notify` 报错，结果算 `switched`（人已经在目标会话里，只是叶子没动）。
+- 键位、`ACTION_DESCRIPTIONS`、footer 提示（`Enter Resume` / `Enter Restore`）之前就有，这次只接上 `dispatch`。
+- 测试：`test/panel.test.ts` 加了 Enter 的面板行为（调用 actions、成功关闭、失败留在 footer 且面板重新显示、等待期间忽略按键、无 actions 提示）；新增 `test/session-actions.test.ts` 用临时会话文件验证 `isEffectiveLeaf` 与 `resumeSession` / `restoreNode` 的分流（当前会话 / 其他会话 / 文件缺失 / 节点缺失 / 取消 / 非 idle 先 abort / withSession 里只用新 ctx）。
+
+### TREE Enter 的摘要选择菜单（2026-09-22）
+
+背景：TREE 面板 Enter 目前只做 No summary（`navigateTree(id, { summarize: false })`）。pi 自带的 `/tree` 在选定节点后会先问 No summary / Summarize / Summarize with custom prompt，选 Summarize 会让模型给被放弃的那段分支写一段摘要接在目标节点后面（`branch_summary` 条目）。要把这三个选项补齐。
+
+- ~~新增居中的选择弹窗 `ui/widgets/select-dialog.ts`（类似 lazygit 的菜单）：标题 + 若干选项，j/k/方向键移动，Enter 确认，Esc 取消；footer 显示弹窗自己的按键提示。和 `InputDialog` 一样做成通用组件，后续删除确认、排序切换等场景直接复用。~~
+- ~~TREE Enter：光标节点不是活动叶子时先弹三选菜单；Esc 退回 tree 面板、什么都不做（pi 的做法是退回 tree 选择器）；光标节点就是活动叶子时照旧不弹菜单、直接进入。~~
+- ~~Summarize with custom prompt：选中后再用 `InputDialog` 输入自定义指令（pi 用的是多行编辑器，先用单行；Esc 退回三选菜单，和 pi 一致）。~~
+- ~~pi 有 `branchSummary.skipPrompt` 设置（`docs/settings.md`），为 true 时内置 `/tree` 不问、直接 No summary。扩展 ctx 上没看到读 settings 的 API，动手前先查能不能读到（可能要用 `getAgentDir()` 直接读 `settings.json`），不猜；读不到就先不支持并记到 issues.md。~~
+- ~~actions：`restoreNode` 加 `{ summarize, customInstructions }` 参数透传给 `ctx.navigateTree`；其他会话的分流不变（`withSession` 里 navigate）。摘要需要模型，`ctx.model` 为空时 pi 会抛 "No model available for summarization"，照旧进 footer。~~
+- ~~摘要期间 footer 显示 `summarizing branch…`。扩展 API 没有暴露 `abortBranchSummary`，从面板发起的摘要中途取消不了，只能等它跑完或失败，这一点写进 issues.md。`navigateTree` 返回 `{ aborted: true }` / `{ cancelled: true }` 或抛错时留在 footer、面板不关。~~
+- ~~键位不变（还是 Enter）；更新 `docs/keybindings.md` 里 TREE Enter 的说明和 `docs/design.md` 里对应那行。~~
+- ~~测试：`test/panel.test.ts` 补菜单行为（三项显示 / Esc 退回 / 自定义 prompt 输入 / 活动叶子不弹菜单）；`test/session-actions.test.ts` 补 `summarize` / `customInstructions` 的透传。~~
+
+实现说明（2026-09-22）：
+
+- 先查了 pi 0.85.1：扩展 ctx 上确实没有 settings API，但包导出了 `SettingsManager`，`SettingsManager.create(cwd, agentDir, { projectTrusted })` 只读文件（短暂加锁，不写），`getBranchSummarySkipPrompt()` 就是内置 `/tree` 用的那个判断。新增 `config/pi-settings.ts`（唯一读 pi 自己 `settings.json` 的模块）的 `loadPiSettings`，`index.ts` 打开面板时读一次，作为 `LazyPanelOptions.skipSummaryPrompt` 传给面板；读不到按 pi 默认值（不跳过）。
+- 扩展 ctx 的 `navigateTree`（`interactive-mode.js` 的 `commandContextActions`）把 `AgentSession.navigateTree` 的 `{ cancelled, aborted }` 折叠成 `{ cancelled: true }`，面板分不出是摘要被中止还是被别的扩展否决，统一报 `restore failed: branch summary cancelled`（不做摘要时仍是 `restore cancelled by an extension`）。pi 对扩展发起的摘要也不显示自己的 `BranchSummaryStatusIndicator`，只有内置 `/tree` 才有。
+- 弹窗：新增通用的 `ui/widgets/select-dialog.ts`（`SelectDialog`：标题 / 选项 / 初始光标 / 右上角说明 / footer 提示 / 回调都在 `open(spec)` 时传入，j/k/↑/↓ 移动、Enter 确认、Esc 取消，其他按键吞掉；高度 = 选项数 + 2，宽度和 `InputDialog` 共用 `frame.ts` 的 `dialogWidth`）。`ui/widgets/restore-dialog.ts` 是 TREE Enter 的预设：`Summarize branch?` 三项（顺序和 pi 一致）+ 菜单提示 + 自定义指令输入框的标题 / 提示。`PanelMode` 新增 `restore`（菜单和输入框打开时 footer 左侧显示 `RESTORE`）。
+- 面板流程（`app.ts`）：Enter → `restoreTreeNode`：光标行 `isLeaf` 或 `skipSummaryPrompt` 时直接 `restoreNode(..., { summarize: false })`；否则 `openSummaryMenu`。菜单 Esc → 关掉、什么都不做；No summary / Summarize → 直接进入；custom → `openCustomPrompt`（`InputDialog`），Esc 退回菜单且光标停在 custom 那一项，Enter 把去掉首尾空白的文本作为 `customInstructions`（空则只 `summarize: true`，用 pi 默认指令）。三种情况都走原来的 `enter()`（面板隐藏、忽略按键），只是等待期间 footer 文字改成 `summarizing branch…`（`constants.ts` 的 `SUMMARIZING_STATUS`）。
+- "光标就是活动叶子"的判断放到数据层：`data/tree.ts` 新增 `effectiveLeafIds`（从叶子沿活动分支往上走一次算出整组），`isEffectiveLeaf` 改为查这个集合，`loadTree` 给对应行打 `TreeRow.isLeaf`，面板据此决定弹不弹菜单；actions 里的 `restoreNode` 仍自己再判一次（用的是 pi 内存里的 manager，更准）。当前会话在无摘要跳转后的短暂过期问题记在 issues.md。
+- actions：`restoreNode(ctx, file, entryId, options = { summarize: false })`，`options` 原样透传给 `navigateTree`（没有自定义指令时不带 `customInstructions` 键）。摘要期间面板是隐藏的，所以 `navigateTo` 用 `ctx.ui.setStatus("lazy-panel", "summarizing branch…")` 把进度写到 pi 自己的 footer，结束（含失败）后清掉；其他会话在 `withSession` 的新 ctx 上做同样的事。
+- 测试：`test/panel.test.ts` 加了叶子行不弹菜单 / 菜单显示与 j/k/Esc / No summary / Summarize 期间 footer 与按键忽略 / custom prompt 往返与空指令 / `skipSummaryPrompt` / 摘要失败留在 footer，以及 `SelectDialog` 的组件测试；`test/session-actions.test.ts` 加了 `summarize` / `customInstructions` 透传、`setStatus` 进度、取消时的报错；`test/tree-actions.test.ts` 加了 `loadTree` 的 `isLeaf` 标记；新增 `test/pi-settings.test.ts` 用临时目录验证全局 / 项目两级 `skipPrompt` 和 `projectTrusted`。
+
 ### 跨平台适配（分支 `feat/windows-support`，2026-09-21）
 
 背景：`npm run install:pi` 在 Windows 上报 `Path does not exist: ...\$(pwd)`。npm 在 Windows 默认用 cmd.exe 跑 scripts，`$(pwd)` 这种 bash 命令替换会被原样传给 pi。说明之前的写法只考虑了 Linux / macOS，需要系统性排查。先在本分支把 Windows 适配好，再考虑 macOS。

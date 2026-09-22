@@ -57,7 +57,7 @@ Source of truth: `src/config/keymap.ts`. Override any binding in
 | ~~`j` `k` `↑` `↓`~~ | ~~Move cursor~~                           |
 | ~~`gg` / `G`~~ | ~~Top / bottom~~                               |
 | ~~`J` / `K`~~ | ~~Scroll the content pane~~                     |
-| `Enter`       | Resume session                                  |
+| ~~`Enter`~~   | ~~Resume session: pi switches to it and the panel closes; a failure (file missing, switch cancelled) stays in the footer~~ |
 | `d`           | Delete (confirm y/n; works on multi-select)     |
 | `r`           | Rename                                          |
 | `o`           | Fork and open the fork (confirm y/n)            |
@@ -77,7 +77,7 @@ Source of truth: `src/config/keymap.ts`. Override any binding in
 | --------------- | --------------------------------------------------- |
 | ~~`j` `k` `↑` `↓`~~ | ~~Move cursor~~                                 |
 | ~~`gg` / `G`~~  | ~~Top / bottom~~                                    |
-| `Enter`         | Restore to node: No summary / Summarize / Custom    |
+| ~~`Enter`~~     | ~~Restore to node, like `/tree`: a centered menu asks *No summary / Summarize / Summarize with custom prompt* (`j`/`k`/`↑`/`↓` move, `Enter` pick, `Esc` back to the tree); the custom prompt is a one-line input (`Enter` summarize, `Esc` back to the menu). Switches to that session first when needed. No menu when the node already is the leaf (Enter just closes the panel) or pi's `branchSummary.skipPrompt` is on~~ |
 | ~~`y`~~         | ~~Copy node text (full text, like `Ctrl+x` in `/tree`)~~ |
 | ~~`T`~~         | ~~Add / edit label in a centered dialog, like lazygit's commit popup (`Enter` save, `Esc` cancel, empty removes; same as `Shift+T` in `/tree`)~~ |
 | `d` `t` `u` `L` `a` | Filter: default / tools / user-only / labeled / all |
