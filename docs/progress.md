@@ -230,7 +230,14 @@
 
 ### 优化选中
 
-感觉有个可以优化的小点，比如我打开插件，选择进入 session 中的第二个会话，随后什么也不干再次输入 /lazy-history 打开此插件，发现 session 还是选中了第一个对话，这里能不能优化一下，打开的时候应该自动选中当前的对话，如果是一个新的对话，则选择第一个就行.
+- ~~感觉有个可以优化的小点，比如我打开插件，选择进入 session 中的第二个会话，随后什么也不干再次输入 /lazy-history 打开此插件，发现 session 还是选中了第一个对话，这里能不能优化一下，打开的时候应该自动选中当前的对话，如果是一个新的对话，则选择第一个就行.~~
+
+实现说明（2026-09-22）：
+
+- `index.ts` 打开面板时用 `ctx.sessionManager.getSessionFile()` 取 pi 当前会话文件，作为 `LazyPanelOptions.currentSessionFile` 传给面板；新会话还没落盘时它是 undefined，不传。
+- `data/sessions.ts` 新增 `findSessionIndex(rows, file)`：和 `isCurrentSession` 同一规则，`path.resolve` 后比较，找不到返回 -1。
+- `app.ts`：只在第一次 `load()` 时定位（`locateSessionFile` 用过即清），找到就把 SESSIONS 光标放到那一行，TREE / CONTENT 随之加载该会话；没找到（新会话、或当前会话不在当前范围里）留在第一行。之后 C / A 切范围仍回到顶部，行为不变。
+- 测试：`test/panel.test.ts` 加了初始光标 / 未列出 / 切范围后回顶部；新增 `test/sessions.test.ts` 验证 `findSessionIndex` 的路径比较。
 
 ### 跨平台适配（分支 `feat/windows-support`，2026-09-21）
 
