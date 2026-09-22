@@ -14,6 +14,7 @@
  */
 
 import { decodeKittyPrintable, isKeyRelease, type KeyId, matchesKey } from "@earendil-works/pi-tui";
+import { KEY_SCOPES, TREE_DIALOG_SCOPE } from "../constants.ts";
 import type { ActionId, KeyChord, Keymap, KeyScope, PaneKeymap } from "../types.ts";
 
 /** Key names pi-tui understands that are longer than one character. */
@@ -164,15 +165,27 @@ export type ResolveResult =
 	| { kind: "none" };
 
 /**
- * Resolve the pressed key sequence against the focused pane first, then the
- * global scope. Pane bindings shadow global ones for the same key.
+ * Scopes consulted for `focus`, innermost first: a pane shadows the global
+ * bindings, the tree dialog shadows the tree pane which shadows global.
+ *
+ * 键位查找顺序：对话框 → tree 面板 → global；面板 → global。
+ */
+export function scopeChain(focus: KeyScope): KeyScope[] {
+	if (focus === "global") return ["global"];
+	if (focus === TREE_DIALOG_SCOPE) return [TREE_DIALOG_SCOPE, "tree", "global"];
+	return [focus, "global"];
+}
+
+/**
+ * Resolve the pressed key sequence against the focused scope first, then the
+ * outer ones (see `scopeChain`). Inner bindings shadow outer ones for the same key.
  *
  * `pressed` holds the raw input chunks pressed so far (including the current
  * one). "pending" means some binding starts with this prefix but needs more
  * keys; the caller should buffer and wait.
  */
 export function resolveKeys(bindings: Binding[], focus: KeyScope, pressed: string[]): ResolveResult {
-	const order: KeyScope[] = focus === "global" ? ["global"] : [focus, "global"];
+	const order = scopeChain(focus);
 	let pending = false;
 	for (const scope of order) {
 		for (const b of bindings) {
@@ -181,7 +194,7 @@ export function resolveKeys(bindings: Binding[], focus: KeyScope, pressed: strin
 			if (state === "match") return { kind: "action", action: b.action, scope };
 			if (state === "prefix") pending = true;
 		}
-		// 当前面板已经有前缀匹配时，不再回退到 global，避免 "g" 被 global 抢走。
+		// 当前 scope 已经有前缀匹配时，不再回退到外层，避免 "g" 被 global 抢走。
 		if (pending) return { kind: "pending" };
 	}
 	return { kind: "none" };
@@ -197,8 +210,7 @@ function matchSequence(seq: KeySequence, pressed: string[]): "match" | "prefix" 
 
 /** Compile a full keymap into a flat binding list. */
 export function compileKeymap(keymap: Keymap): Binding[] {
-	const scopes: KeyScope[] = ["global", "sessions", "tree", "content"];
-	return scopes.flatMap((s) => compileScope(s, keymap[s]));
+	return KEY_SCOPES.flatMap((s) => compileScope(s, keymap[s]));
 }
 
 /** Human readable label for a chord, used by the footer and help overlay. */
@@ -257,8 +269,11 @@ export function labelsFor(keymap: Keymap, scope: KeyScope, action: ActionId): st
 	return (Array.isArray(chords) ? chords : [chords]).map(chordLabel);
 }
 
-/** Labels for `action` as seen from `focus`: the pane binding if any, else the global one. */
+/** Labels for `action` as seen from `focus`: the innermost scope of `scopeChain(focus)` that binds it. */
 export function labelsForFocus(keymap: Keymap, focus: KeyScope, action: ActionId): string[] {
-	const own = labelsFor(keymap, focus, action);
-	return own.length || focus === "global" ? own : labelsFor(keymap, "global", action);
+	for (const scope of scopeChain(focus)) {
+		const labels = labelsFor(keymap, scope, action);
+		if (labels.length) return labels;
+	}
+	return [];
 }

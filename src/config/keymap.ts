@@ -11,6 +11,7 @@
  * 默认键位是纯数据；解析/匹配逻辑在 keys.ts，合并用户配置在 config.ts。
  */
 
+import { TREE_DIALOG_SCOPE } from "../constants.ts";
 import type { ActionId, KeyScope, Keymap, PaneId } from "../types.ts";
 
 export const DEFAULT_KEYMAP: Keymap = {
@@ -75,6 +76,18 @@ export const DEFAULT_KEYMAP: Keymap = {
 		"go-top": "gg",
 		"go-bottom": "G",
 	},
+
+	// 树对话框（a 打开）：这里只放对话框独有的键；j/k、gg/G、Enter、y、T、z 沿用 tree 面板的绑定，
+	// `/` 沿用 global 的 search（在对话框里是聚焦顶部的搜索框）。过滤键和 pi /tree 的 ctrl+d/t/u/l/a 一一对应，
+	// 所以 l 在对话框里是 labeled 过滤而不是"下一个面板"（h 没有对话框绑定，切面板在这里被关掉）。
+	[TREE_DIALOG_SCOPE]: {
+		"tree-filter-default": "d",
+		"tree-filter-no-tools": "t",
+		"tree-filter-user": "u",
+		"tree-filter-labeled": "l",
+		"tree-filter-all": "a",
+		"tree-dialog-close": "q",
+	},
 };
 
 /** Short English description of every action, shown in the help overlay. */
@@ -115,22 +128,46 @@ export const ACTION_DESCRIPTIONS: Record<ActionId, string> = {
 	"tree-label": "Add / edit label",
 	"tree-open": "Open the full tree dialog (search / filters live there)",
 	"tree-fold": "Fold / unfold the branch under the cursor (inside a branch: fold it and jump to its head)",
+	"tree-filter-default": "Filter: default (hide bookkeeping entries)",
+	"tree-filter-no-tools": "Filter: also hide tool results (toggle)",
+	"tree-filter-user": "Filter: user messages only (toggle)",
+	"tree-filter-labeled": "Filter: labeled entries only (toggle)",
+	"tree-filter-all": "Filter: show everything (toggle)",
+	"tree-dialog-close": "Close the tree dialog",
 };
 
 /**
- * Global actions that do nothing in a given pane. The small tree pane only
- * shows a slice of the tree, so `/` search (and n / N) are left to the tree
- * dialog; pressing them in the pane just points at `a`.
+ * Actions of outer scopes that do nothing while `scope` has the keys. The
+ * small tree pane only shows a slice of the tree, so `/` search (and n / N)
+ * are left to the tree dialog; pressing them in the pane just points at `a`.
+ * Inside the dialog, pane switching, list scope, n / N, quitting the panel,
+ * `?` (every key is on the dialog's own hint row) and `a` (the dialog is
+ * already open) are switched off.
  *
- * 小面板里禁用的全局动作：按下时 footer 提示去对话框里用，? 帮助里也不列出。
+ * 外层 scope 里在这里关掉的动作：小面板里按 / 只提示去对话框；对话框里 h/1/2/3/Tab 等
+ * 不再切换面板（l 被对话框自己的 labeled 过滤遮住了），? 也不开帮助——对话框底部一行已经列全了它的键。
  */
-export const DISABLED_GLOBAL_ACTIONS: Partial<Record<PaneId, ActionId[]>> = {
+export const DISABLED_ACTIONS: Partial<Record<KeyScope, ActionId[]>> = {
 	tree: ["search", "search-next", "search-prev"],
+	[TREE_DIALOG_SCOPE]: [
+		"focus-next",
+		"focus-prev",
+		"focus-sessions",
+		"focus-tree",
+		"focus-content",
+		"scope-current",
+		"scope-all",
+		"search-next",
+		"search-prev",
+		"help",
+		"quit",
+		"tree-open",
+	],
 };
 
-/** Is `action` (a global binding) switched off while `pane` is focused? */
-export function isDisabledIn(pane: PaneId, action: ActionId): boolean {
-	return DISABLED_GLOBAL_ACTIONS[pane]?.includes(action) ?? false;
+/** Is `action` (bound in an outer scope) switched off while `scope` is focused? */
+export function isDisabledIn(scope: KeyScope, action: ActionId): boolean {
+	return DISABLED_ACTIONS[scope]?.includes(action) ?? false;
 }
 
 /**
@@ -154,6 +191,10 @@ export const HELP_GROUPS: HelpGroup[] = [
 	{ actions: ["search-next", "search-prev"], text: "Next / previous search match" },
 	{ actions: ["go-top", "go-bottom"], text: "Go to top / bottom" },
 	{ actions: ["scroll-content-down", "scroll-content-up"], text: "Scroll content pane down / up" },
+	{
+		actions: ["tree-filter-default", "tree-filter-no-tools", "tree-filter-user", "tree-filter-labeled", "tree-filter-all"],
+		text: "Filter: default / no tool results / user only / labeled only / all (t/u/l/a toggle back to default)",
+	},
 ];
 
 /** Actions shown as footer hints per pane, in display order (first few that fit). */
@@ -163,12 +204,43 @@ export const FOOTER_HINTS: Record<PaneId, ActionId[]> = {
 	content: ["search", "help", "focus-next", "go-top", "go-bottom", "quit"],
 };
 
+/**
+ * Hint rows of the tree dialog (its bottom row and the footer), in display
+ * order — the first ones survive a narrow terminal, so `q close` comes before
+ * the filters; an inner array is one merged hint such as `d/t/u/l/a filter`.
+ * Keys come from the resolved keymap (`tree-dialog` scope, then `tree`, then
+ * `global`), the wording from TREE_DIALOG_HINT_TEXT.
+ */
+export const TREE_DIALOG_FOOTER: ActionId[][] = [
+	["search"],
+	["move-down", "move-up"],
+	["tree-restore"],
+	["tree-dialog-close"],
+	["tree-fold"],
+	["tree-filter-default", "tree-filter-no-tools", "tree-filter-user", "tree-filter-labeled", "tree-filter-all"],
+	["tree-copy"],
+	["tree-label"],
+];
+
+/** Wording of each TREE_DIALOG_FOOTER hint, keyed by its first action (lowercase like pi's own /tree help row). */
+export const TREE_DIALOG_HINT_TEXT: Partial<Record<ActionId, string>> = {
+	search: "search",
+	"move-down": "move",
+	"tree-restore": "restore",
+	"tree-fold": "fold",
+	"tree-copy": "copy",
+	"tree-label": "label",
+	"tree-filter-default": "filter",
+	"tree-dialog-close": "close",
+};
+
 /** Display names of scopes in the help overlay. */
 export const SCOPE_TITLES: Record<KeyScope, string> = {
 	global: "Global",
 	sessions: "Sessions pane",
 	tree: "Tree pane",
 	content: "Content pane",
+	[TREE_DIALOG_SCOPE]: "Tree dialog",
 };
 
 /** Pane title shown in the frame header; the panel prefixes it with the jump key ("[1] SESSIONS"). */

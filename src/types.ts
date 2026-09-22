@@ -4,7 +4,7 @@
  * Keep this file free of runtime code — types only.
  */
 
-import type { PANE_IDS } from "./constants.ts";
+import type { KEY_SCOPES, PANE_IDS } from "./constants.ts";
 
 // ---------------------------------------------------------------------------
 // Panes / focus
@@ -107,7 +107,11 @@ export interface TreeRow {
 	isLeaf?: boolean;
 }
 
-/** Tree filters (mirror /tree ctrl+d/t/u/l/a: `no-tools` is pi's ctrl+t). */
+/**
+ * Tree filters (mirror /tree ctrl+d/t/u/l/a: `no-tools` is pi's ctrl+t,
+ * `labeled` pi's `labeled-only`). Set from the tree dialog (d/t/u/l/a); the
+ * pane shows the same filtered tree.
+ */
 export type TreeFilter = "default" | "no-tools" | "user-only" | "labeled" | "all";
 
 /** A message block rendered in the content (right) pane. */
@@ -196,10 +200,17 @@ export type ActionId =
 	| "tree-copy"
 	| "tree-label"
 	| "tree-open"
-	| "tree-fold";
+	| "tree-fold"
+	// tree dialog only (the dialog also uses the tree pane's actions and the global `search`)
+	| "tree-filter-default"
+	| "tree-filter-no-tools"
+	| "tree-filter-user"
+	| "tree-filter-labeled"
+	| "tree-filter-all"
+	| "tree-dialog-close";
 // content pane is read-only and only uses the shared navigation actions
 // (move-down / move-up / go-top / go-bottom), see docs/design.md.
-// Tree filters (d/t/u/L/a) and search live in the tree dialog (`tree-open`),
+// Tree filters (d/t/u/l/a) and search live in the tree dialog (`tree-open`),
 // not in the small tree pane.
 
 /**
@@ -210,13 +221,17 @@ export type ActionId =
  */
 export type KeyChord = string;
 
-/** Binding scope: the global scope or one pane. */
-export type KeyScope = "global" | PaneId;
+/**
+ * Binding scope: the global scope, one pane, or the tree dialog. Keys are
+ * resolved innermost first: `tree-dialog` → `tree` → `global` inside the
+ * dialog, `<pane>` → `global` in a pane (see `scopeChain` in config/keys.ts).
+ */
+export type KeyScope = (typeof KEY_SCOPES)[number];
 
-/** Keymap for one pane (or the global scope). */
+/** Keymap for one scope (a pane, the tree dialog or the global scope). */
 export type PaneKeymap = Partial<Record<ActionId, KeyChord | KeyChord[]>>;
 
-/** Full keymap: global bindings plus per-pane overrides. */
+/** Full keymap: global bindings plus per-scope overrides. */
 export type Keymap = Record<KeyScope, PaneKeymap>;
 
 // ---------------------------------------------------------------------------

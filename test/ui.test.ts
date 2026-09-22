@@ -9,14 +9,22 @@ import { join, sep } from "node:path";
 import { test } from "node:test";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { applyTreeFilter } from "../src/data/tree.ts";
-import { applyTreeFold, defaultFolded, foldableIds, foldTarget } from "../src/data/tree-fold.ts";
+import {
+	applyTreeFold,
+	defaultFolded,
+	filterTreeRows,
+	foldableIds,
+	foldedAncestors,
+	foldTarget,
+	nearestListedIndex,
+} from "../src/data/tree-fold.ts";
 import type { TreeRow } from "../src/types.ts";
 import { fit, FRAME_DIVIDER, frame, metaBudget, overlayCentered, sideBySide } from "../src/ui/frame.ts";
 import { scrollOffset, sessionsMeta } from "../src/ui/panes/sessions-pane.ts";
-import { renderTreePane } from "../src/ui/panes/tree-pane.ts";
+import { renderTreePane, treeMeta } from "../src/ui/panes/tree-pane.ts";
 import { treePrefixes } from "../src/ui/tree-lines.ts";
 import { ELLIPSIS, MARK_FOLDED, MARK_LEAF, MARK_OPEN, MAX_DEPTH, treeOutline } from "../src/ui/tree-outline.ts";
-import { TreeDialog } from "../src/ui/widgets/tree-dialog.ts";
+import { TREE_SEARCH_HINTS, TreeDialog } from "../src/ui/widgets/tree-dialog.ts";
 import { formatCost, formatTokens, normalizeNewlines, shortenPath, singleLine } from "../src/utils/format.ts";
 
 /** Styling is irrelevant here: a theme that returns text unchanged. */
@@ -268,6 +276,50 @@ test("tree-fold: segment starts with children fold, side branches start folded, 
 	assert.equal(foldTarget(roots, "a"), "root");
 });
 
+test("tree-fold: nearestListedIndex walks up to a listed ancestor, foldedAncestors names what hides a row", () => {
+	const rows = forest();
+	const listed = applyTreeFold(rows, new Set(["a", "b1"]));
+	assert.deepEqual(listed.map((r) => r.entryId), ["root", "a", "b", "b1", "b2"]);
+	assert.equal(nearestListedIndex(listed, rows, "b2"), 4);
+	assert.equal(nearestListedIndex(listed, rows, "b1x"), 3, "hidden row → its listed parent");
+	assert.equal(nearestListedIndex(listed, rows, "a1"), 1);
+	assert.equal(nearestListedIndex(listed, rows, "nope"), 4, "unknown → last row, like pi");
+	assert.equal(nearestListedIndex(listed, rows, undefined), 4);
+	assert.equal(nearestListedIndex([], rows, "a"), 0);
+	// a search-narrowed list with re-parented rows still finds the ancestor through the full tree
+	const narrowed = filterTreeRows(rows, (r) => r.entryId === "root" || r.entryId === "b2");
+	assert.equal(nearestListedIndex(narrowed, rows, "b1x"), 0, "b1 and b are gone, root is listed");
+	assert.deepEqual(foldedAncestors(rows, "b1x", new Set(["a", "b1", "b"])), ["b1", "b"]);
+	assert.deepEqual(foldedAncestors(rows, "b1x", new Set(["a"])), []);
+	assert.deepEqual(foldedAncestors(rows, "root", new Set(["root"])), []);
+});
+
+test("filterTreeRows re-parents survivors to the nearest kept ancestor and returns untouched rows as-is", () => {
+	const rows = forest();
+	const out = filterTreeRows(rows, (r) => r.entryId !== "b" && r.entryId !== "b1");
+	assert.deepEqual(
+		out.map((r) => [r.entryId, r.parentId]),
+		[
+			["root", undefined],
+			["a", "root"],
+			["a1", "a"],
+			["b1x", "root"],
+			["b2", "root"],
+		],
+	);
+	assert.equal(out[1], rows[1], "rows whose parent survived are the same objects");
+	assert.deepEqual(filterTreeRows(rows, () => true), rows);
+	assert.deepEqual(filterTreeRows(rows, () => false), []);
+});
+
+test("treeMeta names a non-default filter next to the position and degrades to the position alone", () => {
+	assert.equal(treeMeta(12, 1, "default", 40), "2/12");
+	assert.equal(treeMeta(12, 1, "user-only", 40), "2/12 · user-only");
+	assert.equal(treeMeta(12, 1, "user-only", 6), "2/12");
+	assert.equal(treeMeta(0, 0, "labeled", 40), "labeled");
+	assert.equal(treeMeta(0, 0, "default", 40), "");
+});
+
 test("treeOutline: triangles on segment starts, 2 columns per level below a head, … past MAX_DEPTH", () => {
 	const rows = forest();
 	const text = (outline: Map<string, { indent: string; marker: string }>, id: string) => `${outline.get(id)!.indent}${outline.get(id)!.marker}`;
@@ -309,17 +361,74 @@ test("renderTreePane draws the outline with at most MAX_DEPTH levels; the dialog
 	for (const l of pane) assert.equal(visibleWidth(l), 60);
 
 	const dlg = new TreeDialog({ theme: plainTheme as never, onChange: () => {} });
-	dlg.open({ rows: deep, initialIndex: deep.length - 1, filter: "default", onClose: () => {} });
+	dlg.open({ rows: deep, initialIndex: deep.length - 1, filter: "default" });
 	let box = dlg.render(80, deep.length + 6).map((l) => stripTerminalSequences(l));
 	assert.ok(!box.some((l) => l.includes(ELLIPSIS)), "dialog never caps the depth");
 	assert.ok(box.some((l) => l.includes(`${" ".repeat(15)}└─ `) && l.includes("user: n5")), box.join("\n"));
 	for (const l of box) assert.equal(visibleWidth(l), 80);
 	// the dialog shares the pane's fold state: a folded row shows ⊞ and its descendants are gone
 	const folded = new Set(["n2"]);
-	dlg.open({ rows: applyTreeFold(deep, folded), folded, filter: "default", onClose: () => {} });
+	dlg.open({ rows: applyTreeFold(deep, folded), folded, filter: "default" });
 	box = dlg.render(80, deep.length + 6).map((l) => stripTerminalSequences(l));
 	assert.ok(box.some((l) => l.includes("└⊞ ") && l.includes("user: n2")), box.join("\n"));
 	assert.ok(!box.some((l) => l.includes("user: n3")));
+});
+
+test("TreeDialog search row: idle hint, live query reports, Esc keeps the query and hands the keys back, Enter means nothing", () => {
+	const queries: string[] = [];
+	const dlg = new TreeDialog({ theme: plainTheme as never, onChange: () => {} });
+	const rows = forest();
+	dlg.open({ rows, filter: "default", hints: [["q", "close"]], searchKey: "/", onQueryChange: (q) => queries.push(q) });
+	const box = () => dlg.render(60, 12).map((l) => stripTerminalSequences(l));
+	assert.ok(box()[1]!.includes("搜索: / to search"), box()[1]);
+	assert.deepEqual(dlg.hints, [["q", "close"]]);
+	assert.equal(dlg.searchFocused, false);
+
+	dlg.focusSearch();
+	assert.equal(dlg.searchFocused, true);
+	assert.deepEqual(dlg.hints, TREE_SEARCH_HINTS);
+	dlg.handleSearchInput("b");
+	dlg.handleSearchInput("1");
+	assert.deepEqual(queries, ["b", "b1"]);
+	assert.equal(dlg.searchQuery, "b1");
+	// the panel answers with the narrowed rows; the title counts them and the cursor lands where it says
+	dlg.setRows(rows.filter((r) => r.entryId.startsWith("b1")), new Set(), 1);
+	assert.ok(box()[0]!.includes("2/2 · default"), box()[0]);
+	assert.equal(dlg.selectedRow?.entryId, "b1x");
+	// Enter is not a search key: nothing changes
+	dlg.handleSearchInput("\r");
+	assert.equal(dlg.searchFocused, true);
+	assert.equal(dlg.searchQuery, "b1");
+	assert.deepEqual(queries, ["b", "b1"]);
+
+	// Esc: keys back to the list, query kept and shown as plain text, nothing reported
+	dlg.handleSearchInput("\x1b");
+	assert.equal(dlg.searchFocused, false);
+	assert.equal(dlg.searchQuery, "b1");
+	assert.deepEqual(queries, ["b", "b1"]);
+	assert.ok(box()[1]!.includes("搜索: b1") && !box()[1]!.includes("to search"), box()[1]);
+
+	// / again continues the same query (cursor at its end); deleting everything reports the empty query
+	dlg.focusSearch();
+	dlg.handleSearchInput("x");
+	assert.equal(dlg.searchQuery, "b1x");
+	for (let i = 0; i < 3; i++) dlg.handleSearchInput("\x7f");
+	assert.equal(dlg.searchQuery, "");
+	assert.equal(queries.at(-1), "");
+	dlg.handleSearchInput("\x1b");
+	assert.equal(dlg.searchFocused, false);
+	assert.ok(box()[1]!.includes("搜索: / to search"), box()[1]);
+
+	// no rows while a query is active reads "No matches."
+	dlg.focusSearch();
+	dlg.handleSearchInput("z");
+	dlg.setRows([], new Set(), 0);
+	assert.ok(box().some((l) => l.includes("No matches.")), box().join("\n"));
+	assert.ok(box()[0]!.includes("0/0"), box()[0]);
+	for (const l of dlg.render(60, 12)) assert.equal(visibleWidth(l), 60);
+	dlg.close();
+	assert.equal(dlg.isOpen, false);
+	assert.deepEqual(dlg.hints, []);
 });
 
 test("frame draws FRAME_DIVIDER body lines as ├──┤", () => {

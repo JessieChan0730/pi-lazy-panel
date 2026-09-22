@@ -38,6 +38,16 @@ test("loadPiSettings reads branchSummary.skipPrompt from the global and project 
 	assert.equal(loadPiSettings(cwd, agentDir, true).skipBranchSummaryPrompt, false);
 	assert.equal(loadPiSettings(cwd, agentDir, false).skipBranchSummaryPrompt, true);
 
+	// treeFilterMode (the filter pi's /tree opens with) maps to the panel's filter names; unknown values fall back to default
+	assert.equal(DEFAULT_PI_SETTINGS.treeFilter, "default");
+	assert.equal(loadPiSettings(cwd, agentDir).treeFilter, "default");
+	writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ treeFilterMode: "labeled-only" }));
+	assert.equal(loadPiSettings(cwd, agentDir, false).treeFilter, "labeled");
+	writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ treeFilterMode: "no-tools" }));
+	assert.equal(loadPiSettings(cwd, agentDir, false).treeFilter, "no-tools");
+	writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ treeFilterMode: "bogus" }));
+	assert.equal(loadPiSettings(cwd, agentDir, false).treeFilter, "default");
+
 	// a broken file never throws: pi's loader keeps the other scope and reports the error elsewhere
 	writeFileSync(join(agentDir, "settings.json"), "{ not json");
 	assert.equal(loadPiSettings(cwd, agentDir, true).skipBranchSummaryPrompt, false);

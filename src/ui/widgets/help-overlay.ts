@@ -21,13 +21,14 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { ACTION_DESCRIPTIONS, HELP_GROUPS, isDisabledIn, SCOPE_TITLES } from "../../config/keymap.ts";
-import { labelsFor } from "../../config/keys.ts";
-import type { ActionId, Keymap, KeyScope, PaneId } from "../../types.ts";
+import { labelsFor, scopeChain } from "../../config/keys.ts";
+import type { ActionId, Keymap, KeyScope } from "../../types.ts";
 import { fit, frame, overlayCentered } from "../frame.ts";
 
 export interface HelpOverlayProps {
 	keymap: Keymap;
-	focus: PaneId;
+	/** Scope the keys currently go to: the focused pane, or the tree dialog while it is open. */
+	focus: KeyScope;
 	/** First visible row of the help body (for long lists). */
 	scroll: number;
 	theme: Theme;
@@ -36,11 +37,10 @@ export interface HelpOverlayProps {
 /** One line of the help body, either a section header or a binding. */
 export type HelpLine = { kind: "header"; text: string } | { kind: "binding"; keys: string; text: string } | { kind: "blank" };
 
-/** Build the help body for `focus`: pane bindings first, then global. */
-export function buildHelpLines(keymap: Keymap, focus: PaneId): HelpLine[] {
+/** Build the help body for `focus`: its own bindings first, then each outer scope (pane → global; dialog → tree pane → global). */
+export function buildHelpLines(keymap: Keymap, focus: KeyScope): HelpLine[] {
 	const out: HelpLine[] = [];
-	const scopes: KeyScope[] = [focus, "global"];
-	for (const scope of scopes) {
+	for (const scope of scopeChain(focus)) {
 		if (out.length) out.push({ kind: "blank" });
 		out.push({ kind: "header", text: SCOPE_TITLES[scope] });
 		out.push(...buildScopeLines(keymap, scope, focus));
@@ -51,15 +51,15 @@ export function buildHelpLines(keymap: Keymap, focus: PaneId): HelpLine[] {
 /**
  * Binding lines of one scope. Actions that belong to a HELP_GROUPS entry are
  * merged into one line (placed where the first bound member appears) as long as
- * at least two members are bound in this scope. Global actions switched off in
- * `focus` (see DISABLED_GLOBAL_ACTIONS) are left out.
+ * at least two members are bound in this scope. Outer-scope actions switched
+ * off in `focus` (see DISABLED_ACTIONS) are left out.
  *
  * 同组动作合并成一行；组内只剩一个绑定时退回单独一行，避免描述和键位对不上。
  */
-function buildScopeLines(keymap: Keymap, scope: KeyScope, focus: PaneId): HelpLine[] {
+function buildScopeLines(keymap: Keymap, scope: KeyScope, focus: KeyScope): HelpLine[] {
 	const out: HelpLine[] = [];
 	const consumed = new Set<ActionId>();
-	const bound = (a: ActionId) => labelsFor(keymap, scope, a).length > 0 && !(scope === "global" && isDisabledIn(focus, a));
+	const bound = (a: ActionId) => labelsFor(keymap, scope, a).length > 0 && !(scope !== focus && isDisabledIn(focus, a));
 	const actions = (Object.keys(keymap[scope]) as ActionId[]).filter(bound);
 	for (const action of actions) {
 		if (consumed.has(action)) continue;
@@ -143,6 +143,6 @@ export function overlayHelp(lines: string[], p: HelpOverlayProps, termW: number)
 }
 
 /** Number of body lines, used by the panel to clamp help scrolling. */
-export function helpLineCount(keymap: Keymap, focus: PaneId): number {
+export function helpLineCount(keymap: Keymap, focus: KeyScope): number {
 	return buildHelpLines(keymap, focus).length;
 }

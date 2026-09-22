@@ -26,7 +26,11 @@
  *   - SESSIONS 光标变化 → 重新加载 TREE + CONTENT；TREE 光标变化 → CONTENT 高亮并滚到对应消息
  *   - TREE：y 复制节点全文（走注入的 ActionSource），T 居中弹出 Label 输入框（类似 lazygit 的 commit 弹窗），回车保存 / Esc 取消 / 空值清除；
  *     z 折叠 / 展开光标所在的分支段（旁支默认折叠、活动分支展开，段内按 z 折叠所在段并跳到段头）；
- *     a 打开完整树对话框（顶部搜索框、中间完整树、底部提示；和小面板共用折叠状态，本任务只做 UI，Esc/q 关闭）。小面板不做 / 搜索和 d/t/u/L/a 过滤，按 / 只在 footer 提示去对话框
+ *     a 打开完整树对话框（顶部搜索框、中间完整树、底部提示；和小面板共用折叠状态）。小面板不做 / 搜索和 d/t/u/l/a 过滤，按 / 只在 footer 提示去对话框
+ *   - 树对话框里的按键按 tree-dialog scope 解析（对话框自己的键 → tree 面板的键 → global）：j/k/gg/G 移动、y / T / Enter 和面板一样但作用于
+ *     对话框光标、z 折叠、d/t/u/l/a 过滤（重新加载树，面板同步）、/ 聚焦顶部搜索框实时过滤（Esc 退出搜索框但关键字和结果保留、再按 / 接着改，
+ *     Enter 在搜索框里没有含义；搜索期间折叠全部打开，删光关键字或关对话框后恢复）、列表上 q / Esc 关闭并让面板光标跳到对话框选中的行
+ *     （藏在折叠段里就展开它）；? 在对话框里关掉，它的键都在底部一行
  *   - Enter：SESSIONS 里切到光标所在会话（/resume）；TREE 里以光标节点为叶子恢复（/tree restore）：先居中弹出
  *     Summarize branch? 三选菜单（No summary / Summarize / Summarize with custom prompt，自定义指令再弹一个输入框），
  *     光标就在活动叶子上或 pi 设置了 branchSummary.skipPrompt 时不问、直接进入；
@@ -36,14 +40,23 @@
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, Focusable } from "@earendil-works/pi-tui";
-import { type Binding, compileKeymap, labelsFor, matchesKeyId, resolveKeys } from "../config/keys.ts";
-import { DEFAULT_KEYMAP, FOCUS_ACTIONS, isDisabledIn, PANE_TITLES } from "../config/keymap.ts";
-import { LEFT_COLUMN_RATIO, PANE_IDS, SUMMARIZING_STATUS } from "../constants.ts";
-import { applyTreeFold, defaultFolded, foldTarget } from "../data/tree-fold.ts";
+import { type Binding, compileKeymap, labelsFor, labelsForFocus, matchesKeyId, resolveKeys } from "../config/keys.ts";
+import { DEFAULT_KEYMAP, FOCUS_ACTIONS, isDisabledIn, PANE_TITLES, TREE_DIALOG_FOOTER, TREE_DIALOG_HINT_TEXT } from "../config/keymap.ts";
+import { LEFT_COLUMN_RATIO, PANE_IDS, SUMMARIZING_STATUS, TREE_DIALOG_SCOPE } from "../constants.ts";
+import { matchTreeRow, parseSearchQuery } from "../data/search.ts";
+import {
+	applyTreeFold,
+	defaultFolded,
+	filterTreeRows,
+	foldedAncestors,
+	foldTarget,
+	nearestListedIndex,
+} from "../data/tree-fold.ts";
 import type {
 	ActionId,
 	ContentBlock,
 	EnterOutcome,
+	KeyHint,
 	Keymap,
 	ListScope,
 	PaneId,
@@ -60,7 +73,7 @@ import { renderSessionsPane } from "./panes/sessions-pane.ts";
 import { renderTreePane } from "./panes/tree-pane.ts";
 import { type OutlinePrefix, treeOutline } from "./tree-outline.ts";
 import { renderFooter } from "./widgets/footer.ts";
-import { helpLineCount, overlayHelp } from "./widgets/help-overlay.ts";
+import { compactKeys, helpLineCount, overlayHelp } from "./widgets/help-overlay.ts";
 import { InputDialog } from "./widgets/input-dialog.ts";
 import { LABEL_DIALOG_HINTS, LABEL_DIALOG_TITLE } from "./widgets/label-dialog.ts";
 import {
@@ -91,6 +104,7 @@ export interface PanelState {
 	searchPane: PaneId | undefined;
 	scope: ListScope;
 	sort: SessionSortMode;
+	/** Tree filter, chosen with d/t/u/l/a in the tree dialog; the pane lists the same filtered tree. */
 	treeFilter: TreeFilter;
 	/**
 	 * Folded tree rows (branch-segment heads whose descendants are hidden, see
@@ -185,6 +199,12 @@ interface RestoreTarget {
 	subject: string;
 }
 
+/** A tree row plus the session it belongs to: what y / T / Enter act on (the pane's cursor row, or the dialog's). */
+interface TreeTarget {
+	file: string;
+	row: TreeRow;
+}
+
 export class LazyPanel implements Component, Focusable {
 	readonly state: PanelState;
 	readonly keymap: Keymap;
@@ -207,8 +227,13 @@ export class LazyPanel implements Component, Focusable {
 	private readonly inputDialog: InputDialog;
 	/** Shared centered menu: the "Summarize branch?" choice now, confirmations and pickers later. */
 	private readonly selectDialog: SelectDialog;
-	/** Full tree in a big box (`a` in the tree pane); search / filters move here in the next task. */
+	/** Full tree in a big box (`a` in the tree pane) with its own cursor, live search and the filter keys. */
 	private readonly treeDialog: TreeDialog;
+	/**
+	 * Fold state from before the dialog's search started: a search shows every
+	 * match, so folds are cleared meanwhile and restored when the query is gone.
+	 */
+	private foldedBeforeSearch: Set<string> | undefined;
 	/** Node being labelled while `mode === "label"`. */
 	private labelTarget: { file: string; entryId: string } | undefined;
 	/** Node being restored to while `mode === "restore"`. */
@@ -262,6 +287,7 @@ export class LazyPanel implements Component, Focusable {
 		this._focused = v;
 		this.searchBar.focused = v && this.state.mode === "search";
 		this.inputDialog.focused = v && this.inputDialog.isOpen;
+		this.treeDialog.focused = v && this.treeDialog.isOpen;
 	}
 
 	// -----------------------------------------------------------------------
@@ -470,15 +496,15 @@ export class LazyPanel implements Component, Focusable {
 			return;
 		}
 
-		// 完整树对话框打开时：所有按键交给它（目前只有 Esc/q 关闭）。
-		if (this.treeDialog.isOpen) {
-			this.treeDialog.handleInput(data);
-			return;
-		}
-
 		// 帮助弹窗打开时只响应关闭 / 滚动。
 		if (this.state.helpOpen) {
 			this.handleHelpInput(data);
+			return;
+		}
+
+		// 完整树对话框打开时：搜索框聚焦就全部交给输入框，否则按 tree-dialog scope 解析按键。
+		if (this.treeDialog.isOpen) {
+			this.handleTreeDialogInput(data);
 			return;
 		}
 
@@ -558,6 +584,17 @@ export class LazyPanel implements Component, Focusable {
 		return r.kind === "action" && r.action === action;
 	}
 
+	/** Mode to return to when a label prompt / restore menu closes: `tree` while the dialog is still open. */
+	private baseMode(): PanelMode {
+		return this.treeDialog.isOpen ? "tree" : "normal";
+	}
+
+	private openHelp(): void {
+		this.state.helpOpen = true;
+		this.state.helpScroll = 0;
+		this.o.requestRender();
+	}
+
 	/**
 	 * Execute one logical action. Only the generic actions of this task are
 	 * implemented; pane-specific ones show a short "not yet" status so the user
@@ -590,9 +627,7 @@ export class LazyPanel implements Component, Focusable {
 				this.setScope("all");
 				return;
 			case "help":
-				this.state.helpOpen = true;
-				this.state.helpScroll = 0;
-				this.o.requestRender();
+				this.openHelp();
 				return;
 			case "search":
 				this.openSearch();
@@ -621,10 +656,10 @@ export class LazyPanel implements Component, Focusable {
 				this.scrollContent(-this.contentPageStep());
 				return;
 			case "tree-copy":
-				void this.copyTreeNode();
+				void this.copyTreeNode(this.currentTreeNode());
 				return;
 			case "tree-label":
-				this.openLabelInput();
+				this.openLabelInput(this.currentTreeNode());
 				return;
 			case "tree-open":
 				this.openTreeDialog();
@@ -636,7 +671,7 @@ export class LazyPanel implements Component, Focusable {
 				void this.resumeSession();
 				return;
 			case "tree-restore":
-				this.restoreTreeNode();
+				this.restoreTreeNode(this.currentTreeNode());
 				return;
 			default:
 				this.setStatus(`${action}: not implemented yet`);
@@ -746,8 +781,8 @@ export class LazyPanel implements Component, Focusable {
 	// Tree node actions: copy / label
 	// -----------------------------------------------------------------------
 
-	/** Tree row under the cursor plus the file it belongs to, or undefined with a footer hint. */
-	private currentTreeNode(): { file: string; row: TreeRow } | undefined {
+	/** Tree row under the pane's cursor plus the file it belongs to, or undefined with a footer hint. */
+	private currentTreeNode(): TreeTarget | undefined {
 		const row = this.visibleTree[this.state.cursor.tree];
 		const file = this.loadedSessionFile;
 		if (!row || !file) {
@@ -758,8 +793,7 @@ export class LazyPanel implements Component, Focusable {
 	}
 
 	/** y: copy the node's full text (like /tree ctrl+x). */
-	private async copyTreeNode(): Promise<void> {
-		const target = this.currentTreeNode();
+	private async copyTreeNode(target: TreeTarget | undefined): Promise<void> {
 		if (!target) return;
 		if (!this.o.actions) {
 			this.setStatus("copy: actions unavailable");
@@ -775,8 +809,7 @@ export class LazyPanel implements Component, Focusable {
 	}
 
 	/** T: open the label dialog pre-filled with the node's current label. */
-	private openLabelInput(): void {
-		const target = this.currentTreeNode();
+	private openLabelInput(target: TreeTarget | undefined): void {
 		if (!target) return;
 		if (!this.o.actions) {
 			this.setStatus("label: actions unavailable");
@@ -820,7 +853,7 @@ export class LazyPanel implements Component, Focusable {
 	}
 
 	private closeLabelInput(): void {
-		this.state.mode = "normal";
+		this.state.mode = this.baseMode();
 		this.inputDialog.close();
 		this.inputDialog.focused = false;
 		this.labelTarget = undefined;
@@ -829,6 +862,7 @@ export class LazyPanel implements Component, Focusable {
 	/**
 	 * Re-read the tree of `file` (same filter) and keep the cursor on `entryId`.
 	 * 在 labeled 过滤下清掉 label 会让这一行消失，此时光标夹回范围内并同步右侧高亮。
+	 * 树对话框开着的话它列出的行也跟着刷新（标签是在对话框里打的）。
 	 */
 	private async reloadTree(file: string, entryId: string): Promise<void> {
 		try {
@@ -838,6 +872,7 @@ export class LazyPanel implements Component, Focusable {
 			this.setTree(tree, this.state.treeFolded);
 			const idx = this.visibleTree.findIndex((r) => r.entryId === entryId);
 			this.state.cursor.tree = idx >= 0 ? idx : clamp(this.state.cursor.tree, 0, Math.max(0, this.visibleTree.length - 1));
+			if (this.treeDialog.isOpen) this.refreshTreeDialog(entryId);
 			await this.syncContentToTree();
 		} catch (err) {
 			this.setStatus(`failed to reload tree: ${(err as Error).message}`);
@@ -861,20 +896,32 @@ export class LazyPanel implements Component, Focusable {
 			this.setStatus("no tree node selected");
 			return;
 		}
-		const target = foldTarget(this.tree, row.entryId);
-		if (!target) {
-			this.setStatus("nothing to fold here");
-			return;
-		}
-		const folded = this.state.treeFolded;
-		// 光标在段头上：切换；在段内其他行：折叠所在段（此时这一段一定是展开的）。
-		if (target === row.entryId && folded.has(target)) folded.delete(target);
-		else folded.add(target);
+		const target = this.toggleFold(this.tree, row.entryId);
+		if (!target) return;
 		this.refreshTreeView();
 		this.state.cursor.tree = Math.max(0, this.visibleTree.findIndex((r) => r.entryId === target));
 		this.o.requestRender();
 		// 光标从段内跳到了段头：右侧高亮跟着变。
 		if (target !== row.entryId) void this.syncContentToTree();
+	}
+
+	/**
+	 * Toggle the fold of the segment `entryId` is in, looked up in `base` (the
+	 * pane's tree, or the dialog's search-narrowed rows). Returns the segment
+	 * head the cursor should land on, or undefined (with a footer hint) on the
+	 * trunk, where nothing folds.
+	 */
+	private toggleFold(base: TreeRow[], entryId: string): string | undefined {
+		const target = foldTarget(base, entryId);
+		if (!target) {
+			this.setStatus("nothing to fold here");
+			return undefined;
+		}
+		const folded = this.state.treeFolded;
+		// 光标在段头上：切换；在段内其他行：折叠所在段（此时这一段一定是展开的）。
+		if (target === entryId && folded.has(target)) folded.delete(target);
+		else folded.add(target);
+		return target;
 	}
 
 	// -----------------------------------------------------------------------
@@ -888,20 +935,237 @@ export class LazyPanel implements Component, Focusable {
 			return;
 		}
 		this.state.mode = "tree";
+		this.foldedBeforeSearch = undefined;
+		// 面板里的旧提示（比如"按 a 打开对话框"）到这里已经没用了，别留在对话框下面。
+		this.status = undefined;
+		const searchKey = labelsForFocus(this.keymap, TREE_DIALOG_SCOPE, "search")[0];
 		this.treeDialog.open({
+			// 刚打开时没有搜索，列出的行和小面板一样。
 			rows: this.visibleTree,
 			folded: this.state.treeFolded,
 			initialIndex: this.state.cursor.tree,
 			filter: this.state.treeFilter,
-			onClose: () => this.closeTreeDialog(),
+			hints: this.treeDialogHints(),
+			...(searchKey ? { searchKey } : {}),
+			onQueryChange: (q) => this.onDialogQueryChange(q),
 		});
+		this.treeDialog.focused = this._focused;
 		this.o.requestRender();
 	}
 
+	/**
+	 * Esc / q on the list: back to the pane with its cursor on the dialog's row —
+	 * unfolding whatever hides it, so a node found by searching stays selected
+	 * and the content pane shows it. The search ends with the dialog: the folds
+	 * from before it come back (then the chosen row is revealed).
+	 */
 	private closeTreeDialog(): void {
+		const row = this.treeDialog.selectedRow;
 		this.state.mode = "normal";
 		this.treeDialog.close();
+		this.treeDialog.focused = false;
+		// 搜索期间折叠是清空的：对话框一关搜索也就结束了，恢复搜索前的折叠状态。
+		if (this.foldedBeforeSearch) {
+			this.state.treeFolded = this.foldedBeforeSearch;
+			this.foldedBeforeSearch = undefined;
+		}
+		if (row) {
+			for (const id of foldedAncestors(this.tree, row.entryId, this.state.treeFolded)) this.state.treeFolded.delete(id);
+		}
+		this.refreshTreeView();
+		const idx = row ? this.visibleTree.findIndex((r) => r.entryId === row.entryId) : -1;
+		this.state.cursor.tree = idx >= 0 ? idx : clamp(this.state.cursor.tree, 0, Math.max(0, this.visibleTree.length - 1));
 		this.o.requestRender();
+		void this.syncContentToTree();
+	}
+
+	/** Bottom row / footer hints of the dialog, from the resolved keymap (`/ search`, `d/t/u/l/a filter`…). */
+	private treeDialogHints(): KeyHint[] {
+		const out: KeyHint[] = [];
+		for (const group of TREE_DIALOG_FOOTER) {
+			const keys = group.flatMap((a) => labelsForFocus(this.keymap, TREE_DIALOG_SCOPE, a).slice(0, 1));
+			// 组里只要还有一个动作绑了键就显示，文字取组里第一个动作的。
+			if (keys.length === 0) continue;
+			out.push([compactKeys(keys), TREE_DIALOG_HINT_TEXT[group[0]!] ?? group[0]!]);
+		}
+		return out;
+	}
+
+	/**
+	 * Keys while the dialog is open: the search row takes them all while it is
+	 * focused (Esc there only hands them back to the list); otherwise Esc closes
+	 * and everything else goes through the keymap with the `tree-dialog` scope
+	 * in front (then `tree`, then `global`).
+	 */
+	private handleTreeDialogInput(data: string): void {
+		if (this.treeDialog.searchFocused) {
+			this.treeDialog.handleSearchInput(data);
+			return;
+		}
+		if (matchesKeyId(data, "escape")) {
+			if (this.pending.length) this.clearPending();
+			else this.closeTreeDialog();
+			return;
+		}
+		const pressed = [...this.pending, data];
+		const result = resolveKeys(this.bindings, TREE_DIALOG_SCOPE, pressed);
+		if (result.kind === "pending") {
+			this.pending = pressed;
+			this.armPendingTimer();
+			this.o.requestRender();
+			return;
+		}
+		this.clearPending();
+		if (result.kind !== "action") return;
+		// 外层 scope 里在对话框中关掉的动作（切面板、退出面板、n/N…）直接吞掉。
+		if (result.scope !== TREE_DIALOG_SCOPE && isDisabledIn(TREE_DIALOG_SCOPE, result.action)) return;
+		this.dispatchInTreeDialog(result.action);
+	}
+
+	/** The dialog's actions: its own keys plus the tree pane's, acting on the dialog's cursor. */
+	private dispatchInTreeDialog(action: ActionId): void {
+		switch (action) {
+			case "move-down":
+				this.treeDialog.move(1);
+				return;
+			case "move-up":
+				this.treeDialog.move(-1);
+				return;
+			case "go-top":
+				this.treeDialog.moveTo(0);
+				return;
+			case "go-bottom":
+				this.treeDialog.moveTo(Number.MAX_SAFE_INTEGER);
+				return;
+			case "search":
+				this.treeDialog.focusSearch();
+				return;
+			case "tree-copy":
+				void this.copyTreeNode(this.dialogTreeNode());
+				return;
+			case "tree-label":
+				this.openLabelInput(this.dialogTreeNode());
+				return;
+			case "tree-restore":
+				this.restoreTreeNode(this.dialogTreeNode());
+				return;
+			case "tree-fold":
+				this.dialogToggleFold();
+				return;
+			case "tree-filter-default":
+				void this.setTreeFilter("default");
+				return;
+			case "tree-filter-no-tools":
+				void this.toggleTreeFilter("no-tools");
+				return;
+			case "tree-filter-user":
+				void this.toggleTreeFilter("user-only");
+				return;
+			case "tree-filter-labeled":
+				void this.toggleTreeFilter("labeled");
+				return;
+			case "tree-filter-all":
+				void this.toggleTreeFilter("all");
+				return;
+			case "tree-dialog-close":
+				this.closeTreeDialog();
+				return;
+			default:
+				// 其余动作（比如 tree-open）在对话框里没有意义。
+				return;
+		}
+	}
+
+	/** The dialog's cursor row plus the loaded session, or undefined with a footer hint. */
+	private dialogTreeNode(): TreeTarget | undefined {
+		const row = this.treeDialog.selectedRow;
+		const file = this.loadedSessionFile;
+		if (!row || !file) {
+			this.setStatus("no tree node selected");
+			return undefined;
+		}
+		return { file, row };
+	}
+
+	/** Rows of the dialog before folding: the tree, narrowed to the search matches (re-parented) while a query is active. */
+	private dialogBaseRows(): TreeRow[] {
+		const raw = this.treeDialog.searchQuery;
+		if (!raw) return this.tree;
+		const query = parseSearchQuery(raw);
+		return filterTreeRows(this.tree, (r) => matchTreeRow(r, query));
+	}
+
+	/** Recompute what the dialog lists (search → fold) and keep its cursor on `keepEntryId` or the nearest listed ancestor. */
+	private refreshTreeDialog(keepEntryId: string | undefined): void {
+		const rows = applyTreeFold(this.dialogBaseRows(), this.state.treeFolded);
+		this.treeDialog.setRows(rows, this.state.treeFolded, nearestListedIndex(rows, this.tree, keepEntryId));
+	}
+
+	/**
+	 * Live search: every keystroke in the search row lands here. Like pi's
+	 * /tree, a search clears the folds so every match is visible; the fold state
+	 * from before the search comes back once the query is empty again (or the
+	 * dialog closes).
+	 */
+	private onDialogQueryChange(query: string): void {
+		const keep = this.treeDialog.selectedRow?.entryId;
+		if (query) {
+			// 第一次开始搜索时记住原来的折叠状态；之后每次改动查询都重新清空（pi 的做法）。
+			this.foldedBeforeSearch ??= new Set(this.state.treeFolded);
+			this.state.treeFolded.clear();
+		} else if (this.foldedBeforeSearch) {
+			this.state.treeFolded = this.foldedBeforeSearch;
+			this.foldedBeforeSearch = undefined;
+		}
+		this.refreshTreeView();
+		this.refreshTreeDialog(keep);
+	}
+
+	/**
+	 * z in the dialog: the pane's fold toggle on the shared fold state, with the
+	 * segment head looked up in the search-narrowed rows; the cursor lands on
+	 * that head.
+	 */
+	private dialogToggleFold(): void {
+		const row = this.treeDialog.selectedRow;
+		if (!row) {
+			this.setStatus("no tree node selected");
+			return;
+		}
+		const target = this.toggleFold(this.dialogBaseRows(), row.entryId);
+		if (!target) return;
+		this.refreshTreeView();
+		this.refreshTreeDialog(target);
+	}
+
+	/** t / u / l / a: switch to `filter`, or back to default when it is already active (pi's toggles). */
+	private toggleTreeFilter(filter: TreeFilter): Promise<void> {
+		return this.setTreeFilter(this.state.treeFilter === filter ? "default" : filter);
+	}
+
+	/**
+	 * d (and the toggles): reload the tree with `filter`. Folds are cleared like
+	 * pi does (a folded side branch would hide the labeled rows `l` asks for);
+	 * the cursor stays on its row or the nearest listed ancestor.
+	 */
+	private async setTreeFilter(filter: TreeFilter): Promise<void> {
+		const file = this.loadedSessionFile;
+		if (!file || filter === this.state.treeFilter) return;
+		this.state.treeFilter = filter;
+		this.treeDialog.setFilter(filter);
+		const keep = this.treeDialog.selectedRow?.entryId;
+		try {
+			const tree = await this.o.data.loadTree(file, filter);
+			if (this.disposed || this.loadedSessionFile !== file || this.state.treeFilter !== filter) return;
+			// 换过滤后全部展开；搜索前记住的折叠状态是旧树的，一并作废。
+			this.foldedBeforeSearch = undefined;
+			this.setTree(tree, new Set());
+			const idx = keep ? this.visibleTree.findIndex((r) => r.entryId === keep) : -1;
+			this.state.cursor.tree = idx >= 0 ? idx : clamp(this.state.cursor.tree, 0, Math.max(0, this.visibleTree.length - 1));
+			this.refreshTreeDialog(keep);
+		} catch (err) {
+			this.setStatus(`failed to reload tree: ${(err as Error).message}`);
+		}
 	}
 
 	// -----------------------------------------------------------------------
@@ -929,8 +1193,7 @@ export class LazyPanel implements Component, Focusable {
 	 * 和 pi 内置 /tree 一样先问怎么处理被放弃的分支（Summarize branch? 菜单）；光标就在
 	 * 活动叶子上时 Enter 等于直接进入该会话，不问；pi 的 branchSummary.skipPrompt 打开时也不问。
 	 */
-	private restoreTreeNode(): void {
-		const target = this.currentTreeNode();
+	private restoreTreeNode(target: TreeTarget | undefined): void {
 		if (!target) return;
 		if (!this.o.actions) {
 			this.setStatus("restore: actions unavailable");
@@ -1013,7 +1276,7 @@ export class LazyPanel implements Component, Focusable {
 	}
 
 	private closeRestoreDialogs(): void {
-		this.state.mode = "normal";
+		this.state.mode = this.baseMode();
 		this.selectDialog.close();
 		this.inputDialog.close();
 		this.inputDialog.focused = false;
@@ -1123,6 +1386,7 @@ export class LazyPanel implements Component, Focusable {
 					outline: this.treeOutline,
 					cursor: this.state.cursor.tree,
 					focused: this.state.focus === "tree",
+					filter: this.state.treeFilter,
 					emptyMessage: this.emptyMessage(selectedSession),
 					title: this.paneTitle("tree"),
 					theme,
@@ -1148,10 +1412,7 @@ export class LazyPanel implements Component, Focusable {
 		);
 
 		let lines = sideBySide(left, right, leftW, rightW);
-		if (this.state.helpOpen) {
-			lines = overlayHelp(lines, { keymap: this.keymap, focus: this.state.focus, scroll: this.state.helpScroll, theme }, width);
-		}
-		// 弹窗打开时画在三个面板上面（lazygit commit 弹窗的效果）；输入框和菜单不会同时打开。
+		// 弹窗按层叠顺序画：树对话框 → 输入框 / 菜单（可以开在树对话框上面）→ 帮助。
 		if (this.treeDialog.isOpen) {
 			lines = this.treeDialog.overlay(lines, width);
 		}
@@ -1160,6 +1421,9 @@ export class LazyPanel implements Component, Focusable {
 		}
 		if (this.selectDialog.isOpen) {
 			lines = this.selectDialog.overlay(lines, width);
+		}
+		if (this.state.helpOpen) {
+			lines = overlayHelp(lines, { keymap: this.keymap, focus: this.state.focus, scroll: this.state.helpScroll, theme }, width);
 		}
 		return [...lines, this.renderBottom(width)].map((l) => fit(l, width));
 	}
@@ -1170,7 +1434,9 @@ export class LazyPanel implements Component, Focusable {
 			return this.searchBar.render(width)[0] ?? "";
 		}
 		const footer = { mode: this.state.mode, focus: this.state.focus, keymap: this.keymap, scope: this.state.scope, theme: this.o.theme };
-		// 弹窗打开时 footer 只显示弹窗自己的按键提示（如 Enter save / Esc cancel / empty removes）。
+		const pendingHint = this.pending.length ? `pending: ${this.pending.join("")}` : undefined;
+		const status = pendingHint ?? this.status;
+		// 弹窗打开时 footer 只显示弹窗自己的按键提示（如 Enter save / Esc cancel / empty removes）；状态文字照常显示。
 		const dialog = this.inputDialog.isOpen
 			? this.inputDialog
 			: this.selectDialog.isOpen
@@ -1179,13 +1445,11 @@ export class LazyPanel implements Component, Focusable {
 					? this.treeDialog
 					: undefined;
 		if (dialog) {
-			return renderFooter({ ...footer, hints: dialog.hints }, width)[0]!;
+			return renderFooter({ ...footer, hints: dialog.hints, ...(status ? { status } : {}) }, width)[0]!;
 		}
 		if (this.state.searchQuery) {
 			return renderSearchStatus({ query: this.state.searchQuery, current: 0, total: 0, theme: this.o.theme }, width);
 		}
-		const pendingHint = this.pending.length ? `pending: ${this.pending.join("")}` : undefined;
-		const status = pendingHint ?? this.status;
 		return renderFooter({ ...footer, ...(status ? { status } : {}) }, width)[0]!;
 	}
 

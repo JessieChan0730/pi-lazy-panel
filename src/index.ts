@@ -30,7 +30,8 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 			const config = await loadConfig(getAgentDir());
-			// pi 自己的 branchSummary.skipPrompt 打开时，TREE Enter 和内置 /tree 一样不弹摘要菜单。
+			// pi 自己的 branchSummary.skipPrompt 打开时，TREE Enter 和内置 /tree 一样不弹摘要菜单；
+			// treeFilterMode 是内置 /tree 的默认过滤，面板的 TREE 也从它开始。
 			const piSettings = loadPiSettings(ctx.cwd, getAgentDir(), ctx.isProjectTrusted());
 			const data: DataSource = {
 				listSessions: async (scope, sort) => sortSessions(await listSessions({ cwd: ctx.cwd, scope }), sort),
@@ -60,7 +61,7 @@ export default function (pi: ExtensionAPI) {
 						onClose: () => done(),
 						setHidden: (hidden) => setHidden?.(hidden),
 						keymap: config.keymap,
-						initialState: { scope: config.defaultScope, sort: config.defaultSort },
+						initialState: { scope: config.defaultScope, sort: config.defaultSort, treeFilter: piSettings.treeFilter },
 						leftColumnRatio: config.leftColumnRatio,
 						skipSummaryPrompt: piSettings.skipBranchSummaryPrompt,
 						// 配置文件有问题时在底部提示，但不阻止面板打开。

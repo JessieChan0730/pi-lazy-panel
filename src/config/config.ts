@@ -17,7 +17,7 @@
 
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { CONFIG_FILE_NAME, PANE_IDS } from "../constants.ts";
+import { CONFIG_FILE_NAME, KEY_SCOPES } from "../constants.ts";
 import type { ActionId, KeyChord, Keymap, KeyScope, PaneKeymap, UserConfig, UserPaneKeymap } from "../types.ts";
 import { DEFAULT_KEYMAP } from "./keymap.ts";
 
@@ -38,8 +38,6 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
 	leftColumnRatio: 0.25,
 	warnings: [],
 };
-
-const KEY_SCOPES: KeyScope[] = ["global", ...PANE_IDS];
 
 /**
  * Load user config from disk and merge over defaults.

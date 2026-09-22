@@ -25,9 +25,9 @@
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import type { TreeRow } from "../../types.ts";
+import type { TreeFilter, TreeRow } from "../../types.ts";
 import { formatTime } from "../../utils/format.ts";
-import { fit, frame } from "../frame.ts";
+import { fit, frame, metaBudget } from "../frame.ts";
 import { type OutlinePrefix, treeOutline } from "../tree-outline.ts";
 import { scrollOffset } from "./sessions-pane.ts";
 
@@ -38,6 +38,8 @@ export interface TreePaneProps {
 	outline?: ReadonlyMap<string, OutlinePrefix>;
 	cursor: number;
 	focused: boolean;
+	/** Active tree filter (set in the tree dialog); shown in the header when it is not the default. */
+	filter?: TreeFilter;
 	/** Shown when no session is selected / loading. */
 	emptyMessage?: string;
 	/** Frame title; the panel passes "[2] TREE" so the jump key is visible. */
@@ -64,16 +66,29 @@ export function renderTreePane(p: TreePaneProps, width: number, height: number):
 		}
 	}
 
-	const meta = p.rows.length ? `${p.cursor + 1}/${p.rows.length}` : "";
+	const title = p.title ?? "TREE";
+	const meta = treeMeta(p.rows.length, p.cursor, p.filter ?? "default", metaBudget(width, title));
 	return frame(body, {
 		width,
 		height,
-		title: p.title ?? "TREE",
+		title,
 		...(meta ? { meta } : {}),
 		border: (s) => theme.fg(p.focused ? "borderAccent" : "border", s),
 		titleStyle: (s) => (p.focused ? theme.bold(theme.fg("accent", s)) : theme.fg("muted", s)),
 		metaStyle: (s) => theme.fg("dim", s),
 	});
+}
+
+/**
+ * Header meta of the tree pane: "2/12", or "2/12 · user-only" while a filter
+ * other than the default is active (the filter is chosen in the tree dialog,
+ * so the pane says why rows are missing). Degrades to the position alone when
+ * the header is too narrow; an empty tree only names the filter.
+ */
+export function treeMeta(total: number, cursor: number, filter: TreeFilter, budget: number): string {
+	const pos = total ? `${Math.min(cursor + 1, total)}/${total}` : "";
+	const candidates = filter === "default" ? [pos] : total ? [`${pos} · ${filter}`, pos] : [filter, ""];
+	return candidates.find((c) => visibleWidth(c) <= budget) ?? "";
 }
 
 /** Indent as dim as guide lines; the fold marker a notch brighter so a folded branch still shows on a dimmed row. */

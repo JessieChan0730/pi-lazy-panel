@@ -11,7 +11,7 @@ import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { DEFAULT_KEYMAP } from "../src/config/keymap.ts";
 import { mergeKeymap } from "../src/config/config.ts";
 import { SUMMARIZING_STATUS } from "../src/constants.ts";
-import type { ContentBlock, RestoreOptions, SessionRow, TreeRow } from "../src/types.ts";
+import type { ContentBlock, RestoreOptions, SessionRow, TreeFilter, TreeRow } from "../src/types.ts";
 import { type ActionSource, type DataSource, LazyPanel } from "../src/ui/app.ts";
 import { InputDialog } from "../src/ui/widgets/input-dialog.ts";
 import { LABEL_DIALOG_TITLE } from "../src/ui/widgets/label-dialog.ts";
@@ -176,7 +176,7 @@ test("? opens the help overlay for the focused pane and ? / Esc close it", () =>
 	let lines = h.text(100);
 	assert.ok(lines.some((l) => l.includes("HELP · Sessions pane")));
 	assert.ok(lines.some((l) => l.includes("Resume session")));
-	// 同类动作合并成一行：h/l/Tab、1..3、d/t/u/L/a
+	// 同类动作合并成一行：h/l/Tab、1..3
 	assert.ok(lines.some((l) => l.includes("h/l/Tab") && l.includes("Focus previous / next pane")));
 	assert.ok(lines.some((l) => l.includes("1..3") && l.includes("Focus pane by number")));
 	assert.equal(lines.some((l) => l.includes("Focus next pane")), false, "merged actions must not also appear alone");
@@ -450,10 +450,12 @@ function makeTreeActionPanel(actions?: Partial<ActionSource>, opts: { skipSummar
 	const labelCalls: Array<{ file: string; entryId: string; label: string | undefined }> = [];
 	const enters: Array<{ kind: "resume" | "restore"; file: string; entryId?: string; options?: RestoreOptions }> = [];
 	const hidden: boolean[] = [];
+	const treeFilters: TreeFilter[] = [];
 	let closed = false;
 	const data: DataSource = {
 		listSessions: async () => [row(1, "/a")],
 		loadTree: async (_file, filter) => {
+			treeFilters.push(filter);
 			const rows = [treeRow(0), treeRow(1), treeRow(2, true, { isLeaf: true })].map((r) =>
 				labels.has(r.entryId) ? { ...r, label: labels.get(r.entryId)! } : r,
 			);
@@ -500,6 +502,7 @@ function makeTreeActionPanel(actions?: Partial<ActionSource>, opts: { skipSummar
 		labels,
 		enters,
 		hidden,
+		treeFilters,
 		closed: () => closed,
 		text: (width = 100) => panel.render(width).map((l) => stripTerminalSequences(l)),
 	};
@@ -567,31 +570,369 @@ test("/ is disabled in the tree pane (footer points at a), and a opens the full 
 	const top = lines.findIndex((l) => l.includes("┌─ TREE "));
 	assert.ok(top >= 0, lines.join("\n"));
 	assert.ok(lines[top]!.includes("2/3 · default"), lines[top]);
-	assert.ok(lines[top + 1]!.includes(SEARCH_LABEL), lines[top + 1]);
+	// the idle search row names the key that focuses it
+	assert.ok(lines[top + 1]!.includes(`${SEARCH_LABEL}/ to search`), lines[top + 1]);
 	assert.ok(lines[top + 2]!.includes("├──"), lines[top + 2]);
 	assert.ok(lines[top + 3]!.includes("user: msg 0") && !lines[top + 3]!.includes("›"), lines[top + 3]);
 	assert.ok(lines[top + 4]!.includes("› ") && lines[top + 4]!.includes("assistant: msg 1"), lines[top + 4]);
 	// the box starts at column 2, so its bottom border is the first "└" found there (the pane borders sit at column 0)
 	const bottom = lines.findIndex((l, i) => i > top && l.slice(2).startsWith("└"));
-	assert.ok(lines[bottom - 1]!.includes("Esc/q close"), lines[bottom - 1]);
+	assert.ok(lines[bottom - 1]!.includes("/ search") && lines[bottom - 1]!.includes("q close"), lines[bottom - 1]);
 	assert.ok(lines[bottom - 2]!.includes("├──"), lines[bottom - 2]);
 	// the box spans the terminal minus a 2-column margin and the footer shows its hints
 	assert.equal(lines[top]!.indexOf("┌"), 2);
-	assert.ok(lines.at(-1)!.includes("TREE") && lines.at(-1)!.includes("Esc/q close"), lines.at(-1));
+	assert.ok(lines.at(-1)!.includes("TREE") && lines.at(-1)!.includes("q close"), lines.at(-1));
 	for (const l of h.panel.render(100)) assert.equal(visibleWidth(l), 100);
 
-	// other keys are swallowed for now; Esc / q close it and the pane is untouched
+	// j moves the dialog's own cursor (the pane's stays put until the dialog closes); y copies the dialog's row
 	h.panel.handleInput("j");
-	h.panel.handleInput("y");
-	assert.equal(h.copies.length, 0);
+	assert.ok(h.text().some((l) => l.includes("┌─ TREE ") && l.includes("3/3 · default")), h.text().join("\n"));
 	assert.equal(h.panel.state.cursor.tree, 1);
+	h.panel.handleInput("y");
+	await flush();
+	assert.deepEqual(h.copies, [{ file: "/tmp/s1.jsonl", entryId: "e2" }]);
+	assert.ok(h.text().at(-1)!.includes("copied node text"), `status shows under the dialog: ${h.text().at(-1)}`);
+	// pane switching, scope and quit keys are switched off inside the dialog
+	h.panel.handleInput("1");
+	h.panel.handleInput("\t");
+	h.panel.handleInput("A");
+	h.panel.handleInput("\x03"); // ctrl+c
+	assert.equal(h.panel.state.mode, "tree");
+	assert.equal(h.panel.state.focus, "tree");
+	assert.equal(h.panel.state.scope, "current-folder");
+	assert.equal(h.closed(), false);
+
+	// Esc closes it and the pane cursor follows the dialog's row (the content pane with it)
 	h.panel.handleInput("\x1b");
+	await flush();
 	assert.equal(h.panel.state.mode, "normal");
 	assert.equal(h.closed(), false);
+	assert.equal(h.panel.state.cursor.tree, 2);
+	assert.equal(h.panel.state.contentHighlight, "e2");
 	h.panel.handleInput("a");
 	h.panel.handleInput("q");
 	assert.equal(h.panel.state.mode, "normal");
 	assert.equal(h.closed(), false);
+});
+
+test("tree dialog: gg/G move its cursor, T labels its row over the dialog, Enter restores from it", async () => {
+	const h = makeTreeActionPanel();
+	await h.panel.load();
+	h.panel.handleInput("2");
+	h.panel.handleInput("k"); // pane cursor on e1
+	await flush();
+	h.panel.handleInput("a");
+	const title = () => h.text().find((l) => l.includes("┌─ TREE "))!;
+	assert.ok(title().includes("2/3"), title());
+	h.panel.handleInput("G");
+	assert.ok(title().includes("3/3"), title());
+	h.panel.handleInput("g");
+	h.panel.handleInput("g");
+	assert.ok(title().includes("1/3"), title());
+	// y on e0 (no text) reports it, still inside the dialog
+	h.panel.handleInput("y");
+	await flush();
+	assert.equal(h.copies.at(-1)!.entryId, "e0");
+	assert.ok(h.text().at(-1)!.includes("no text to copy"), h.text().at(-1));
+
+	// T: the Label dialog is drawn over the tree dialog and names the dialog's row; saving returns to the dialog
+	h.panel.handleInput("j");
+	h.panel.handleInput("T");
+	assert.equal(h.panel.state.mode, "label");
+	let lines = h.text();
+	const dlg = labelDialog(lines);
+	assert.ok(dlg, "the Label dialog should be drawn");
+	assert.ok(dlg.title.includes("assistant: msg 1"), dlg.title);
+	assert.ok(lines.some((l) => l.includes("┌─ TREE ")), "the tree dialog stays underneath");
+	assert.ok(lines.at(-1)!.includes("LABEL"), lines.at(-1));
+	for (const ch of "ckpt") h.panel.handleInput(ch);
+	h.panel.handleInput("\r");
+	await flush();
+	assert.equal(h.panel.state.mode, "tree");
+	assert.deepEqual(h.labelCalls, [{ file: "/tmp/s1.jsonl", entryId: "e1", label: "ckpt" }]);
+	lines = h.text();
+	assert.ok(lines.some((l) => l.includes("› ") && l.includes("[ckpt]") && l.includes("assistant: msg 1")), lines.join("\n"));
+	assert.ok(title().includes("2/3"), title());
+	// Esc in the label prompt also lands back in the dialog
+	h.panel.handleInput("T");
+	h.panel.handleInput("\x1b");
+	assert.equal(h.panel.state.mode, "tree");
+	assert.equal(h.labelCalls.length, 1);
+
+	// Enter on the leaf restores without asking and closes the panel (the pane cursor was on e1)
+	h.panel.handleInput("j");
+	h.panel.handleInput("\r");
+	await flush();
+	assert.deepEqual(h.enters, [{ kind: "restore", file: "/tmp/s1.jsonl", entryId: "e2", options: { summarize: false } }]);
+	assert.equal(h.closed(), true);
+});
+
+test("tree dialog: Enter on another node asks Summarize branch? over the dialog; Esc returns to it, a failure keeps it open", async () => {
+	const h = makeTreeActionPanel({
+		restoreNode: async (_file, entryId, options) => {
+			if (entryId === "e0") throw new Error("entry e0 not found in session");
+			h.enters.push({ kind: "restore", file: _file, entryId, options });
+			return "restored";
+		},
+	});
+	await h.panel.load();
+	h.panel.handleInput("2");
+	h.panel.handleInput("a");
+	h.panel.handleInput("g");
+	h.panel.handleInput("g"); // dialog cursor on e0
+	h.panel.handleInput("\r");
+	assert.equal(h.panel.state.mode, "restore");
+	const menu = summaryMenu(h.text());
+	assert.ok(menu, "the menu should be drawn");
+	assert.ok(menu.title.includes("user: msg 0"), menu.title);
+	assert.ok(h.text().some((l) => l.includes("┌─ TREE ")), "the tree dialog stays underneath");
+	h.panel.handleInput("\x1b");
+	assert.equal(h.panel.state.mode, "tree");
+	assert.deepEqual(h.enters, []);
+
+	// No summary on e0 fails: the panel comes back with the dialog still open and the error in the footer
+	h.panel.handleInput("\r");
+	h.panel.handleInput("\r");
+	await flush();
+	assert.equal(h.closed(), false);
+	assert.deepEqual(h.hidden, [true, false]);
+	assert.equal(h.panel.state.mode, "tree");
+	assert.ok(h.text().at(-1)!.includes("restore failed: entry e0 not found"), h.text().at(-1));
+	// then e1 succeeds
+	h.panel.handleInput("j");
+	h.panel.handleInput("\r");
+	h.panel.handleInput("\r");
+	await flush();
+	assert.deepEqual(h.enters, [{ kind: "restore", file: "/tmp/s1.jsonl", entryId: "e1", options: { summarize: false } }]);
+	assert.equal(h.closed(), true);
+});
+
+test("tree dialog search filters live; Esc leaves the search row keeping the query, Esc on the list closes; folds open meanwhile and come back", async () => {
+	const h = makeForkedPanel();
+	await h.panel.load();
+	const title = () => h.text().find((l) => l.includes("┌─ TREE "))!;
+	const searchRow = () => {
+		const lines = h.text();
+		return lines[lines.findIndex((l) => l.includes("┌─ TREE ")) + 1]!;
+	};
+	const folded = () => [...h.panel.state.treeFolded].sort();
+	h.panel.handleInput("2");
+	h.panel.handleInput("a");
+	assert.ok(title().includes("4/4 · default"), title());
+	assert.deepEqual(folded(), ["e1"]);
+
+	// / focuses the search row: the footer switches to its hints and typing filters at once
+	h.panel.handleInput("/");
+	assert.ok(h.text().at(-1)!.includes("Esc back to the list"), h.text().at(-1));
+	h.panel.handleInput("2");
+	const lines = h.text();
+	assert.ok(title().includes("1/1 · default"), title());
+	assert.ok(lines.some((l) => l.includes("› ") && l.includes("user: msg 2")), lines.join("\n"));
+	assert.equal(lines.some((l) => l.includes("assistant: msg 1")), false, "non-matching rows are gone");
+	// the match sat inside the folded side branch: folds are cleared while searching
+	assert.deepEqual(folded(), []);
+	// keys are text while the search row is focused; Enter means nothing there
+	h.panel.handleInput("q");
+	assert.equal(h.panel.state.mode, "tree");
+	assert.ok(title().includes("0/0"), title());
+	assert.ok(h.text().some((l) => l.includes("No matches.")), h.text().join("\n"));
+	h.panel.handleInput("\x7f"); // backspace: back to "2"
+	assert.ok(title().includes("1/1"), title());
+	h.panel.handleInput("\r");
+	assert.ok(h.text().at(-1)!.includes("Esc back to the list"), `Enter is not a search key: ${h.text().at(-1)}`);
+	assert.ok(title().includes("1/1"), title());
+
+	// Esc leaves the search row: the query and the narrowed rows stay, the keys go to the list
+	h.panel.handleInput("\x1b");
+	assert.ok(h.text().at(-1)!.includes("q close"), h.text().at(-1));
+	assert.ok(title().includes("1/1"), title());
+	assert.ok(searchRow().includes(`${SEARCH_LABEL}2`) && !searchRow().includes("to search"), searchRow());
+	assert.deepEqual(folded(), [], "still searching: the folds stay open");
+	// / again continues the same query; deleting it all restores the folds and the cursor lands on the nearest listed ancestor
+	h.panel.handleInput("/");
+	h.panel.handleInput("\x7f");
+	assert.deepEqual(folded(), ["e1"]);
+	assert.ok(title().includes("2/4"), title());
+	h.panel.handleInput("\x1b");
+	assert.ok(searchRow().includes("/ to search"), searchRow());
+	assert.equal(h.panel.state.mode, "tree");
+
+	// Esc on the list closes the dialog
+	h.panel.handleInput("\x1b");
+	assert.equal(h.panel.state.mode, "normal");
+
+	// closing while a query is active: the search ends, the pre-search folds come back, and the chosen row is revealed and selected in the pane
+	h.panel.handleInput("a");
+	h.panel.handleInput("/");
+	h.panel.handleInput("2");
+	h.panel.handleInput("\x1b");
+	assert.deepEqual(folded(), []);
+	h.panel.handleInput("q");
+	await flush();
+	assert.equal(h.panel.state.mode, "normal");
+	assert.deepEqual(folded(), [], "e1 came back folded, then was opened to reveal e2");
+	assert.equal(h.panel.state.cursor.tree, 2);
+	assert.equal(h.panel.state.contentHighlight, "e2");
+	assert.ok(h.text().some((l) => l.includes("›") && l.includes("user: msg 2")), h.text().join("\n"));
+	// reopening starts without a query
+	h.panel.handleInput("a");
+	assert.ok(title().includes("3/5"), title());
+	assert.ok(searchRow().includes("/ to search"), searchRow());
+	h.panel.handleInput("q");
+	h.panel.dispose();
+});
+
+test("tree dialog search matches labels and qualifiers", async () => {
+	const h = makeTreeActionPanel();
+	await h.panel.load();
+	h.panel.handleInput("2");
+	h.panel.handleInput("k");
+	await flush();
+	h.panel.handleInput("T");
+	for (const ch of "ckpt") h.panel.handleInput(ch);
+	h.panel.handleInput("\r");
+	await flush();
+	h.panel.handleInput("a");
+	const title = () => h.text().find((l) => l.includes("┌─ TREE "))!;
+	h.panel.handleInput("/");
+	for (const ch of "CKPT") h.panel.handleInput(ch);
+	assert.ok(title().includes("1/1"), `the title counts the matches: ${title()}`);
+	assert.ok(h.text().some((l) => l.includes("[ckpt]") && l.includes("assistant: msg 1")));
+	for (const ch of " tag:ck") h.panel.handleInput(ch);
+	assert.ok(title().includes("1/1"), title());
+	for (const ch of "x") h.panel.handleInput(ch); // tag:ckx matches nothing
+	assert.ok(title().includes("0/0"), title());
+	h.panel.dispose();
+});
+
+test("tree dialog filters d/t/u/l/a reload the tree (toggling back to default), clear the folds and show in both titles", async () => {
+	const h = makeTreeActionPanel();
+	await h.panel.load();
+	h.panel.handleInput("2");
+	h.panel.handleInput("a");
+	const title = () => h.text().find((l) => l.includes("┌─ TREE "))!;
+	h.panel.handleInput("u");
+	await flush();
+	assert.equal(h.panel.state.treeFilter, "user-only");
+	assert.equal(h.treeFilters.at(-1), "user-only");
+	assert.ok(title().includes("3/3 · user-only"), title());
+	h.panel.handleInput("u"); // toggle back
+	await flush();
+	assert.equal(h.panel.state.treeFilter, "default");
+	h.panel.handleInput("l");
+	await flush();
+	assert.equal(h.panel.state.treeFilter, "labeled");
+	assert.ok(title().includes("0/0 · labeled"), title());
+	assert.ok(h.text().some((l) => l.includes("No entries.")), h.text().join("\n"));
+	h.panel.handleInput("a");
+	await flush();
+	assert.equal(h.panel.state.treeFilter, "all");
+	assert.ok(title().includes("3/3 · all"), title());
+	h.panel.handleInput("t");
+	await flush();
+	assert.equal(h.panel.state.treeFilter, "no-tools");
+	h.panel.handleInput("d");
+	await flush();
+	assert.equal(h.panel.state.treeFilter, "default");
+	assert.ok(title().includes("3/3 · default"), title());
+	// the pane names a non-default filter in its header once the dialog closes
+	h.panel.handleInput("u");
+	await flush();
+	h.panel.handleInput("q");
+	const paneHeader = h.text(160).find((l) => l.includes("[2] TREE"))!;
+	assert.ok(paneHeader.includes("· user-only"), paneHeader);
+	h.panel.dispose();
+
+	// a filter change clears the folds like pi (a folded side branch would hide the rows the filter asks for)
+	const forked = makeForkedPanel();
+	await forked.panel.load();
+	forked.panel.handleInput("2");
+	forked.panel.handleInput("a");
+	assert.deepEqual([...forked.panel.state.treeFolded], ["e1"]);
+	forked.panel.handleInput("a"); // filter: all
+	await flush();
+	assert.deepEqual([...forked.panel.state.treeFolded], []);
+	assert.ok(forked.text().some((l) => l.includes("┌─ TREE ") && l.includes("5/5 · all")), forked.text().join("\n"));
+	forked.panel.dispose();
+});
+
+test("tree dialog z folds / unfolds on the shared fold state; h switches nothing and l is the labeled filter", async () => {
+	const h = makeForkedPanel();
+	await h.panel.load();
+	const title = () => h.text().find((l) => l.includes("┌─ TREE "))!;
+	const folded = () => [...h.panel.state.treeFolded].sort();
+	const cursorRow = () => h.text().find((l) => /›\s/.test(l.slice(2)))!;
+	h.panel.handleInput("2");
+	h.panel.handleInput("a");
+	// cursor starts on the active leaf e4: z folds its segment and jumps to the head e3 (⊞, e4 gone)
+	assert.ok(title().includes("4/4"), title());
+	h.panel.handleInput("z");
+	assert.deepEqual(folded(), ["e1", "e3"]);
+	assert.ok(title().includes("3/3"), title());
+	assert.ok(cursorRow().includes("└⊞ ") && cursorRow().includes("assistant: msg 3"), cursorRow());
+	// z on the folded head opens it again
+	h.panel.handleInput("z");
+	assert.deepEqual(folded(), ["e1"]);
+	assert.ok(title().includes("3/4"), title());
+	// k onto the folded side branch e1: z opens it, j into it, z folds it again and jumps back to the head
+	h.panel.handleInput("k");
+	assert.ok(cursorRow().includes("├⊞ ") && cursorRow().includes("assistant: msg 1"), cursorRow());
+	h.panel.handleInput("z");
+	assert.deepEqual(folded(), []);
+	assert.ok(title().includes("2/5"), title());
+	h.panel.handleInput("j");
+	assert.ok(cursorRow().includes("user: msg 2"), cursorRow());
+	h.panel.handleInput("z");
+	assert.deepEqual(folded(), ["e1"]);
+	assert.ok(title().includes("2/4"), title());
+	// the trunk has nothing to fold
+	h.panel.handleInput("g");
+	h.panel.handleInput("g");
+	h.panel.handleInput("z");
+	assert.ok(h.text().at(-1)!.includes("nothing to fold"), h.text().at(-1));
+	assert.deepEqual(folded(), ["e1"]);
+	// the pane sees the same fold state after closing
+	h.panel.handleInput("q");
+	assert.deepEqual(folded(), ["e1"]);
+	assert.equal(h.panel.state.cursor.tree, 0);
+	assert.ok(h.text().some((l) => l.includes("▸ ") && l.includes("assistant: msg 1")), h.text().join("\n"));
+
+	// h is pane switching outside and does nothing here; l is the labeled filter, not "next pane"
+	h.panel.handleInput("a");
+	h.panel.handleInput("h");
+	assert.equal(h.panel.state.mode, "tree");
+	assert.equal(h.panel.state.focus, "tree");
+	h.panel.handleInput("l");
+	await flush();
+	assert.equal(h.panel.state.focus, "tree");
+	assert.equal(h.panel.state.treeFilter, "labeled");
+	h.panel.handleInput("l");
+	await flush();
+	assert.equal(h.panel.state.treeFilter, "default");
+	h.panel.handleInput("q");
+	h.panel.dispose();
+});
+
+test("? does nothing inside the tree dialog: every key it has is on its bottom row", async () => {
+	const h = makeTreeActionPanel();
+	await h.panel.load();
+	h.panel.handleInput("2");
+	h.panel.handleInput("a");
+	h.panel.handleInput("?");
+	assert.equal(h.panel.state.helpOpen, false);
+	assert.equal(h.panel.state.mode, "tree");
+	const lines = h.text(160);
+	const bottom = lines.findIndex((l, i) => i > 0 && l.slice(2).startsWith("└"));
+	const hintRow = lines[bottom - 1]!;
+	for (const hint of ["/ search", "j/k move", "Enter restore", "q close", "z fold", "d/t/u/l/a filter", "y copy", "T label"]) {
+		assert.ok(hintRow.includes(hint), `${hint} missing from: ${hintRow}`);
+	}
+	assert.equal(hintRow.includes("? help"), false, hintRow);
+	assert.equal(hintRow.includes("h/l"), false, hintRow);
+	assert.ok(lines.at(-1)!.includes("d/t/u/l/a filter"), `the footer repeats the hints: ${lines.at(-1)}`);
+	h.panel.handleInput("q");
+	assert.equal(h.panel.state.mode, "normal");
+	h.panel.dispose();
 });
 
 /** Panel with one session whose tree forks: e0 ─┬─ e1 (side) → e2, └─ e3 (active) → e4 (active leaf). */

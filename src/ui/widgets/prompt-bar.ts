@@ -17,6 +17,9 @@ import { Input, visibleWidth } from "@earendil-works/pi-tui";
 import type { KeyHint } from "../../types.ts";
 import { fit } from "../frame.ts";
 
+/** Legacy "End" key sequence; pi-tui's `Input` maps it to "move to line end". */
+const END_KEY = "\x1b[F";
+
 /** One `key description` pair shown at the right end of the bar. */
 export type PromptHint = KeyHint;
 
@@ -56,9 +59,11 @@ export class PromptBar {
 		return this.input.getValue();
 	}
 
-	/** Reset the field, optionally pre-filled. */
-	reset(value = ""): void {
+	/** Reset the field, optionally pre-filled; `cursorAtEnd` puts the cursor after the text instead of in front of it. */
+	reset(value = "", cursorAtEnd = false): void {
 		this.input.setValue(value);
+		// setValue 把光标留在开头；要接着往后打字（对话框里再按 / 编辑已有的查询）就移到末尾。
+		if (cursorAtEnd && value) this.input.handleInput(END_KEY);
 	}
 
 	handleInput(data: string): void {

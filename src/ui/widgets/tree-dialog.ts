@@ -5,29 +5,33 @@
  * key hints at the bottom.
  *
  *   ┌─ TREE ─────────────────────────────── 3/12 · default ─┐
- *   │ 搜索: ▏                                                │
+ *   │ 搜索: hello▏                                           │
  *   ├────────────────────────────────────────────────────────┤
  *   │ ›    • 22:18 [system]                                  │
  *   │   ├⊟ 22:18 user: hi                                    │
  *   │   │     22:18 assistant: Hello!                        │
- *   │   └⊟ • 22:19 user: hi                                  │
- *   │        • 22:19 assistant: …                            │
+ *   │   └⊞ • 22:19 user: hi                                  │
  *   ├────────────────────────────────────────────────────────┤
- *   │ Esc/q close                                            │
+ *   │ / search   j/↓/k/↑ move   Enter restore   z fold   …   │
  *   └────────────────────────────────────────────────────────┘
  *
- * This task ships the box itself: rows come from the panel (already filtered,
- * folded branches left out — the dialog shares the pane's fold state and draws
- * folded rows with `⊞`), the cursor starts on the pane's node and the guide
- * lines are the uncapped ones from ../tree-lines.ts. Search, filters
- * (d/t/u/L/a), j/k, z, y, T and Enter inside the dialog are the next task;
- * only Esc / q (close) work now and every other key is swallowed.
+ * The widget owns the search field, the cursor and the rendering; the rows it
+ * lists (already filtered, searched and folded) come from the panel through
+ * `open` / `setRows`, and the keys are resolved by the panel (app.ts) against
+ * the `tree-dialog` key scope. Search is live: every keystroke reports the
+ * query through `onQueryChange` and the panel answers with `setRows`. Esc in
+ * the search row hands the keys back to the list and keeps the query (the rows
+ * stay narrowed; `/` again edits it, deleting the text clears it), Enter does
+ * nothing there; an idle search row shows the query, or a `/ to search` hint
+ * when empty.
  *
- * 完整树对话框：本任务只做 UI，快捷键除了关闭都留给下个任务。折叠状态和小面板共用。
+ * 完整树对话框：搜索框 / 光标 / 画法在这里，行的过滤、搜索、折叠都由 app.ts 算好传进来，
+ * 按键也由 app.ts 按 tree-dialog scope 解析后调用这里的方法。搜索框里 Esc 只是回到列表，
+ * 关键字保留；Enter 在搜索框里没有含义。
  */
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { matchesKeyId } from "../../config/keys.ts";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import type { KeyHint, TreeFilter, TreeRow } from "../../types.ts";
 import { FRAME_DIVIDER, frame, overlayCentered } from "../frame.ts";
 import { renderTreeRow } from "../panes/tree-pane.ts";
@@ -38,8 +42,8 @@ import { SEARCH_LABEL } from "./search-bar.ts";
 
 export const TREE_DIALOG_TITLE = "TREE";
 
-/** Keys that work inside the dialog today (shown on its bottom row and in the footer). */
-export const TREE_DIALOG_HINTS: KeyHint[] = [["Esc/q", "close"]];
+/** Hints while the search row has the keys (Esc goes back to the list, the query stays). */
+export const TREE_SEARCH_HINTS: KeyHint[] = [["Esc", "back to the list"]];
 
 /** What the dialog shows; passed to `open`. */
 export interface TreeDialogSpec {
@@ -51,8 +55,12 @@ export interface TreeDialogSpec {
 	initialIndex?: number;
 	/** Active filter, shown in the title bar next to the position. */
 	filter: TreeFilter;
-	/** Esc / q. */
-	onClose: () => void;
+	/** Hints on the bottom row and in the footer while the list has the keys (built from the resolved keymap). */
+	hints?: KeyHint[];
+	/** Label of the key that focuses the search row, for the idle row's `/ to search` hint. */
+	searchKey?: string;
+	/** Live search: called with the new query after every change; the panel answers with `setRows`. */
+	onQueryChange?: (query: string) => void;
 }
 
 export interface TreeDialogOptions {
@@ -66,8 +74,13 @@ const CHROME_ROWS = 6;
 
 export class TreeDialog {
 	private spec: TreeDialogSpec | undefined;
+	private rows: TreeRow[] = [];
+	private folded: ReadonlySet<string> = new Set();
 	private index = 0;
-	/** The search field on the top row; static until the search task wires it up. */
+	private query = "";
+	private _searchFocused = false;
+	private _focused = false;
+	/** The search field on the top row. */
 	private readonly search: PromptBar;
 
 	constructor(private readonly o: TreeDialogOptions) {
@@ -75,9 +88,10 @@ export class TreeDialog {
 			theme: o.theme,
 			label: SEARCH_LABEL,
 			hints: [],
+			// Enter 在搜索框里没有含义；Esc 把按键交还给列表，关键字保留（再按 / 接着改）。
 			onSubmit: () => {},
-			onCancel: () => {},
-			onChange: () => this.o.onChange(),
+			onCancel: () => this.leaveSearch(),
+			onChange: () => this.syncQuery(),
 		});
 	}
 
@@ -86,9 +100,10 @@ export class TreeDialog {
 		return this.spec !== undefined;
 	}
 
-	/** Footer hints while the dialog is open (empty when closed). */
+	/** Footer hints while the dialog is open: the search row's while it has the keys, else the list's. */
 	get hints(): KeyHint[] {
-		return this.spec ? TREE_DIALOG_HINTS : [];
+		if (!this.spec) return [];
+		return this._searchFocused ? TREE_SEARCH_HINTS : (this.spec.hints ?? []);
 	}
 
 	/** Index of the highlighted row. */
@@ -96,25 +111,104 @@ export class TreeDialog {
 		return this.index;
 	}
 
+	/** The highlighted row, if any. */
+	get selectedRow(): TreeRow | undefined {
+		return this.rows[this.index];
+	}
+
+	/** Current search text ("" = no search). */
+	get searchQuery(): string {
+		return this.query;
+	}
+
+	/** Whether keys go to the search row rather than the list. */
+	get searchFocused(): boolean {
+		return this._searchFocused;
+	}
+
+	/** Focusable propagation (IME cursor): reaches the search field only while it has the keys. */
+	get focused(): boolean {
+		return this._focused;
+	}
+	set focused(v: boolean) {
+		this._focused = v;
+		this.search.focused = v && this._searchFocused;
+	}
+
 	open(spec: TreeDialogSpec): void {
 		this.spec = spec;
+		this.rows = spec.rows;
+		this.folded = spec.folded ?? new Set();
 		this.index = clamp(spec.initialIndex ?? 0, 0, Math.max(0, spec.rows.length - 1));
+		this.query = "";
+		this._searchFocused = false;
 		this.search.reset("");
+		this.search.focused = false;
 	}
 
 	/** Drop the dialog without firing a callback. */
 	close(): void {
 		this.spec = undefined;
+		this._searchFocused = false;
+		this.search.focused = false;
 	}
 
-	handleInput(data: string): void {
-		const spec = this.spec;
-		if (!spec) return;
-		if (matchesKeyId(data, "escape") || matchesKeyId(data, "q")) {
-			spec.onClose();
-			return;
+	/** Replace the listed rows (after a search / filter / fold / label change) and put the cursor on `index`. */
+	setRows(rows: TreeRow[], folded: ReadonlySet<string>, index: number): void {
+		this.rows = rows;
+		this.folded = folded;
+		this.index = clamp(index, 0, Math.max(0, rows.length - 1));
+		this.o.onChange();
+	}
+
+	/** Update the filter shown in the title bar. */
+	setFilter(filter: TreeFilter): void {
+		if (this.spec) this.spec.filter = filter;
+		this.o.onChange();
+	}
+
+	/** `/`: give the keys to the search row, cursor after the current query so typing extends it. */
+	focusSearch(): void {
+		if (!this.spec) return;
+		this._searchFocused = true;
+		this.search.reset(this.query, true);
+		this.search.focused = this._focused;
+		this.o.onChange();
+	}
+
+	/** A key while the search row has them (Enter / Esc come back through the prompt's callbacks). */
+	handleSearchInput(data: string): void {
+		this.search.handleInput(data);
+	}
+
+	/** j / k: move the cursor by `delta` rows, clamped. */
+	move(delta: number): void {
+		this.moveTo(this.index + delta);
+	}
+
+	/** gg / G and absolute moves, clamped into the listed rows. */
+	moveTo(index: number): void {
+		const next = clamp(index, 0, Math.max(0, this.rows.length - 1));
+		if (next === this.index) return;
+		this.index = next;
+		this.o.onChange();
+	}
+
+	/** After every keystroke in the search row: report a changed query, then re-render. */
+	private syncQuery(): void {
+		const q = this.search.getValue();
+		if (q !== this.query) {
+			this.query = q;
+			this.spec?.onQueryChange?.(q);
 		}
-		// 其余按键（搜索、过滤、移动…）下个任务实现；现在一律吞掉，不能漏到面板去。
+		this.o.onChange();
+	}
+
+	/** Esc in the search row: hand the keys back to the list; the query (and the narrowed rows) stay. */
+	private leaveSearch(): void {
+		this._searchFocused = false;
+		this.search.focused = false;
+		this.o.onChange();
 	}
 
 	/** Box size for a `termW` × `termH` terminal: as big as it gets with a 2-column / 1-row margin. */
@@ -125,22 +219,22 @@ export class TreeDialog {
 	/** Render the box itself, every line exactly `width` columns and `height` lines tall. */
 	render(width: number, height: number): string[] {
 		const { theme } = this.o;
-		const rows = this.spec?.rows ?? [];
+		const rows = this.rows;
 		const inner = width - 2;
 		const visible = Math.max(1, height - CHROME_ROWS);
 
-		const body: string[] = [` ${this.search.render(inner - 1)[0] ?? ""}`, FRAME_DIVIDER];
+		const body: string[] = [` ${this.renderSearchRow(inner - 1)}`, FRAME_DIVIDER];
 		if (rows.length === 0) {
-			body.push(theme.fg("muted", " No entries."));
+			body.push(theme.fg("muted", this.query ? " No matches." : " No entries."));
 		} else {
-			const prefixes = treePrefixes(rows, this.spec?.folded);
+			const prefixes = treePrefixes(rows, this.folded);
 			const first = scrollOffset(this.index, rows.length, visible);
 			for (let i = first; i < Math.min(rows.length, first + visible); i++) {
 				body.push(renderTreeRow(rows[i]!, theme.fg("dim", prefixes[i]!), inner, i === this.index, theme));
 			}
 		}
 		while (body.length < visible + 2) body.push("");
-		body.push(FRAME_DIVIDER, ` ${renderHints(TREE_DIALOG_HINTS, theme)}`);
+		body.push(FRAME_DIVIDER, ` ${renderHints(this.hints, theme, inner - 1)}`);
 
 		const position = rows.length ? `${this.index + 1}/${rows.length}` : "0/0";
 		return frame(body, {
@@ -154,6 +248,19 @@ export class TreeDialog {
 		});
 	}
 
+	/**
+	 * Top row: the live input while it has the keys; otherwise the query as
+	 * plain text (no block cursor) or a hint naming the search key.
+	 */
+	private renderSearchRow(width: number): string {
+		if (this._searchFocused) return this.search.render(width)[0] ?? "";
+		const { theme } = this.o;
+		const label = theme.bold(theme.fg("accent", SEARCH_LABEL));
+		const key = this.spec?.searchKey;
+		const rest = this.query ? theme.fg("text", this.query) : key ? theme.fg("dim", `${key} to search`) : "";
+		return `${label}${rest}`;
+	}
+
 	/** Composite the box centered over the already-rendered panel `lines`. */
 	overlay(lines: string[], termW: number): string[] {
 		const { width, height } = TreeDialog.size(termW, lines.length);
@@ -161,8 +268,18 @@ export class TreeDialog {
 	}
 }
 
-function renderHints(hints: KeyHint[], theme: Theme): string {
-	return hints.map(([k, t]) => `${theme.bold(theme.fg("accent", k))} ${theme.fg("muted", t)}`).join("   ");
+/** `key text   key text …`, dropping the hints that do not fit in `width` (like the footer). */
+function renderHints(hints: KeyHint[], theme: Theme, width: number): string {
+	const parts: string[] = [];
+	let used = 0;
+	for (const [k, t] of hints) {
+		const part = `${theme.bold(theme.fg("accent", k))} ${theme.fg("muted", t)}`;
+		const w = visibleWidth(part) + (parts.length ? 3 : 0);
+		if (used + w > width) break;
+		parts.push(part);
+		used += w;
+	}
+	return parts.join("   ");
 }
 
 function clamp(n: number, min: number, max: number): number {

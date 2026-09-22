@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { mergeKeymap, resolveConfig } from "../src/config/config.ts";
 import { DEFAULT_KEYMAP } from "../src/config/keymap.ts";
-import { chordLabel, compileKeymap, labelsForFocus, matchesKeyId, normalizeKeyStep, parseChord, type ResolveResult, resolveKeys } from "../src/config/keys.ts";
+import { chordLabel, compileKeymap, labelsForFocus, matchesKeyId, normalizeKeyStep, parseChord, type ResolveResult, resolveKeys, scopeChain } from "../src/config/keys.ts";
 
 /** Action of a resolve result, or undefined when it did not resolve to one. */
 function actionOf(r: ResolveResult): string | undefined {
@@ -76,6 +76,39 @@ test("resolveKeys: pane bindings shadow global, multi-key sequences go through p
 	// content pane is read-only: "y" is not bound there
 	assert.deepEqual(resolveKeys(bindings, "content", ["y"]), { kind: "none" });
 	assert.deepEqual(resolveKeys(bindings, "sessions", ["z"]), { kind: "none" });
+});
+
+test("tree dialog scope: its keys shadow the tree pane's and the global ones, everything else falls through", () => {
+	const bindings = compileKeymap(DEFAULT_KEYMAP);
+	assert.deepEqual(scopeChain("tree-dialog"), ["tree-dialog", "tree", "global"]);
+	assert.deepEqual(scopeChain("tree"), ["tree", "global"]);
+	assert.deepEqual(scopeChain("global"), ["global"]);
+	// a: filter all (dialog) shadows tree-open (pane); l: the labeled filter shadows focus-next; q shadows quit
+	assert.deepEqual(resolveKeys(bindings, "tree-dialog", ["a"]), { kind: "action", action: "tree-filter-all", scope: "tree-dialog" });
+	assert.deepEqual(resolveKeys(bindings, "tree-dialog", ["l"]), { kind: "action", action: "tree-filter-labeled", scope: "tree-dialog" });
+	assert.deepEqual(resolveKeys(bindings, "tree-dialog", ["q"]), { kind: "action", action: "tree-dialog-close", scope: "tree-dialog" });
+	assert.equal(actionOf(resolveKeys(bindings, "tree-dialog", ["d"])), "tree-filter-default");
+	// h and ? have no dialog binding: they fall through to global, where the panel switches them off
+	assert.deepEqual(resolveKeys(bindings, "tree-dialog", ["h"]), { kind: "action", action: "focus-prev", scope: "global" });
+	assert.deepEqual(resolveKeys(bindings, "tree-dialog", ["?"]), { kind: "action", action: "help", scope: "global" });
+	// shared keys come from the tree pane, / from global, gg still goes through pending
+	assert.deepEqual(resolveKeys(bindings, "tree-dialog", ["z"]), { kind: "action", action: "tree-fold", scope: "tree" });
+	assert.deepEqual(resolveKeys(bindings, "tree-dialog", ["j"]), { kind: "action", action: "move-down", scope: "tree" });
+	assert.deepEqual(resolveKeys(bindings, "tree-dialog", ["/"]), { kind: "action", action: "search", scope: "global" });
+	assert.deepEqual(resolveKeys(bindings, "tree-dialog", ["g"]), { kind: "pending" });
+	assert.equal(actionOf(resolveKeys(bindings, "tree-dialog", ["g", "g"])), "go-top");
+	// the dialog's own keys mean nothing in the panes
+	assert.deepEqual(resolveKeys(bindings, "tree", ["d"]), { kind: "none" });
+	assert.equal(actionOf(resolveKeys(bindings, "tree", ["a"])), "tree-open");
+	// labels follow the same chain; the user file can override or unbind the dialog scope
+	assert.deepEqual(labelsForFocus(DEFAULT_KEYMAP, "tree-dialog", "search"), ["/"]);
+	assert.deepEqual(labelsForFocus(DEFAULT_KEYMAP, "tree-dialog", "tree-copy"), ["y"]);
+	assert.deepEqual(labelsForFocus(DEFAULT_KEYMAP, "tree-dialog", "tree-filter-labeled"), ["l"]);
+	const merged = mergeKeymap(DEFAULT_KEYMAP, { "tree-dialog": { "tree-filter-all": "A", "tree-dialog-close": null } });
+	const custom = compileKeymap(merged);
+	assert.equal(actionOf(resolveKeys(custom, "tree-dialog", ["A"])), "tree-filter-all");
+	assert.equal(actionOf(resolveKeys(custom, "tree-dialog", ["a"])), "tree-open", "unshadowed: falls through to the pane binding");
+	assert.equal(actionOf(resolveKeys(custom, "tree-dialog", ["q"])), "quit", "unbound close: falls through to global quit");
 });
 
 test("mergeKeymap: user chords replace defaults per action, null unbinds, other actions untouched", () => {

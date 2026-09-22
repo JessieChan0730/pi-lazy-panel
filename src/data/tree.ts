@@ -9,6 +9,7 @@ import { SessionManager, type SessionEntry, type SessionTreeNode } from "@earend
 import type { TreeFilter, TreeRow } from "../types.ts";
 import { singleLine } from "../utils/format.ts";
 import { resolveContentLeaf } from "./content.ts";
+import { filterTreeRows } from "./tree-fold.ts";
 
 /** Load the entry tree for a session file. */
 export async function loadTree(sessionFile: string): Promise<TreeRow[]> {
@@ -237,14 +238,12 @@ function isUserPrompt(entry: SessionEntry): boolean {
 /**
  * Filter tree rows (mirrors /tree ctrl+d/t/u/l/a: default hides bookkeeping
  * only, no-tools also drops tool results). Rows whose parent was filtered out
- * are re-parented to their nearest kept ancestor, so the result is still a
- * forest the tree lines can be drawn from.
- *
- * 过滤掉中间节点后，子节点挂到最近一个保留下来的祖先上，树线才画得出来。
+ * are re-parented to their nearest kept ancestor (see `filterTreeRows`), so
+ * the result is still a forest the tree lines can be drawn from.
  */
 export function applyTreeFilter(rows: TreeRow[], filter: TreeFilter): TreeRow[] {
 	if (filter === "all") return rows;
-	const keep = (r: TreeRow): boolean => {
+	return filterTreeRows(rows, (r) => {
 		switch (filter) {
 			case "default":
 				return r.kind !== "meta";
@@ -255,22 +254,5 @@ export function applyTreeFilter(rows: TreeRow[], filter: TreeFilter): TreeRow[] 
 			case "labeled":
 				return r.label !== undefined;
 		}
-	};
-	// rows 是先序排列的，父节点一定先于子节点出现，所以一遍就能算出新的 parentId。
-	const nearestKept = new Map<string, string | undefined>();
-	const out: TreeRow[] = [];
-	for (const r of rows) {
-		const parent = r.parentId ? nearestKept.get(r.parentId) : undefined;
-		if (!keep(r)) {
-			nearestKept.set(r.entryId, parent);
-			continue;
-		}
-		nearestKept.set(r.entryId, r.entryId);
-		if (parent === r.parentId) out.push(r);
-		else {
-			const { parentId: _dropped, ...rest } = r;
-			out.push(parent ? { ...rest, parentId: parent } : rest);
-		}
-	}
-	return out;
+	});
 }
