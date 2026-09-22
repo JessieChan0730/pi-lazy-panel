@@ -12,6 +12,7 @@ import { DEFAULT_KEYMAP } from "../src/config/keymap.ts";
 import { mergeKeymap } from "../src/config/config.ts";
 import type { ContentBlock, SessionRow, TreeRow } from "../src/types.ts";
 import { type ActionSource, type DataSource, LazyPanel } from "../src/ui/app.ts";
+import { InputDialog } from "../src/ui/widgets/input-dialog.ts";
 import { LABEL_DIALOG_TITLE } from "../src/ui/widgets/label-dialog.ts";
 import { SEARCH_LABEL } from "../src/ui/widgets/search-bar.ts";
 
@@ -490,11 +491,11 @@ test("y in the tree pane copies the node under the cursor and reports the result
 	h.panel.dispose();
 });
 
-/** The centered Label dialog in rendered `lines`: its top row, title line and input line (row + 2), or undefined when closed. */
+/** The centered Label dialog in rendered `lines`: its top row, title line and input line (row + 1), or undefined when closed. */
 function labelDialog(lines: string[]): { top: number; title: string; input: string } | undefined {
 	const top = lines.findIndex((l) => l.includes(`┌─ ${LABEL_DIALOG_TITLE} `));
 	if (top < 0) return undefined;
-	return { top, title: lines[top]!, input: lines[top + 2] ?? "" };
+	return { top, title: lines[top]!, input: lines[top + 1] ?? "" };
 }
 
 test("T opens a centered Label dialog; Enter saves and refreshes the row, empty removes, Esc cancels", async () => {
@@ -511,6 +512,8 @@ test("T opens a centered Label dialog; Enter saves and refreshes the row, empty 
 	// drawn over the middle of the panel (not in the footer row), naming the node; the footer carries the dialog's keys
 	assert.ok(dlg.top > 2 && dlg.top < lines.length - 6, `dialog row ${dlg.top} of ${lines.length}`);
 	assert.ok(dlg.title.includes("assistant: msg 1"), dlg.title);
+	// 3 rows: border, input, border — the bottom border sits right under the input line
+	assert.ok(lines[dlg.top + 2]!.includes("└"), lines[dlg.top + 2]);
 	const footer = lines.at(-1)!;
 	assert.ok(footer.includes("LABEL") && footer.includes("Enter save") && footer.includes("empty removes"), footer);
 	for (const l of h.panel.render(100)) assert.equal(visibleWidth(l), 100);
@@ -576,4 +579,37 @@ test("label errors land in the footer and a panel without actions says so", asyn
 	await flush();
 	assert.ok(bare.text().at(-1)!.includes("actions unavailable"));
 	bare.panel.dispose();
+});
+
+test("InputDialog is a reusable 3-row prompt: title / value / subject / hints come from open()", () => {
+	const submitted: string[] = [];
+	let cancelled = 0;
+	const dlg = new InputDialog({ theme: fakeTheme, onChange: () => {} });
+	assert.equal(dlg.isOpen, false);
+	assert.deepEqual(dlg.hints, []);
+
+	dlg.open({ title: "Rename", value: "old", subject: "session A", hints: [["Enter", "rename"]], onSubmit: (v) => submitted.push(v), onCancel: () => cancelled++ });
+	assert.equal(dlg.isOpen, true);
+	assert.deepEqual(dlg.hints, [["Enter", "rename"]]);
+	const lines = dlg.render(40);
+	assert.equal(lines.length, 3);
+	for (const l of lines) assert.equal(visibleWidth(l), 40);
+	assert.ok(lines[0]!.includes("┌─ Rename ") && lines[0]!.includes("session A"), lines[0]);
+	assert.ok(lines[1]!.includes("old"), lines[1]);
+	assert.ok(lines[2]!.startsWith("└"), lines[2]);
+
+	// the cursor starts at the end, so typing appends
+	dlg.handleInput("!");
+	assert.equal(dlg.getValue(), "old!");
+	dlg.handleInput("\r");
+	assert.deepEqual(submitted, ["old!"]);
+
+	// a second open swaps every part of the spec, including the callbacks
+	dlg.open({ title: "Label", hints: [], onSubmit: (v) => submitted.push(`label:${v}`), onCancel: () => cancelled++ });
+	assert.equal(dlg.getValue(), "");
+	assert.ok(dlg.render(40)[0]!.includes("┌─ Label "));
+	dlg.handleInput("\x1b");
+	assert.equal(cancelled, 1);
+	dlg.close();
+	assert.equal(dlg.isOpen, false);
 });

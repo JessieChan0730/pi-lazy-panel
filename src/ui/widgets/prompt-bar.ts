@@ -7,7 +7,7 @@
  * so cursor movement, word deletion, paste and the kill-ring come for free.
  * The bar only owns rendering + the input widget; the panel decides what to do
  * on submit / cancel. (Labelling a tree node uses the centered
- * ./label-dialog.ts instead.)
+ * ./input-dialog.ts instead.)
  *
  * 底部一行式输入框：搜索栏用它，只负责画和收键，语义由 app.ts 决定。
  */

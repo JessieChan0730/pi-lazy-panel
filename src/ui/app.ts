@@ -51,7 +51,8 @@ import { renderSessionsPane } from "./panes/sessions-pane.ts";
 import { renderTreePane } from "./panes/tree-pane.ts";
 import { renderFooter } from "./widgets/footer.ts";
 import { helpLineCount, overlayHelp } from "./widgets/help-overlay.ts";
-import { LABEL_DIALOG_HINTS, LabelDialog } from "./widgets/label-dialog.ts";
+import { InputDialog } from "./widgets/input-dialog.ts";
+import { LABEL_DIALOG_HINTS, LABEL_DIALOG_TITLE } from "./widgets/label-dialog.ts";
 import { renderSearchStatus, SearchBar } from "./widgets/search-bar.ts";
 
 /** Mutable UI state of the panel. Kept in one place for easy debugging. */
@@ -149,7 +150,8 @@ export class LazyPanel implements Component, Focusable {
 	private disposed = false;
 	private readonly ratio: number;
 	private readonly searchBar: SearchBar;
-	private readonly labelDialog: LabelDialog;
+	/** Shared centered text prompt: labelling a node now, renaming a session later. */
+	private readonly inputDialog: InputDialog;
 	/** Node being labelled while `mode === "label"`. */
 	private labelTarget: { file: string; entryId: string } | undefined;
 	/** Raw key chunks of an unfinished multi-key sequence. */
@@ -177,10 +179,8 @@ export class LazyPanel implements Component, Focusable {
 			onCancel: () => this.cancelSearch(),
 			onChange: () => this.o.requestRender(),
 		});
-		this.labelDialog = new LabelDialog({
+		this.inputDialog = new InputDialog({
 			theme: o.theme,
-			onSubmit: (v) => void this.submitLabel(v),
-			onCancel: () => this.cancelLabel(),
 			onChange: () => this.o.requestRender(),
 		});
 	}
@@ -192,7 +192,7 @@ export class LazyPanel implements Component, Focusable {
 	set focused(v: boolean) {
 		this._focused = v;
 		this.searchBar.focused = v && this.state.mode === "search";
-		this.labelDialog.focused = v && this.state.mode === "label";
+		this.inputDialog.focused = v && this.inputDialog.isOpen;
 	}
 
 	// -----------------------------------------------------------------------
@@ -372,9 +372,9 @@ export class LazyPanel implements Component, Focusable {
 			return;
 		}
 
-		// 打标签模式：同理交给居中的 Label 弹窗。
-		if (this.state.mode === "label") {
-			this.labelDialog.handleInput(data);
+		// 居中输入弹窗打开时（打标签等）：同理全部交给弹窗。
+		if (this.inputDialog.isOpen) {
+			this.inputDialog.handleInput(data);
 			return;
 		}
 
@@ -669,8 +669,15 @@ export class LazyPanel implements Component, Focusable {
 		this.labelTarget = { file: target.file, entryId: target.row.entryId };
 		this.state.mode = "label";
 		// 弹窗标题右侧显示是给哪条消息打标签。
-		this.labelDialog.open(target.row.label ?? "", `${target.row.role}: ${target.row.text}`);
-		this.labelDialog.focused = this._focused;
+		this.inputDialog.open({
+			title: LABEL_DIALOG_TITLE,
+			value: target.row.label ?? "",
+			subject: `${target.row.role}: ${target.row.text}`,
+			hints: LABEL_DIALOG_HINTS,
+			onSubmit: (v) => void this.submitLabel(v),
+			onCancel: () => this.cancelLabel(),
+		});
+		this.inputDialog.focused = this._focused;
 		this.o.requestRender();
 	}
 
@@ -698,7 +705,8 @@ export class LazyPanel implements Component, Focusable {
 
 	private closeLabelInput(): void {
 		this.state.mode = "normal";
-		this.labelDialog.focused = false;
+		this.inputDialog.close();
+		this.inputDialog.focused = false;
 		this.labelTarget = undefined;
 	}
 
@@ -814,9 +822,9 @@ export class LazyPanel implements Component, Focusable {
 		if (this.state.helpOpen) {
 			lines = overlayHelp(lines, { keymap: this.keymap, focus: this.state.focus, scroll: this.state.helpScroll, theme }, width);
 		}
-		// 打标签时把居中弹窗画在三个面板上面（lazygit commit 弹窗的效果）。
-		if (this.state.mode === "label") {
-			lines = this.labelDialog.overlay(lines, width);
+		// 输入弹窗打开时画在三个面板上面（lazygit commit 弹窗的效果）。
+		if (this.inputDialog.isOpen) {
+			lines = this.inputDialog.overlay(lines, width);
 		}
 		return [...lines, this.renderBottom(width)].map((l) => fit(l, width));
 	}
@@ -827,9 +835,9 @@ export class LazyPanel implements Component, Focusable {
 			return this.searchBar.render(width)[0] ?? "";
 		}
 		const footer = { mode: this.state.mode, focus: this.state.focus, keymap: this.keymap, scope: this.state.scope, theme: this.o.theme };
-		// 弹窗打开时 footer 只显示弹窗自己的按键提示（Enter save / Esc cancel / empty removes）。
-		if (this.state.mode === "label") {
-			return renderFooter({ ...footer, hints: LABEL_DIALOG_HINTS }, width)[0]!;
+		// 弹窗打开时 footer 只显示弹窗自己的按键提示（如 Enter save / Esc cancel / empty removes）。
+		if (this.inputDialog.isOpen) {
+			return renderFooter({ ...footer, hints: this.inputDialog.hints }, width)[0]!;
 		}
 		if (this.state.searchQuery) {
 			return renderSearchStatus({ query: this.state.searchQuery, current: 0, total: 0, theme: this.o.theme }, width);
