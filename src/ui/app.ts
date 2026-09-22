@@ -531,15 +531,7 @@ export class LazyPanel implements Component, Focusable {
 			return;
 		}
 		this.clearPending();
-		if (result.kind === "action") {
-			// 小面板里关掉的全局动作（TREE 里的 / 搜索）：提示去对话框里用，不执行。
-			if (result.scope === "global" && isDisabledIn(this.state.focus, result.action)) {
-				const key = labelsFor(this.keymap, this.state.focus, "tree-open")[0];
-				this.setStatus(key ? `${result.action}: not available here, press ${key} to open the tree dialog` : `${result.action}: not available here`);
-				return;
-			}
-			this.dispatch(result.action);
-		}
+		if (result.kind === "action") this.dispatch(result.action);
 	}
 
 	private armPendingTimer(): void {

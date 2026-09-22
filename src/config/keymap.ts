@@ -137,18 +137,15 @@ export const ACTION_DESCRIPTIONS: Record<ActionId, string> = {
 };
 
 /**
- * Actions of outer scopes that do nothing while `scope` has the keys. The
- * small tree pane only shows a slice of the tree, so `/` search (and n / N)
- * are left to the tree dialog; pressing them in the pane just points at `a`.
- * Inside the dialog, pane switching, list scope, n / N, quitting the panel,
- * `?` (every key is on the dialog's own hint row) and `a` (the dialog is
- * already open) are switched off.
+ * Actions of outer scopes that do nothing while `scope` has the keys.
+ * Inside the tree dialog, pane switching, list scope, n / N, quitting the
+ * panel, `?` (every key is on the dialog's own hint row) and `a` (the dialog
+ * is already open) are switched off.
  *
- * 外层 scope 里在这里关掉的动作：小面板里按 / 只提示去对话框；对话框里 h/1/2/3/Tab 等
- * 不再切换面板（l 被对话框自己的 labeled 过滤遮住了），? 也不开帮助——对话框底部一行已经列全了它的键。
+ * 外层 scope 里在这里关掉的动作：对话框里 h/1/2/3/Tab 等不再切换面板（l 被对话框自己的
+ * labeled 过滤遮住了），? 也不开帮助——对话框底部一行已经列全了它的键。
  */
 export const DISABLED_ACTIONS: Partial<Record<KeyScope, ActionId[]>> = {
-	tree: ["search", "search-next", "search-prev"],
 	[TREE_DIALOG_SCOPE]: [
 		"focus-next",
 		"focus-prev",
@@ -200,7 +197,7 @@ export const HELP_GROUPS: HelpGroup[] = [
 /** Actions shown as footer hints per pane, in display order (first few that fit). */
 export const FOOTER_HINTS: Record<PaneId, ActionId[]> = {
 	sessions: ["search", "help", "focus-next", "scope-current", "scope-all", "session-resume", "session-delete", "session-rename", "quit"],
-	tree: ["help", "focus-next", "tree-restore", "tree-fold", "tree-open", "tree-label", "tree-copy", "quit"],
+	tree: ["search", "help", "focus-next", "tree-restore", "tree-fold", "tree-open", "tree-label", "tree-copy", "quit"],
 	content: ["search", "help", "focus-next", "go-top", "go-bottom", "quit"],
 };
 

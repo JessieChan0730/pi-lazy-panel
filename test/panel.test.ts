@@ -186,7 +186,7 @@ test("? opens the help overlay for the focused pane and ? / Esc close it", () =>
 	h.panel.handleInput("?");
 	assert.equal(h.panel.state.helpOpen, false);
 
-	// tree pane help lists tree actions; filters and search moved to the tree dialog (a)
+	// tree pane help lists tree actions; filters moved to the tree dialog (a), / search stays
 	h.panel.handleInput("l");
 	h.panel.handleInput("?");
 	lines = h.text(100);
@@ -194,7 +194,7 @@ test("? opens the help overlay for the focused pane and ? / Esc close it", () =>
 	assert.ok(lines.some((l) => l.includes("Restore conversation")));
 	assert.ok(lines.some((l) => l.includes("Open the full tree dialog")));
 	assert.equal(lines.some((l) => /Filter:/.test(l)), false, "tree filters are no longer pane bindings");
-	assert.equal(lines.some((l) => l.includes("Search in the focused pane")), false, "search is disabled in the tree pane");
+	assert.ok(lines.some((l) => l.includes("Search in the focused pane")), "search is available in the tree pane");
 	h.panel.handleInput("\x1b");
 	assert.equal(h.panel.state.helpOpen, false);
 
@@ -541,21 +541,23 @@ function labelDialog(lines: string[]): { top: number; title: string; input: stri
 	return { top, title: lines[top]!, input: lines[top + 1] ?? "" };
 }
 
-test("/ is disabled in the tree pane (footer points at a), and a opens the full tree dialog", async () => {
+test("/ opens the search bar in the tree pane (footer lists it), and a opens the full tree dialog", async () => {
 	const h = makeTreeActionPanel();
 	await h.panel.load();
 	h.panel.handleInput("2");
 	h.panel.handleInput("k"); // the cursor starts on the leaf e2; move up to e1
 	assert.equal(h.panel.state.cursor.tree, 1);
-	// footer hints of the tree pane no longer start with / Search but list a Tree
+	// footer hints of the tree pane start with / Search and list a Tree
 	const footer = h.text().at(-1)!;
 	assert.ok(footer.includes("a Tree"), footer);
-	assert.ok(!footer.includes("/ Search"), footer);
+	assert.ok(footer.includes("/ Search"), footer);
 
-	// / and n / N do nothing here but leave a hint
+	// / opens the search bar like in the other panes (matching is still TODO); Esc closes it
 	h.panel.handleInput("/");
+	assert.equal(h.panel.state.mode, "search");
+	assert.ok(h.text().at(-1)!.includes("搜索:"), h.text().at(-1));
+	h.panel.handleInput("\x1b");
 	assert.equal(h.panel.state.mode, "normal");
-	assert.ok(h.text().at(-1)!.includes("press a to open the tree dialog"), h.text().at(-1));
 	h.panel.handleInput("n");
 	assert.equal(h.panel.state.mode, "normal");
 	// the old filter keys are unbound: they neither change the filter nor dispatch anything
