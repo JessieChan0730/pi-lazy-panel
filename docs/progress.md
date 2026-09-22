@@ -197,6 +197,25 @@
 - 顺手：`PromptBar` 的 pi-tui `Input` 改成 `prompt: ""`，去掉输入框前多余的 `> `（搜索栏之前一直是 `搜索: > `）。
 - 测试：`test/ui.test.ts` 加了 `treePrefixes` / `capPrefix` 的几何测试、`applyTreeFilter` 重新挂父节点、小面板折叠层级而对话框不折叠、`FRAME_DIVIDER`；`test/panel.test.ts` 加了 TREE 里 `/`、`n`、`u` 不起作用且 footer 提示、`a` 打开对话框的布局（搜索行 / 分隔线 / 光标行 / 提示行 / 边距）、其他键被吞、Esc / q 关闭；帮助弹窗测试改为断言不再出现 Filter 和搜索。
 
+### tree 面板改为折叠大纲（2026-09-22）
+
+背景：小面板照搬 pi /tree 的树线后显得太重，也和 a 打开的对话框重复。跑了本机 7 个会话：6 个是纯线性链，树线一根都画不出来；唯一有分叉的那个 80 行里 57 行在被放弃的旁支上。真正的问题不是树线，而是"分叉一深就全部展开 + 每层 3 列 + `… ` 截断"，折叠才是解法，三角箭头只是换个皮。
+
+- ~~小面板改成三角 + 缩进的折叠大纲：段头（父节点有多个子节点、自己又有后代的节点）左侧画 `▸`（折叠）/ `▾`（展开），没有后代的旁支画 `─`；段内的行每层缩进 2 列，最多四层，更深的以 `… ` 代替；线性对话完全不缩进。~~
+- ~~默认旁支折叠、活动分支展开：打开面板就能看到当前对话，右侧 CONTENT 联动不受影响；换会话时重置，同一会话内打标签等重新加载保留折叠状态。~~
+- ~~z：折叠 / 展开光标所在的分支段。光标在段头上切换；在段内任意一行按下则折叠所在段并把光标移到段头（vim 的 zc）；线性对话的主干上没有可折叠的段，footer 提示 `nothing to fold here`。~~
+- ~~树对话框沿用同一份折叠状态：只列出没被折叠的行，折叠的段头在树线连接符上画 `⊞`（和 pi 一致）。对话框内的 z / j / k 等按键仍归"对话框快捷键"任务。~~
+
+实现说明（2026-09-22）：
+
+- 数据层：新增 `data/tree-fold.ts`，纯函数：`treeChildren`（按 parentId 分组，`tree-lines.ts` 也改用它）、`forkChildIds`（分支段起点：父节点有多个子节点的子节点，或多根时的根）、`foldableIds`（起点里自己有后代的才能折叠；和 pi 不同，单根不可折叠——折了整棵树就没了）、`defaultFolded`（不在活动分支上的可折叠行）、`applyTreeFold`（先序一遍隐藏折叠行的后代，不是段头的 id 忽略）、`foldTarget`（z 的目标：自己可折叠就是自己，否则最近的可折叠祖先，主干上没有）。
+- 面板前缀：新增 `ui/tree-outline.ts` 的 `treeOutline`：深度只在可折叠的行下面 +1（单链、死胡同和父节点同深），每层 2 列；三角（或死胡同的 `─`）直接占段头这一行的前两列、不预留空列，段头的正文因此比同层的普通行靠右 2 列，段内的行正好顶在段头正文下面（lazygit 文件树的画法；先试过"按深度预留三角列"，真实会话里段头的同层行和段内的行会落到同一列，看不出层级）；线性对话前缀为空、和之前完全一样；`MAX_DEPTH = 3`（0～3 共四层），更深的行宽度和第 3 层一样、最外面两列换成 `… `。前缀按整棵树算（不是折叠后的可见行），折叠时列不会跳动。
+- `ui/panes/tree-pane.ts`：不再画树线，删掉 `MAX_LEVELS` / `capPrefix`；props 增加 `outline`（entryId → 前缀），缩进 dim、三角 muted（旁支整行 dim 时三角仍看得见）。`renderTreeRow` 的 `prefix` 改为调用方已配好色的字符串，对话框传 `theme.fg("dim", 树线)`。
+- `ui/tree-lines.ts`：`treePrefixes(rows, folded)` 第二个参数是折叠集合，折叠的连接符行画 `⊞`，多根时折叠的根在前缀后面补 `⊞ `（照 pi）。
+- 面板状态：`PanelState.treeFolded: Set<string>`；`LazyPanel` 里 `tree` 是完整过滤后的树，`visibleTree` 是 `applyTreeFold` 之后面板真正列出的行，光标索引、y / T / Enter、右侧联动都改成看 `visibleTree`；`setTree` / `refreshTreeView` 统一重算可见行和大纲前缀。`loadSelectedSession` 用 `defaultFolded`，`reloadTree` 保留原折叠集合。
+- 键位：`tree` scope 新增 `tree-fold`（默认 `z`），`ACTION_DESCRIPTIONS` / footer（`z Fold`）/ `docs/keybindings.md` 同步。
+- 测试：`test/ui.test.ts` 加了 `tree-fold` 四个函数、`treeOutline` 的几何（预留列、深度上限）、面板画大纲 / 对话框画树线和 `⊞`；`test/panel.test.ts` 加了分叉树上的默认折叠、z 在段头 / 段内 / 主干上的行为、光标跳到段头后右侧高亮跟随、对话框显示 `⊞`。
+
 ### 优化选中
 
 感觉有个可以优化的小点，比如我打开插件，选择进入 session 中的第二个会话，随后什么也不干再次输入 /lazy-history 打开此插件，发现 session 还是选中了第一个对话，这里能不能优化一下，打开的时候应该自动选中当前的对话，如果是一个新的对话，则选择第一个就行.

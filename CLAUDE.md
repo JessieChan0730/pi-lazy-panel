@@ -57,10 +57,11 @@ src/
 ├── ui/                       # 渲染层：pi-tui Component。不做 I/O，不调用 pi 会话 API
 │   ├── app.ts                # 根组件 LazyPanel + PanelState；数据通过 DataSource 接口注入
 │   ├── frame.ts              # 纯函数：画边框（FRAME_DIVIDER 哨兵行画 ├──┤）、左右拼列、按可见宽度补齐/截断、居中叠加弹窗（overlayCentered）、弹窗宽度（dialogWidth）
-│   ├── tree-lines.ts         # 纯函数：按 parentId 算 pi /tree 风格的树线前缀（treePrefixes），小面板折叠深层级（capPrefix）
+│   ├── tree-lines.ts         # 纯函数：按 parentId 算 pi /tree 风格的树线前缀（treePrefixes，折叠的段头画 ⊞），只给树对话框用
+│   ├── tree-outline.ts       # 纯函数：TREE 面板的折叠大纲前缀（treeOutline）：段头画 ▸/▾、没有后代的旁支画 ─，段内每层缩进 2 列、最多 4 层、更深的以 … 代替；三角直接占段头行首两列、不预留空列（lazygit 文件树的画法），线性对话完全不缩进
 │   ├── panes/
 │   │   ├── sessions-pane.ts  # 左上 SESSIONS 面板
-│   │   ├── tree-pane.ts      # 左下 TREE 面板：树线最多 3 层，更深折叠成 `… `；renderTreeRow（光标 › + 树线 + 活动路径 • + [label] + 时间 + role + 正文）和树对话框共用
+│   │   ├── tree-pane.ts      # 左下 TREE 面板：折叠大纲（前缀来自 tree-outline.ts，可见行由 app.ts 用 applyTreeFold 算好）；renderTreeRow（光标 › + 已配色的前缀 + 活动路径 • + [label] + 时间 + role + 正文）和树对话框共用
 │   │   └── content-pane.ts   # 右侧 CONTENT 面板，用 pi-tui 的 Markdown 渲染消息
 │   └── widgets/
 │       ├── footer.ts         # 底部一行：模式 + 当前面板快捷键提示（弹窗打开时显示弹窗的提示）
@@ -70,7 +71,7 @@ src/
 │       ├── label-dialog.ts   # T 打标签：InputDialog 的预设（标题 + footer 提示）；给 session 起名等场景照此加预设
 │       ├── select-dialog.ts  # 通用的居中选择菜单（j/k/方向键移动、Enter 确认、Esc 取消，高度 = 选项数 + 2）：标题 / 选项 / 回调在 open 时传入
 │       ├── restore-dialog.ts # TREE Enter 的预设：Summarize branch? 三选菜单的标题 / 选项 / 提示 + 自定义摘要指令输入框的标题 / 提示
-│       ├── tree-dialog.ts    # a 打开的完整树对话框：顶部搜索行、中间不折叠的树、底部提示，几乎占满终端；目前只有 Esc/q 关闭，搜索 / 过滤 / 移动 / y / T / Enter 是下个任务
+│       ├── tree-dialog.ts    # a 打开的完整树对话框：顶部搜索行、中间画树线的树（和面板共用折叠状态，折叠的段头画 ⊞）、底部提示，几乎占满终端；目前只有 Esc/q 关闭，搜索 / 过滤 / 移动 / z / y / T / Enter 是下个任务
 │       ├── confirm-dialog.ts # 删除 / fork 前的确认框（TODO，可基于 SelectDialog）
 │       ├── help-overlay.ts   # ? 快捷键帮助：居中弹窗，内容来自最终 keymap
 │       └── session-info-dialog.ts  # i 会话信息弹窗（TODO）
@@ -80,6 +81,7 @@ src/
 ├── data/                     # 数据层：只读适配 pi 的 SessionManager，产出纯数据行，无 UI
 │   ├── sessions.ts           # SessionManager.list/listAll -> SessionRow[]；sortSessions
 │   ├── tree.ts               # getTree -> TreeRow[]（parentId 指向最近的"也是行"的祖先，含 isLeaf 标记；kind 分 message/tool/system/meta，和 pi /tree 一致）；applyTreeFilter（default 只藏 meta、no-tools 再藏工具结果，过滤后重新挂父节点）；isEffectiveLeaf
+│   ├── tree-fold.ts          # 纯函数：折叠（z）：foldableIds（段头 = 父节点有多个子节点且自己有后代；单根不可折叠）、defaultFolded（旁支默认折叠）、applyTreeFold（隐藏折叠段的后代）、foldTarget（z 作用的段头：自己或最近的可折叠祖先）
 │   ├── content.ts            # getBranch -> ContentBlock[]；loadSessionInfo；resolveContentLeaf
 │   └── search.ts             # 纯函数：解析 name:/model:/path:/tag:/after:/before: 查询（TODO）
 ├── config/
@@ -106,7 +108,7 @@ docs/issues.md                # 已知问题 / 搁置的问题，解决后划掉
 AGENTS.md                     # 仅指向本文件，规则统一在这里维护
 ```
 
-数据流：`sessions.ts` → `SessionRow[]` → SESSIONS 面板；选中行驱动 `tree.ts` → `TreeRow[]` → TREE 面板；选中节点（或活动叶子）驱动 `content.ts` → `ContentBlock[]` → CONTENT 面板。所有 UI 状态集中在 `PanelState`（`src/ui/app.ts`）。
+数据流：`sessions.ts` → `SessionRow[]` → SESSIONS 面板；选中行驱动 `tree.ts` → `TreeRow[]` → `tree-fold.ts` 隐藏折叠段（`PanelState.treeFolded`，默认旁支折叠）→ TREE 面板；选中节点（或活动叶子）驱动 `content.ts` → `ContentBlock[]` → CONTENT 面板。所有 UI 状态集中在 `PanelState`（`src/ui/app.ts`）。
 
 快捷键是间接绑定：按键 → `resolveKeys`（`src/config/keys.ts`，先面板 scope 再 global，支持 `gg` 这类多键序列） → `ActionId`（`src/types.ts`） → `LazyPanel.dispatch`。默认值在 `src/config/keymap.ts`，`loadConfig` 深合并用户覆盖。新增动作时要同时改：`ActionId`、默认键位、`ACTION_DESCRIPTIONS`、`dispatch` 里的分发、`docs/keybindings.md`。
 

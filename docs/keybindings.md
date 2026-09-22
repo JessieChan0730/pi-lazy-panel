@@ -73,31 +73,38 @@ Source of truth: `src/config/keymap.ts`. Override any binding in
 
 ## Tree pane
 
-The pane only shows a slice of the tree, so search (`/`, `n`, `N`) and the
-filters live in the tree dialog (`a`). Pressing `/` in the pane just points at `a`.
+The pane shows the tree as a folded outline: `▸` a folded side branch, `▾` an
+open one, `─` an alternative that was never continued; rows inside a branch
+are indented two columns per level (four levels at most, `… ` beyond). Side
+branches start folded, the active branch open. Search (`/`, `n`, `N`) and the
+filters live in the tree dialog (`a`), which draws the same rows with pi-style
+guide lines. Pressing `/` in the pane just points at `a`.
 
 | Key             | Action                                              |
 | --------------- | --------------------------------------------------- |
 | ~~`j` `k` `↑` `↓`~~ | ~~Move cursor~~                                 |
 | ~~`gg` / `G`~~  | ~~Top / bottom~~                                    |
 | ~~`Enter`~~     | ~~Restore to node, like `/tree`: a centered menu asks *No summary / Summarize / Summarize with custom prompt* (`j`/`k`/`↑`/`↓` move, `Enter` pick, `Esc` back to the tree); the custom prompt is a one-line input (`Enter` summarize, `Esc` back to the menu). Switches to that session first when needed. No menu when the node already is the leaf (Enter just closes the panel) or pi's `branchSummary.skipPrompt` is on~~ |
+| ~~`z`~~         | ~~Fold / unfold the branch under the cursor: on a `▸` / `▾` row it toggles, anywhere inside a branch it folds that branch and jumps to its head (vim's `zc`); the trunk of a linear conversation has nothing to fold~~ |
 | ~~`y`~~         | ~~Copy node text (full text, like `Ctrl+x` in `/tree`)~~ |
 | ~~`T`~~         | ~~Add / edit label in a centered dialog, like lazygit's commit popup (`Enter` save, `Esc` cancel, empty removes; same as `Shift+T` in `/tree`)~~ |
-| ~~`a`~~         | ~~Open the tree dialog: the whole tree in a big box (search row on top, key hints at the bottom); `Esc` / `q` close it~~ |
+| ~~`a`~~         | ~~Open the tree dialog: the whole tree in a big box (search row on top, key hints at the bottom), same fold state as the pane; `Esc` / `q` close it~~ |
 
 ## Tree dialog (`a` from the tree pane)
 
 Keys inside the dialog are the next task; today only `Esc` / `q` (close) work
-and everything else is swallowed. Planned: `/` search (live), `j` `k` `↑` `↓`,
-`y` copy, `T` label, `d` `t` `u` `L` `a` filters, `Enter` restore, `h` / `l`
-fold / unfold a branch (`⊟` foldable, `⊞` folded, like `/tree`).
+and everything else is swallowed. The dialog lists the same rows as the pane
+(folded branches left out, a folded row shows `⊞` on its connector like
+`/tree`). Planned: `/` search (live), `j` `k` `↑` `↓`, `y` copy, `T` label,
+`d` `t` `u` `L` `a` filters, `Enter` restore, `z` fold / unfold (the same
+fold state as the pane).
 
 | Key             | Action                                              |
 | --------------- | --------------------------------------------------- |
 | ~~`Esc` / `q`~~ | ~~Close the dialog~~                                |
 | `/`             | Focus the search row (live filtering)               |
 | `d` `t` `u` `L` `a` | Filter: default (hide bookkeeping) / no tool results / user-only / labeled / all |
-| `h` / `l`       | Fold / unfold the branch under the cursor           |
+| `z`             | Fold / unfold the branch under the cursor (shared with the pane) |
 
 ## Content pane (read-only)
 
