@@ -65,7 +65,8 @@ src/
 │       ├── footer.ts         # 底部一行：模式 + 当前面板快捷键提示（弹窗打开时显示弹窗的提示）
 │       ├── prompt-bar.ts     # 底部一行输入的通用组件（包装 pi-tui Input），搜索栏基于它
 │       ├── search-bar.ts     # 底部搜索输入：显示 `搜索:`（匹配/高亮 TODO）
-│       ├── label-dialog.ts   # T 打标签：居中弹窗输入框（类似 lazygit commit 弹窗）
+│       ├── input-dialog.ts   # 通用的居中单行输入弹窗（包装 pi-tui Input，3 行高）：标题 / 预填值 / 提示 / 回调在 open 时传入
+│       ├── label-dialog.ts   # T 打标签：InputDialog 的预设（标题 + footer 提示）；给 session 起名等场景照此加预设
 │       ├── confirm-dialog.ts # 删除 / fork 前的确认框（TODO）
 │       ├── help-overlay.ts   # ? 快捷键帮助：居中弹窗，内容来自最终 keymap
 │       └── session-info-dialog.ts  # i 会话信息弹窗（TODO）

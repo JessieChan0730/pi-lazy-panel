@@ -81,6 +81,18 @@
 - `ui/widgets/footer.ts` 新增 `hints` 参数：弹窗打开时 footer 显示弹窗自己的按键提示，而不是当前面板的键位；`types.ts` 新增 `KeyHint` 类型给 footer / prompt-bar / label-dialog 共用。
 - `test/panel.test.ts` 的 T 测试改为断言弹窗画在面板中间、标题带节点信息、footer 带提示、Enter/Esc 后弹窗消失；`test/ui.test.ts` 加了 `overlayCentered` 的几何测试。
 
+### 输入弹窗通用化 + 压缩高度（2026-09-22）
+
+- ~~Label 弹窗从 5 行（上下各留一行空白）压到 3 行：边框、输入行、边框。~~
+- ~~输入弹窗抽成通用组件，后续给 session 起名（`/name`）等场景直接复用，不再各写一个。~~
+
+实现说明（2026-09-22）：
+
+- 新增 `ui/widgets/input-dialog.ts`（`InputDialog`）：标题、预填值、标题栏右侧说明、footer 提示和 onSubmit / onCancel 都在 `open(spec)` 时传入，`isOpen` / `hints` 供 app.ts 决定是否叠加弹窗和 footer 显示什么；`close()` 只清状态不触发回调。
+- `ui/widgets/label-dialog.ts` 缩减为打标签的预设，只剩 `LABEL_DIALOG_TITLE` / `LABEL_DIALOG_HINTS`；`app.ts` 持有一个 `inputDialog`，按键路由、叠加渲染、footer 都改为看 `inputDialog.isOpen`，不再写死 `mode === "label"`。
+- 新增场景的做法：写一个预设（标题 + 提示），在动作里 `this.inputDialog.open({...})` 并把 `state.mode` 设成对应模式（footer 左侧显示的大写模式名）。
+- 测试：`test/panel.test.ts` 加了 `InputDialog` 的组件测试（3 行、宽度、二次 open 换 spec 和回调）；T 测试补了底边框紧贴输入行的断言。
+
 ### 跨平台适配（分支 `feat/windows-support`，2026-09-21）
 
 背景：`npm run install:pi` 在 Windows 上报 `Path does not exist: ...\$(pwd)`。npm 在 Windows 默认用 cmd.exe 跑 scripts，`$(pwd)` 这种 bash 命令替换会被原样传给 pi。说明之前的写法只考虑了 Linux / macOS，需要系统性排查。先在本分支把 Windows 适配好，再考虑 macOS。
