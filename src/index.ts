@@ -49,6 +49,7 @@ export default function (pi: ExtensionAPI) {
 			};
 			// overlay 句柄在面板显示后才拿到；Enter 等待 pi 切换时用它暂时隐藏面板。
 			let setHidden: ((hidden: boolean) => void) | undefined;
+			const currentFile = ctx.sessionManager.getSessionFile();
 
 			await ctx.ui.custom<void>(
 				(tui, theme, _keybindings, done) => {
@@ -64,6 +65,8 @@ export default function (pi: ExtensionAPI) {
 						initialState: { scope: config.defaultScope, sort: config.defaultSort, treeFilter: piSettings.treeFilter },
 						leftColumnRatio: config.leftColumnRatio,
 						skipSummaryPrompt: piSettings.skipBranchSummaryPrompt,
+						// 打开时 SESSIONS 光标落到 pi 当前打开的会话上；新会话没有文件 / 还没列出时留在第一行。
+						...(currentFile ? { currentSessionFile: currentFile } : {}),
 						// 配置文件有问题时在底部提示，但不阻止面板打开。
 						...(config.warnings.length ? { status: config.warnings[0] } : {}),
 					});

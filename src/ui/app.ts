@@ -44,6 +44,7 @@ import { type Binding, compileKeymap, labelsFor, labelsForFocus, matchesKeyId, r
 import { DEFAULT_KEYMAP, FOCUS_ACTIONS, isDisabledIn, PANE_TITLES, TREE_DIALOG_FOOTER, TREE_DIALOG_HINT_TEXT } from "../config/keymap.ts";
 import { LEFT_COLUMN_RATIO, PANE_IDS, SUMMARIZING_STATUS, TREE_DIALOG_SCOPE } from "../constants.ts";
 import { matchTreeRow, parseSearchQuery } from "../data/search.ts";
+import { findSessionIndex } from "../data/sessions.ts";
 import {
 	applyTreeFold,
 	defaultFolded,
@@ -183,6 +184,12 @@ export interface LazyPanelOptions {
 	status?: string;
 	/** pi's `branchSummary.skipPrompt`: TREE Enter restores without asking (no summary). */
 	skipSummaryPrompt?: boolean;
+	/**
+	 * File of the session pi currently has open. On the first load the SESSIONS
+	 * cursor starts on it (a brand-new session is not listed yet, so the cursor
+	 * stays on the first row).
+	 */
+	currentSessionFile?: string;
 }
 
 /** Max time between keys of a multi-key sequence such as "gg". */
@@ -220,6 +227,8 @@ export class LazyPanel implements Component, Focusable {
 	private contentLeaf: string | undefined;
 	private status: string | undefined;
 	private loadedSessionFile: string | undefined;
+	/** Session to put the cursor on at the first load (see `LazyPanelOptions.currentSessionFile`); cleared once used. */
+	private locateSessionFile: string | undefined;
 	private disposed = false;
 	private readonly ratio: number;
 	private readonly searchBar: SearchBar;
@@ -259,6 +268,7 @@ export class LazyPanel implements Component, Focusable {
 		this.bindings = compileKeymap(this.keymap);
 		this.ratio = o.leftColumnRatio ?? LEFT_COLUMN_RATIO;
 		this.status = o.status;
+		this.locateSessionFile = o.currentSessionFile;
 		this.searchBar = new SearchBar({
 			theme: o.theme,
 			onSubmit: (q) => this.submitSearch(q),
@@ -299,6 +309,13 @@ export class LazyPanel implements Component, Focusable {
 		this.setStatus("loading sessions…");
 		try {
 			this.sessions = await this.o.data.listSessions(this.state.scope, this.state.sort);
+			// 首次加载：光标落到 pi 当前打开的会话上（新会话还没列出来时就留在第一行）。
+			// 之后 C / A 切范围重新加载时不再定位，光标照旧回到顶部。
+			if (this.locateSessionFile !== undefined) {
+				const idx = findSessionIndex(this.sessions, this.locateSessionFile);
+				if (idx >= 0) this.state.cursor.sessions = idx;
+				this.locateSessionFile = undefined;
+			}
 			this.state.cursor.sessions = Math.min(this.state.cursor.sessions, Math.max(0, this.sessions.length - 1));
 			this.setStatus(undefined);
 		} catch (err) {

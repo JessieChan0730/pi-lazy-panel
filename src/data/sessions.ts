@@ -5,6 +5,7 @@
  * `SessionRow` shape used by the sessions pane. No UI code here.
  */
 
+import { resolve } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { ListScope, SessionRow, SessionSortMode } from "../types.ts";
 import { singleLine } from "../utils/format.ts";
@@ -52,6 +53,17 @@ function readLastModel(file: string): string | undefined {
 	} catch {
 		return undefined;
 	}
+}
+
+/**
+ * Index of the row whose file is `sessionFile` (paths compared after `resolve`,
+ * same rule as `isCurrentSession`), or -1. Used to put the cursor on pi's
+ * current session when the panel opens.
+ */
+export function findSessionIndex(rows: SessionRow[], sessionFile: string | undefined): number {
+	if (!sessionFile) return -1;
+	const target = resolve(sessionFile);
+	return rows.findIndex((row) => resolve(row.file) === target);
 }
 
 /** Return a sorted copy of the rows. */

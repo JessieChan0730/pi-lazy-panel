@@ -1462,3 +1462,41 @@ test("SelectDialog is a reusable centered menu: items / cursor / subject / hints
 	dlg.handleInput("\r");
 	assert.deepEqual(picked, [1], "a closed dialog ignores input");
 });
+
+test("the sessions cursor starts on pi's current session and stays put when it is not listed", async () => {
+	const make = (currentSessionFile?: string) => {
+		const data: DataSource = {
+			listSessions: async (scope) => (scope === "all" ? [row(1, "/a"), row(2, "/b"), row(3, "/c")] : [row(1, "/a"), row(2, "/b")]),
+			loadTree: async () => [],
+			loadContent: async () => [],
+		};
+		return new LazyPanel({
+			theme: fakeTheme,
+			data,
+			getHeight: () => 20,
+			requestRender: () => {},
+			onClose: () => {},
+			...(currentSessionFile ? { currentSessionFile } : {}),
+		});
+	};
+
+	// 当前会话是第二行：打开时光标就在第二行
+	const panel = make("/tmp/s2.jsonl");
+	await panel.load();
+	assert.equal(panel.state.cursor.sessions, 1);
+	// 之后 A 切范围重新加载时不再定位，光标照旧回到顶部
+	panel.handleInput("A");
+	await flush();
+	await flush();
+	assert.equal(panel.state.scope, "all");
+	assert.equal(panel.state.cursor.sessions, 0);
+
+	// 新会话（还没有文件，或者文件没列出来）：光标留在第一行
+	assert.equal((await loaded(make())).state.cursor.sessions, 0);
+	assert.equal((await loaded(make("/tmp/new.jsonl"))).state.cursor.sessions, 0);
+});
+
+async function loaded(panel: LazyPanel): Promise<LazyPanel> {
+	await panel.load();
+	return panel;
+}
