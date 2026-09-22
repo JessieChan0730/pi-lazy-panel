@@ -64,6 +64,8 @@ export const DEFAULT_KEYMAP: Keymap = {
 		"tree-label": "T",
 		// 小面板只显示部分数据，搜索 / 过滤放在 a 打开的完整树对话框里。
 		"tree-open": "a",
+		// 折叠 / 展开光标所在的分支段（vim 的 za）。
+		"tree-fold": "z",
 	},
 
 	// 只读面板：只保留上下滚动 + 顶部/底部（搜索 / 帮助等走 global）。
@@ -112,6 +114,7 @@ export const ACTION_DESCRIPTIONS: Record<ActionId, string> = {
 	"tree-copy": "Copy node text",
 	"tree-label": "Add / edit label",
 	"tree-open": "Open the full tree dialog (search / filters live there)",
+	"tree-fold": "Fold / unfold the branch under the cursor (inside a branch: fold it and jump to its head)",
 };
 
 /**
@@ -156,7 +159,7 @@ export const HELP_GROUPS: HelpGroup[] = [
 /** Actions shown as footer hints per pane, in display order (first few that fit). */
 export const FOOTER_HINTS: Record<PaneId, ActionId[]> = {
 	sessions: ["search", "help", "focus-next", "scope-current", "scope-all", "session-resume", "session-delete", "session-rename", "quit"],
-	tree: ["help", "focus-next", "tree-restore", "tree-open", "tree-label", "tree-copy", "quit"],
+	tree: ["help", "focus-next", "tree-restore", "tree-fold", "tree-open", "tree-label", "tree-copy", "quit"],
 	content: ["search", "help", "focus-next", "go-top", "go-bottom", "quit"],
 };
 

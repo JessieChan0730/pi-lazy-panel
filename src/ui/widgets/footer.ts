@@ -50,6 +50,7 @@ const SHORT: Partial<Record<ActionId, string>> = {
 	"session-rename": "Rename",
 	"tree-restore": "Restore",
 	"tree-open": "Tree",
+	"tree-fold": "Fold",
 	"tree-label": "Label",
 	"tree-copy": "Copy",
 	"go-top": "Top",

@@ -195,7 +195,8 @@ export type ActionId =
 	| "tree-restore"
 	| "tree-copy"
 	| "tree-label"
-	| "tree-open";
+	| "tree-open"
+	| "tree-fold";
 // content pane is read-only and only uses the shared navigation actions
 // (move-down / move-up / go-top / go-bottom), see docs/design.md.
 // Tree filters (d/t/u/L/a) and search live in the tree dialog (`tree-open`),

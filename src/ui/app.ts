@@ -25,7 +25,8 @@
  *   - j/k、gg/G：SESSIONS / TREE 移动光标，CONTENT 按行滚动；SESSIONS 里 J/K 滚动右侧内容
  *   - SESSIONS 光标变化 → 重新加载 TREE + CONTENT；TREE 光标变化 → CONTENT 高亮并滚到对应消息
  *   - TREE：y 复制节点全文（走注入的 ActionSource），T 居中弹出 Label 输入框（类似 lazygit 的 commit 弹窗），回车保存 / Esc 取消 / 空值清除；
- *     a 打开完整树对话框（顶部搜索框、中间完整树、底部提示；本任务只做 UI，Esc/q 关闭）。小面板不做 / 搜索和 d/t/u/L/a 过滤，按 / 只在 footer 提示去对话框
+ *     z 折叠 / 展开光标所在的分支段（旁支默认折叠、活动分支展开，段内按 z 折叠所在段并跳到段头）；
+ *     a 打开完整树对话框（顶部搜索框、中间完整树、底部提示；和小面板共用折叠状态，本任务只做 UI，Esc/q 关闭）。小面板不做 / 搜索和 d/t/u/L/a 过滤，按 / 只在 footer 提示去对话框
  *   - Enter：SESSIONS 里切到光标所在会话（/resume）；TREE 里以光标节点为叶子恢复（/tree restore）：先居中弹出
  *     Summarize branch? 三选菜单（No summary / Summarize / Summarize with custom prompt，自定义指令再弹一个输入框），
  *     光标就在活动叶子上或 pi 设置了 branchSummary.skipPrompt 时不问、直接进入；
@@ -38,6 +39,7 @@ import type { Component, Focusable } from "@earendil-works/pi-tui";
 import { type Binding, compileKeymap, labelsFor, matchesKeyId, resolveKeys } from "../config/keys.ts";
 import { DEFAULT_KEYMAP, FOCUS_ACTIONS, isDisabledIn, PANE_TITLES } from "../config/keymap.ts";
 import { LEFT_COLUMN_RATIO, PANE_IDS, SUMMARIZING_STATUS } from "../constants.ts";
+import { applyTreeFold, defaultFolded, foldTarget } from "../data/tree-fold.ts";
 import type {
 	ActionId,
 	ContentBlock,
@@ -56,6 +58,7 @@ import { fit, sideBySide } from "./frame.ts";
 import { type ContentLayout, layoutContent, maxScroll, renderContentPane } from "./panes/content-pane.ts";
 import { renderSessionsPane } from "./panes/sessions-pane.ts";
 import { renderTreePane } from "./panes/tree-pane.ts";
+import { type OutlinePrefix, treeOutline } from "./tree-outline.ts";
 import { renderFooter } from "./widgets/footer.ts";
 import { helpLineCount, overlayHelp } from "./widgets/help-overlay.ts";
 import { InputDialog } from "./widgets/input-dialog.ts";
@@ -89,6 +92,12 @@ export interface PanelState {
 	scope: ListScope;
 	sort: SessionSortMode;
 	treeFilter: TreeFilter;
+	/**
+	 * Folded tree rows (branch-segment heads whose descendants are hidden, see
+	 * data/tree-fold.ts). Reset to "side branches folded" whenever another
+	 * session is loaded; kept across reloads of the same session.
+	 */
+	treeFolded: Set<string>;
 	/** Whether the `?` overlay is open, and its scroll offset. */
 	helpOpen: boolean;
 	helpScroll: number;
@@ -106,6 +115,7 @@ export function createInitialState(overrides: Partial<PanelState> = {}): PanelSt
 		scope: "current-folder",
 		sort: "recent",
 		treeFilter: "default",
+		treeFolded: new Set(),
 		helpOpen: false,
 		helpScroll: 0,
 		...overrides,
@@ -180,7 +190,11 @@ export class LazyPanel implements Component, Focusable {
 	readonly keymap: Keymap;
 	private readonly bindings: Binding[];
 	private sessions: SessionRow[] = [];
+	/** Whole (filtered) tree of the loaded session; `visibleTree` is what the pane lists once folded branches are hidden. */
 	private tree: TreeRow[] = [];
+	private visibleTree: TreeRow[] = [];
+	/** Outline prefixes of `tree` for the pane, recomputed together with `visibleTree`. */
+	private treeOutline: ReadonlyMap<string, OutlinePrefix> = new Map();
 	private content: ContentBlock[] = [];
 	/** Leaf entry the current `content` branch ends at (undefined = session's own leaf). */
 	private contentLeaf: string | undefined;
@@ -271,7 +285,7 @@ export class LazyPanel implements Component, Focusable {
 	async loadSelectedSession(): Promise<void> {
 		const row = this.sessions[this.state.cursor.sessions];
 		if (!row) {
-			this.tree = [];
+			this.setTree([], new Set());
 			this.setContent([], undefined);
 			this.loadedSessionFile = undefined;
 			this.o.requestRender();
@@ -286,17 +300,18 @@ export class LazyPanel implements Component, Focusable {
 			if (this.disposed) return;
 			// Ignore stale results if the cursor moved meanwhile.
 			if (this.sessions[this.state.cursor.sessions]?.file !== file) return;
-			this.tree = tree;
+			// 换了会话：旁支折叠、活动分支展开（活动分支上的行因此一定可见）。
+			this.setTree(tree, defaultFolded(tree));
 			this.setContent(content, undefined);
 			this.loadedSessionFile = file;
 			// Put the tree cursor on the active leaf, like /tree does.
-			const leafIdx = findLastIndex(tree, (r) => r.onActiveBranch);
+			const leafIdx = findLastIndex(this.visibleTree, (r) => r.onActiveBranch);
 			this.state.cursor.tree = leafIdx >= 0 ? leafIdx : 0;
 			this.state.cursor.content = 0;
 			// 树光标落在活动叶子上，右侧内容同步滚到并高亮这条消息。
 			await this.syncContentToTree();
 		} catch (err) {
-			this.tree = [];
+			this.setTree([], new Set());
 			this.setContent([], undefined);
 			this.setStatus(`failed to open session: ${(err as Error).message}`);
 		}
@@ -332,6 +347,19 @@ export class LazyPanel implements Component, Focusable {
 		this.layoutCache = undefined;
 	}
 
+	/** Replace the tree and its fold state, then refresh what the pane lists. */
+	private setTree(rows: TreeRow[], folded: Set<string>): void {
+		this.tree = rows;
+		this.state.treeFolded = folded;
+		this.refreshTreeView();
+	}
+
+	/** 折叠状态变了 / 树重新加载后：重新算可见行和大纲前缀（光标索引指向可见行）。 */
+	private refreshTreeView(): void {
+		this.visibleTree = applyTreeFold(this.tree, this.state.treeFolded);
+		this.treeOutline = treeOutline(this.tree, this.state.treeFolded);
+	}
+
 	/**
 	 * Make the content pane follow the tree cursor.
 	 *
@@ -340,7 +368,7 @@ export class LazyPanel implements Component, Focusable {
 	 * 节点在另一条分支上 → 重新加载“以该节点为叶子”的分支再高亮。
 	 */
 	private async syncContentToTree(): Promise<void> {
-		const node = this.tree[this.state.cursor.tree];
+		const node = this.visibleTree[this.state.cursor.tree];
 		const file = this.loadedSessionFile ?? this.sessions[this.state.cursor.sessions]?.file;
 		if (!node || !file) {
 			this.state.contentHighlight = undefined;
@@ -355,7 +383,7 @@ export class LazyPanel implements Component, Focusable {
 				const content = await this.o.data.loadContent(file, wantLeaf);
 				if (this.disposed) return;
 				// 光标又动了 / 会话换了：丢弃这次结果。
-				if (this.tree[this.state.cursor.tree]?.entryId !== node.entryId || this.loadedSessionFile !== file) return;
+				if (this.visibleTree[this.state.cursor.tree]?.entryId !== node.entryId || this.loadedSessionFile !== file) return;
 				this.setContent(content, wantLeaf);
 			} catch (err) {
 				this.setStatus(`failed to load branch: ${(err as Error).message}`);
@@ -372,7 +400,7 @@ export class LazyPanel implements Component, Focusable {
 		if (!targetId) {
 			// 没有对应消息块的节点：沿 tree 往上找最近的一条有消息块的节点。
 			for (let i = this.state.cursor.tree - 1; i >= 0 && !targetId; i--) {
-				const id = this.tree[i]?.entryId;
+				const id = this.visibleTree[i]?.entryId;
 				if (id && shown.has(id)) targetId = id;
 			}
 			targetId ??= this.content[this.content.length - 1]?.entryId;
@@ -601,6 +629,9 @@ export class LazyPanel implements Component, Focusable {
 			case "tree-open":
 				this.openTreeDialog();
 				return;
+			case "tree-fold":
+				this.toggleTreeFold();
+				return;
 			case "session-resume":
 				void this.resumeSession();
 				return;
@@ -633,7 +664,7 @@ export class LazyPanel implements Component, Focusable {
 			this.setContentScroll(index);
 			return;
 		}
-		const rows = pane === "sessions" ? this.sessions : this.tree;
+		const rows = pane === "sessions" ? this.sessions : this.visibleTree;
 		const next = clamp(index, 0, rows.length - 1);
 		if (next === this.state.cursor[pane]) return;
 		this.state.cursor[pane] = next;
@@ -717,7 +748,7 @@ export class LazyPanel implements Component, Focusable {
 
 	/** Tree row under the cursor plus the file it belongs to, or undefined with a footer hint. */
 	private currentTreeNode(): { file: string; row: TreeRow } | undefined {
-		const row = this.tree[this.state.cursor.tree];
+		const row = this.visibleTree[this.state.cursor.tree];
 		const file = this.loadedSessionFile;
 		if (!row || !file) {
 			this.setStatus("no tree node selected");
@@ -803,9 +834,10 @@ export class LazyPanel implements Component, Focusable {
 		try {
 			const tree = await this.o.data.loadTree(file, this.state.treeFilter);
 			if (this.disposed || this.loadedSessionFile !== file) return;
-			this.tree = tree;
-			const idx = tree.findIndex((r) => r.entryId === entryId);
-			this.state.cursor.tree = idx >= 0 ? idx : clamp(this.state.cursor.tree, 0, Math.max(0, tree.length - 1));
+			// 同一个会话：保留折叠状态（不再是段头的 id 会被 applyTreeFold 忽略）。
+			this.setTree(tree, this.state.treeFolded);
+			const idx = this.visibleTree.findIndex((r) => r.entryId === entryId);
+			this.state.cursor.tree = idx >= 0 ? idx : clamp(this.state.cursor.tree, 0, Math.max(0, this.visibleTree.length - 1));
 			await this.syncContentToTree();
 		} catch (err) {
 			this.setStatus(`failed to reload tree: ${(err as Error).message}`);
@@ -814,10 +846,42 @@ export class LazyPanel implements Component, Focusable {
 	}
 
 	// -----------------------------------------------------------------------
+	// Tree folding (z)
+	// -----------------------------------------------------------------------
+
+	/**
+	 * z: fold / unfold the branch segment under the cursor. On a segment head the
+	 * fold toggles; anywhere inside a segment it folds that segment and moves the
+	 * cursor onto its head (vim's zc). The trunk of a single-root tree has no
+	 * segment to fold.
+	 */
+	private toggleTreeFold(): void {
+		const row = this.visibleTree[this.state.cursor.tree];
+		if (!row) {
+			this.setStatus("no tree node selected");
+			return;
+		}
+		const target = foldTarget(this.tree, row.entryId);
+		if (!target) {
+			this.setStatus("nothing to fold here");
+			return;
+		}
+		const folded = this.state.treeFolded;
+		// 光标在段头上：切换；在段内其他行：折叠所在段（此时这一段一定是展开的）。
+		if (target === row.entryId && folded.has(target)) folded.delete(target);
+		else folded.add(target);
+		this.refreshTreeView();
+		this.state.cursor.tree = Math.max(0, this.visibleTree.findIndex((r) => r.entryId === target));
+		this.o.requestRender();
+		// 光标从段内跳到了段头：右侧高亮跟着变。
+		if (target !== row.entryId) void this.syncContentToTree();
+	}
+
+	// -----------------------------------------------------------------------
 	// Tree dialog (a): the full tree in a big box
 	// -----------------------------------------------------------------------
 
-	/** a: show the whole tree of the loaded session with the cursor on the pane's node. */
+	/** a: show the whole tree of the loaded session with the cursor on the pane's node (same fold state as the pane). */
 	private openTreeDialog(): void {
 		if (!this.loadedSessionFile) {
 			this.setStatus("no session loaded");
@@ -825,7 +889,8 @@ export class LazyPanel implements Component, Focusable {
 		}
 		this.state.mode = "tree";
 		this.treeDialog.open({
-			rows: this.tree,
+			rows: this.visibleTree,
+			folded: this.state.treeFolded,
 			initialIndex: this.state.cursor.tree,
 			filter: this.state.treeFilter,
 			onClose: () => this.closeTreeDialog(),
@@ -1054,7 +1119,8 @@ export class LazyPanel implements Component, Focusable {
 			),
 			...renderTreePane(
 				{
-					rows: this.tree,
+					rows: this.visibleTree,
+					outline: this.treeOutline,
 					cursor: this.state.cursor.tree,
 					focused: this.state.focus === "tree",
 					emptyMessage: this.emptyMessage(selectedSession),

@@ -4,33 +4,31 @@
  *    [system]
  *   ├⊟ [hello] user: hi
  *   │     assistant: Hello!
- *   ├⊟ user: hi
- *   │  ├⊟ user: again
- *   │  │     assistant: …
- *   │  └─ user: last
+ *   ├⊞ user: hi                      (folded: its descendants are not listed)
  *   └─ [branch summary]: …
  *
- * Pure functions over `TreeRow[]` (pre-order, linked by `parentId`); shared by
- * the small tree pane and the full tree dialog. Rules copied from pi
- * (`tree-selector.js` flattenTree):
+ * Pure functions over `TreeRow[]` (pre-order, linked by `parentId`); used by
+ * the full tree dialog (the small pane draws the lighter outline of
+ * ./tree-outline.ts instead). Rules copied from pi (`tree-selector.js`
+ * flattenTree):
  *   - a node whose parent has several children gets a connector (├ / └)
  *   - the indent grows by one level at a branch point and once more for the
  *     first generation after it; a single-child chain stays at the same level
  *   - descendants of a connector row carry a `│` gutter in that column while
  *     later siblings follow, a blank column once the last sibling started
- *   - `⊟` on the connector marks a node that has children, `─` a leaf
+ *   - `⊟` on the connector marks a node that has children, `─` a leaf and `⊞`
+ *     a folded node (see ../data/tree-fold.ts); a folded root without a
+ *     connector gets a `⊞ ` marker after its prefix, as in pi
  * Every level is 3 columns wide.
  *
  * 树线的计算和 pi 的 /tree 一致；这里只产出前缀字符串，配色由调用方决定。
  */
 
+import { treeChildren } from "../data/tree-fold.ts";
 import type { TreeRow } from "../types.ts";
 
 /** Columns per indent level ("├⊟ " / "│  "). */
-export const LEVEL_WIDTH = 3;
-
-/** Marks dropped levels when a prefix is capped with `capPrefix`. */
-export const ELLIPSIS_PREFIX = "… ";
+const LEVEL_WIDTH = 3;
 
 /** One `│` (or blank) column carried by descendants of a connector row. */
 interface Gutter {
@@ -40,17 +38,11 @@ interface Gutter {
 
 /**
  * Guide-line prefix of every row, aligned with `rows`. Rows whose `parentId`
- * does not name an earlier row are treated as roots.
+ * does not name a row are treated as roots. `folded` rows are drawn with `⊞`
+ * (their descendants are expected to be missing from `rows` already).
  */
-export function treePrefixes(rows: TreeRow[]): string[] {
-	const children = new Map<string | undefined, TreeRow[]>();
-	const ids = new Set(rows.map((r) => r.entryId));
-	for (const r of rows) {
-		const key = r.parentId !== undefined && ids.has(r.parentId) ? r.parentId : undefined;
-		const list = children.get(key);
-		if (list) list.push(r);
-		else children.set(key, [r]);
-	}
+export function treePrefixes(rows: TreeRow[], folded: ReadonlySet<string> = new Set()): string[] {
+	const children = treeChildren(rows);
 	const roots = children.get(undefined) ?? [];
 	const multipleRoots = roots.length > 1;
 	const out = new Map<string, string>();
@@ -82,7 +74,10 @@ export function treePrefixes(rows: TreeRow[]): string[] {
 		const kids = children.get(f.row.entryId) ?? [];
 		const displayIndent = multipleRoots ? Math.max(0, f.indent - 1) : f.indent;
 		const connector = f.showConnector && !f.isVirtualRootChild;
-		out.set(f.row.entryId, buildPrefix(displayIndent, connector ? displayIndent - 1 : -1, f.isLast, kids.length > 0, f.gutters));
+		// 只有分支段的起点（showConnector）才可能被折叠；多根时的根没有连接符，折叠标记跟在前缀后面。
+		const isFolded = f.showConnector && folded.has(f.row.entryId);
+		const prefix = buildPrefix(displayIndent, connector ? displayIndent - 1 : -1, f.isLast, kids.length > 0, isFolded, f.gutters);
+		out.set(f.row.entryId, isFolded && !connector ? `${prefix}⊞ ` : prefix);
 
 		const multipleChildren = kids.length > 1;
 		// 分叉处子节点缩进 +1；分叉后的第一代再 +1 做视觉分组；单链不缩进。
@@ -103,30 +98,17 @@ export function treePrefixes(rows: TreeRow[]): string[] {
 	return rows.map((r) => out.get(r.entryId) ?? "");
 }
 
-function buildPrefix(levels: number, connectorLevel: number, isLast: boolean, hasChildren: boolean, gutters: Gutter[]): string {
+function buildPrefix(levels: number, connectorLevel: number, isLast: boolean, hasChildren: boolean, isFolded: boolean, gutters: Gutter[]): string {
 	const chars: string[] = [];
 	for (let level = 0; level < levels; level++) {
 		const gutter = gutters.find((g) => g.position === level);
 		if (gutter) {
 			chars.push(gutter.show ? "│" : " ", " ", " ");
 		} else if (level === connectorLevel) {
-			chars.push(isLast ? "└" : "├", hasChildren ? "⊟" : "─", " ");
+			chars.push(isLast ? "└" : "├", isFolded ? "⊞" : hasChildren ? "⊟" : "─", " ");
 		} else {
 			chars.push(" ", " ", " ");
 		}
 	}
 	return chars.join("");
-}
-
-/**
- * Keep only the innermost `maxLevels` levels of a prefix and mark the dropped
- * ones with `… `, so a deep tree still fits the narrow tree pane:
- *
- *   "│  │  │  ├─ "  (4 levels, max 2)  ->  "… │  ├─ "
- */
-export function capPrefix(prefix: string, maxLevels: number): string {
-	const levels = Math.floor([...prefix].length / LEVEL_WIDTH);
-	if (levels <= maxLevels) return prefix;
-	const kept = [...prefix].slice((levels - maxLevels) * LEVEL_WIDTH).join("");
-	return ELLIPSIS_PREFIX + kept;
 }

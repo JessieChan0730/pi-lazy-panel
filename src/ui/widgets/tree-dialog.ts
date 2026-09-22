@@ -16,13 +16,14 @@
  *   │ Esc/q close                                            │
  *   └────────────────────────────────────────────────────────┘
  *
- * This task ships the box itself: rows come from the panel (already
- * filtered), the cursor starts on the pane's node and the guide lines are the
- * uncapped ones from ../tree-lines.ts. Search, filters (d/t/u/L/a), j/k, y, T
- * and Enter inside the dialog are the next task; only Esc / q (close) work now
- * and every other key is swallowed.
+ * This task ships the box itself: rows come from the panel (already filtered,
+ * folded branches left out — the dialog shares the pane's fold state and draws
+ * folded rows with `⊞`), the cursor starts on the pane's node and the guide
+ * lines are the uncapped ones from ../tree-lines.ts. Search, filters
+ * (d/t/u/L/a), j/k, z, y, T and Enter inside the dialog are the next task;
+ * only Esc / q (close) work now and every other key is swallowed.
  *
- * 完整树对话框：本任务只做 UI，快捷键除了关闭都留给下个任务。
+ * 完整树对话框：本任务只做 UI，快捷键除了关闭都留给下个任务。折叠状态和小面板共用。
  */
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
@@ -42,8 +43,10 @@ export const TREE_DIALOG_HINTS: KeyHint[] = [["Esc/q", "close"]];
 
 /** What the dialog shows; passed to `open`. */
 export interface TreeDialogSpec {
-	/** Rows to list, top to bottom (already filtered by the panel). */
+	/** Rows to list, top to bottom (already filtered by the panel, descendants of folded rows left out). */
 	rows: TreeRow[];
+	/** Folded rows, drawn with `⊞` (the pane's fold state, see ../../data/tree-fold.ts). */
+	folded?: ReadonlySet<string>;
 	/** Cursor position when the dialog opens (clamped into `rows`). */
 	initialIndex?: number;
 	/** Active filter, shown in the title bar next to the position. */
@@ -130,10 +133,10 @@ export class TreeDialog {
 		if (rows.length === 0) {
 			body.push(theme.fg("muted", " No entries."));
 		} else {
-			const prefixes = treePrefixes(rows);
+			const prefixes = treePrefixes(rows, this.spec?.folded);
 			const first = scrollOffset(this.index, rows.length, visible);
 			for (let i = first; i < Math.min(rows.length, first + visible); i++) {
-				body.push(renderTreeRow(rows[i]!, prefixes[i]!, inner, i === this.index, theme));
+				body.push(renderTreeRow(rows[i]!, theme.fg("dim", prefixes[i]!), inner, i === this.index, theme));
 			}
 		}
 		while (body.length < visible + 2) body.push("");

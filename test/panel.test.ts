@@ -594,6 +594,102 @@ test("/ is disabled in the tree pane (footer points at a), and a opens the full 
 	assert.equal(h.closed(), false);
 });
 
+/** Panel with one session whose tree forks: e0 ─┬─ e1 (side) → e2, └─ e3 (active) → e4 (active leaf). */
+function makeForkedPanel() {
+	const contentCalls: Array<string | undefined> = [];
+	const data: DataSource = {
+		listSessions: async () => [row(1, "/a")],
+		loadTree: async () => [
+			treeRow(0),
+			treeRow(1, false, { parentId: "e0" }),
+			treeRow(2, false, { parentId: "e1" }),
+			treeRow(3, true, { parentId: "e0" }),
+			treeRow(4, true, { parentId: "e3", isLeaf: true }),
+		],
+		loadContent: async (_file, leaf) => {
+			contentCalls.push(leaf);
+			return leaf === "e1" || leaf === "e2" ? [block(0), block(1), block(2)] : [block(0), block(3), block(4)];
+		},
+	};
+	const panel = new LazyPanel({ theme: fakeTheme, data, getHeight: () => 20, requestRender: () => {}, onClose: () => {} });
+	// 160 columns: the left column is 40 wide, so "assistant: msg N" survives the truncation of the narrow pane
+	return { panel, contentCalls, text: (width = 160) => panel.render(width).map((l) => stripTerminalSequences(l)) };
+}
+
+test("side branches start folded; z folds / unfolds the segment under the cursor and the dialog shows ⊞", async () => {
+	const h = makeForkedPanel();
+	await h.panel.load();
+	const folded = () => [...h.panel.state.treeFolded].sort();
+	// tree rows carry "role: msg N"; content blocks say "message N", session rows "session N"
+	const treeLine = (lines: string[], role: string, i: number) => lines.find((l) => l.includes(`${role}: msg ${i}`));
+
+	// the side branch e1 starts folded (e2 hidden), the active one open; the cursor sits on the active leaf e4
+	assert.deepEqual(folded(), ["e1"]);
+	assert.equal(h.panel.state.cursor.tree, 3);
+	let lines = h.text();
+	assert.ok(lines.some((l) => l.includes("TREE") && l.includes("4/4")), lines.join("\n"));
+	assert.ok(treeLine(lines, "assistant", 1)!.includes("▸ "), treeLine(lines, "assistant", 1));
+	assert.ok(treeLine(lines, "assistant", 3)!.includes("▾ • "), treeLine(lines, "assistant", 3));
+	assert.equal(treeLine(lines, "user", 2), undefined);
+	// the root is not foldable: nothing in front of the trunk
+	assert.ok(treeLine(lines, "user", 0)!.startsWith("│  • "), treeLine(lines, "user", 0));
+	// rows inside the open branch are indented one level, right under the branch's text
+	assert.ok(treeLine(lines, "user", 4)!.startsWith("│›   • "), treeLine(lines, "user", 4));
+
+	// z on the folded head unfolds it; the cursor stays on the head
+	h.panel.handleInput("2");
+	h.panel.handleInput("k");
+	h.panel.handleInput("k");
+	assert.equal(h.panel.state.cursor.tree, 1);
+	h.panel.handleInput("z");
+	assert.deepEqual(folded(), []);
+	assert.equal(h.panel.state.cursor.tree, 1);
+	lines = h.text();
+	assert.equal(lines.indexOf(treeLine(lines, "user", 2)!), lines.indexOf(treeLine(lines, "assistant", 1)!) + 1);
+	assert.ok(treeLine(lines, "assistant", 1)!.includes("▸ ") === false && treeLine(lines, "assistant", 1)!.includes("▾ "));
+
+	// z inside the segment folds it and jumps to its head; the content pane follows the cursor
+	h.panel.handleInput("j");
+	assert.equal(h.panel.state.cursor.tree, 2);
+	await flush();
+	assert.ok(h.contentCalls.includes("e2"), h.contentCalls.join(","));
+	h.panel.handleInput("z");
+	await flush();
+	assert.deepEqual(folded(), ["e1"]);
+	assert.equal(h.panel.state.cursor.tree, 1);
+	assert.equal(treeLine(h.text(), "user", 2), undefined);
+	assert.equal(h.panel.state.contentHighlight, "e1");
+
+	// the trunk of a single-root tree has nothing to fold
+	h.panel.handleInput("g");
+	h.panel.handleInput("g");
+	h.panel.handleInput("z");
+	assert.deepEqual(folded(), ["e1"]);
+	assert.ok(h.text().at(-1)!.includes("nothing to fold"), h.text().at(-1));
+
+	// the active branch folds too (z on its leaf jumps to e3), and z on the folded head opens it again
+	h.panel.handleInput("G");
+	assert.equal(h.panel.state.cursor.tree, 3);
+	h.panel.handleInput("z");
+	await flush();
+	assert.deepEqual(folded(), ["e1", "e3"]);
+	assert.equal(h.panel.state.cursor.tree, 2);
+	assert.equal(treeLine(h.text(), "user", 4), undefined);
+	h.panel.handleInput("z");
+	assert.deepEqual(folded(), ["e1"]);
+	assert.equal(h.panel.state.cursor.tree, 2);
+	assert.ok(treeLine(h.text(), "user", 4));
+
+	// the dialog lists the same rows with ⊞ on the folded head
+	h.panel.handleInput("a");
+	lines = h.text();
+	assert.ok(lines.some((l) => l.includes("├⊞ ") && l.includes("assistant: msg 1")), lines.join("\n"));
+	assert.equal(treeLine(lines, "user", 2), undefined);
+	assert.ok(lines.some((l) => l.includes("┌─ TREE ") && l.includes("3/4 · default")), lines.join("\n"));
+	h.panel.handleInput("q");
+	h.panel.dispose();
+});
+
 test("T opens a centered Label dialog; Enter saves and refreshes the row, empty removes, Esc cancels", async () => {
 	const h = makeTreeActionPanel();
 	await h.panel.load();

@@ -1,20 +1,26 @@
 /**
  * Tree pane (left, bottom).
  *
- * Lists `TreeRow[]` of the session highlighted in the sessions pane, one line
- * per entry with pi-style guide lines (see ../tree-lines.ts):
+ * Lists the `TreeRow[]` of the session highlighted in the sessions pane as a
+ * folded outline (prefixes from ../tree-outline.ts, fold rules in
+ * ../../data/tree-fold.ts):
  *
- *   ›    • 22:18 [system]
- *     ├⊟ 22:18 user: hi
- *     │     [label] 22:19 assistant: Hi! I'm ready to help with ...
- *     └⊟ • 22:20 user: hi
- *          • 22:20 assistant: …
+ *   ›  • 22:18 [system]
+ *      • 22:18 user: hi
+ *      • 22:19 assistant: Hi! I'm ready to help with ...
+ *      ▸ 22:20 user: try again
+ *      ▾ • 22:21 [system]
+ *          • 22:21 user: hi
+ *          • 22:21 assistant: …
  *
- * The pane is narrow, so only the innermost MAX_LEVELS levels of a deep tree
- * are drawn and the rest is folded into `… `. The full tree, with search and
- * filters, lives in the tree dialog (`a`, ../widgets/tree-dialog.ts); this
- * pane renders whatever rows it is given. The cursor is highlighted, nodes off
- * the active branch are dimmed.
+ * A `▸` row is a folded side branch (its rows are hidden; `z` unfolds it), `▾`
+ * an open one, `─` a dead-end alternative; rows inside a branch are indented
+ * two columns per level, at most four levels (`… ` beyond). Side branches start
+ * folded, the active branch open. The pane renders whatever rows it is given —
+ * the panel hides the folded descendants and passes the outline prefixes; the
+ * full tree with pi-style guide lines lives in the tree dialog (`a`,
+ * ../widgets/tree-dialog.ts). The cursor is highlighted, nodes off the active
+ * branch are dimmed.
  */
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
@@ -22,14 +28,14 @@ import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { TreeRow } from "../../types.ts";
 import { formatTime } from "../../utils/format.ts";
 import { fit, frame } from "../frame.ts";
-import { capPrefix, treePrefixes } from "../tree-lines.ts";
+import { type OutlinePrefix, treeOutline } from "../tree-outline.ts";
 import { scrollOffset } from "./sessions-pane.ts";
 
-/** Guide-line levels kept in the narrow pane before folding into `… `. */
-export const MAX_LEVELS = 3;
-
 export interface TreePaneProps {
+	/** Rows to list (folded branches already hidden). */
 	rows: TreeRow[];
+	/** Outline prefix per entry id (see ../tree-outline.ts); derived from `rows` alone when omitted. */
+	outline?: ReadonlyMap<string, OutlinePrefix>;
 	cursor: number;
 	focused: boolean;
 	/** Shown when no session is selected / loading. */
@@ -38,6 +44,8 @@ export interface TreePaneProps {
 	title?: string;
 	theme: Theme;
 }
+
+const NO_PREFIX: OutlinePrefix = { indent: "", marker: "" };
 
 export function renderTreePane(p: TreePaneProps, width: number, height: number): string[] {
 	const { theme } = p;
@@ -48,10 +56,11 @@ export function renderTreePane(p: TreePaneProps, width: number, height: number):
 	if (p.rows.length === 0) {
 		body.push(theme.fg("muted", ` ${p.emptyMessage ?? "No entries."}`));
 	} else {
-		const prefixes = treePrefixes(p.rows);
+		const outline = p.outline ?? treeOutline(p.rows, new Set());
 		const first = scrollOffset(p.cursor, p.rows.length, visible);
 		for (let i = first; i < Math.min(p.rows.length, first + visible); i++) {
-			body.push(renderTreeRow(p.rows[i]!, capPrefix(prefixes[i]!, MAX_LEVELS), inner, i === p.cursor, theme));
+			const row = p.rows[i]!;
+			body.push(renderTreeRow(row, styleOutline(outline.get(row.entryId) ?? NO_PREFIX, theme), inner, i === p.cursor, theme));
 		}
 	}
 
@@ -67,11 +76,17 @@ export function renderTreePane(p: TreePaneProps, width: number, height: number):
 	});
 }
 
+/** Indent as dim as guide lines; the fold marker a notch brighter so a folded branch still shows on a dimmed row. */
+function styleOutline(prefix: OutlinePrefix, theme: Theme): string {
+	return theme.fg("dim", prefix.indent) + theme.fg("muted", prefix.marker);
+}
+
 /**
- * One tree line, laid out like pi's /tree: `› ` cursor marker, guide-line
- * prefix, `• ` on the active path, `[label]`, time, `role: ` (omitted for
- * system rows whose text already is a `[system]`-style tag) and the text
- * truncated to what is left. Shared with the tree dialog.
+ * One tree line, laid out like pi's /tree: `› ` cursor marker, the (already
+ * styled) outline or guide-line prefix, `• ` on the active path, `[label]`,
+ * time, `role: ` (omitted for system rows whose text already is a
+ * `[system]`-style tag) and the text truncated to what is left. Shared with
+ * the tree dialog.
  */
 export function renderTreeRow(row: TreeRow, prefix: string, inner: number, isCursor: boolean, theme: Theme): string {
 	const marker = isCursor ? "› " : "  ";
@@ -96,7 +111,7 @@ export function renderTreeRow(row: TreeRow, prefix: string, inner: number, isCur
 
 	const line =
 		theme.fg("accent", marker) +
-		theme.fg("dim", prefix) +
+		prefix +
 		theme.fg("accent", path) +
 		theme.fg("warning", label) +
 		theme.fg("dim", time) +

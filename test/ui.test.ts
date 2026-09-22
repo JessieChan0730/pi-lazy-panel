@@ -9,11 +9,13 @@ import { join, sep } from "node:path";
 import { test } from "node:test";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { applyTreeFilter } from "../src/data/tree.ts";
+import { applyTreeFold, defaultFolded, foldableIds, foldTarget } from "../src/data/tree-fold.ts";
 import type { TreeRow } from "../src/types.ts";
 import { fit, FRAME_DIVIDER, frame, metaBudget, overlayCentered, sideBySide } from "../src/ui/frame.ts";
 import { scrollOffset, sessionsMeta } from "../src/ui/panes/sessions-pane.ts";
-import { MAX_LEVELS, renderTreePane } from "../src/ui/panes/tree-pane.ts";
-import { capPrefix, treePrefixes } from "../src/ui/tree-lines.ts";
+import { renderTreePane } from "../src/ui/panes/tree-pane.ts";
+import { treePrefixes } from "../src/ui/tree-lines.ts";
+import { ELLIPSIS, MARK_FOLDED, MARK_LEAF, MARK_OPEN, MAX_DEPTH, treeOutline } from "../src/ui/tree-outline.ts";
 import { TreeDialog } from "../src/ui/widgets/tree-dialog.ts";
 import { formatCost, formatTokens, normalizeNewlines, shortenPath, singleLine } from "../src/utils/format.ts";
 
@@ -192,17 +194,13 @@ test("applyTreeFilter re-parents rows whose parent was filtered out to the neare
 	assert.equal(applyTreeFilter(rows, "default")[1], rows[1]);
 });
 
+/** A tree row for the geometry tests: text = id, on the active branch unless said otherwise. */
+function node(entryId: string, parentId?: string, onActiveBranch = true): TreeRow {
+	return { entryId, ...(parentId ? { parentId } : {}), role: "user", kind: "message", text: entryId, timestamp: 0, onActiveBranch };
+}
+
 /** Rows of a small forest: prefixes follow pi's /tree (branch → +1 level, first generation after → +1, chains flat). */
 function forest(): TreeRow[] {
-	const r = (entryId: string, parentId?: string): TreeRow => ({
-		entryId,
-		...(parentId ? { parentId } : {}),
-		role: "user",
-		kind: "message",
-		text: entryId,
-		timestamp: 0,
-		onActiveBranch: true,
-	});
 	//  root
 	//  ├⊟ a        (root has 2 children)
 	//  │     a1    (single child of a: +1 level for the first generation, no connector)
@@ -210,10 +208,21 @@ function forest(): TreeRow[] {
 	//     ├⊟ b1
 	//     │     b1x   (single child of b1: indented one more, gutter under b1 because b2 follows)
 	//     └─ b2
-	return [r("root"), r("a", "root"), r("a1", "a"), r("b", "root"), r("b1", "b"), r("b1x", "b1"), r("b2", "b")];
+	return [node("root"), node("a", "root"), node("a1", "a"), node("b", "root"), node("b1", "b"), node("b1x", "b1"), node("b2", "b")];
 }
 
-test("treePrefixes draws pi-style guide lines and capPrefix folds deep levels into … ", () => {
+/** A chain of branch points: each level has a dead-end sibling, so the indent keeps growing (n5 sits 6 levels deep). */
+function deepChain(): TreeRow[] {
+	const rows = [node("r")];
+	let parent = "r";
+	for (let i = 0; i < 6; i++) {
+		rows.push(node(`x${i}`, parent), node(`n${i}`, parent));
+		parent = `n${i}`;
+	}
+	return rows;
+}
+
+test("treePrefixes draws pi-style guide lines; folded rows get ⊞", () => {
 	const rows = forest();
 	assert.deepEqual(treePrefixes(rows), [
 		"", // root
@@ -227,37 +236,90 @@ test("treePrefixes draws pi-style guide lines and capPrefix folds deep levels in
 	// rows whose parent is unknown are treated as roots; two roots hang off a virtual root without connectors
 	const twoRoots = [rows[0]!, { ...rows[1]!, parentId: "missing" }];
 	assert.deepEqual(treePrefixes(twoRoots), ["", ""]);
-	assert.equal(capPrefix("│  │  │  ├─ ", 2), "… │  ├─ ");
-	assert.equal(capPrefix("│  ├─ ", 2), "│  ├─ ");
-	assert.equal(capPrefix("", 2), "");
+	// a folded row (its descendants already dropped by applyTreeFold) shows ⊞ on its connector
+	const folded = new Set(["a"]);
+	assert.deepEqual(treePrefixes(applyTreeFold(rows, folded), folded), ["", "├⊞ ", "└⊟ ", "   ├⊟ ", "   │     ", "   └─ "]);
+	// a folded root among several has no connector, so the marker follows the (empty) prefix like in pi
+	const roots = [rows[0]!, { ...rows[3]!, parentId: "missing" }, rows[4]!, rows[5]!, rows[6]!];
+	assert.deepEqual(treePrefixes(roots), ["", "", "├⊟ ", "│     ", "└─ "]);
+	const foldedRoot = new Set(["b"]);
+	assert.deepEqual(treePrefixes(applyTreeFold(roots, foldedRoot), foldedRoot), ["", "⊞ "]);
 });
 
-test("renderTreePane shows guide lines with at most MAX_LEVELS levels; the dialog shows them all", () => {
-	const deep: TreeRow[] = [];
-	const add = (entryId: string, parentId?: string) =>
-		deep.push({ entryId, ...(parentId ? { parentId } : {}), role: "user", kind: "message", text: entryId, timestamp: 0, onActiveBranch: true });
-	// a chain of branch points: each level has a dead-end sibling so the indent keeps growing
-	add("r");
-	let parent = "r";
-	for (let i = 0; i < 6; i++) {
-		add(`x${i}`, parent);
-		add(`n${i}`, parent);
-		parent = `n${i}`;
-	}
+test("tree-fold: segment starts with children fold, side branches start folded, z targets the enclosing head", () => {
+	const active = new Set(["root", "b", "b2"]);
+	const rows = forest().map((r) => ({ ...r, onActiveBranch: active.has(r.entryId) }));
+	// a lone root never folds; a / b / b1 are children of a branch point and have children; b2 has none
+	assert.deepEqual([...foldableIds(rows)].sort(), ["a", "b", "b1"]);
+	assert.deepEqual([...defaultFolded(rows)].sort(), ["a", "b1"]);
+	// folding hides every descendant; ids that are not foldable are ignored
+	assert.deepEqual(applyTreeFold(rows, new Set(["a", "b1"])).map((r) => r.entryId), ["root", "a", "b", "b1", "b2"]);
+	assert.deepEqual(applyTreeFold(rows, new Set(["root", "b2", "nope"])).map((r) => r.entryId), rows.map((r) => r.entryId));
+	assert.equal(applyTreeFold(rows, new Set()), rows);
+	// z: the row itself when foldable, else the head of its segment, nothing on the trunk
+	assert.equal(foldTarget(rows, "a"), "a");
+	assert.equal(foldTarget(rows, "a1"), "a");
+	assert.equal(foldTarget(rows, "b1x"), "b1");
+	assert.equal(foldTarget(rows, "b2"), "b");
+	assert.equal(foldTarget(rows, "root"), undefined);
+	// several roots are segment starts of a virtual root: each root with children folds
+	const roots = [rows[0]!, rows[1]!, { ...rows[3]!, parentId: "missing" }, rows[4]!];
+	assert.deepEqual([...foldableIds(roots)].sort(), ["b", "root"]);
+	assert.equal(foldTarget(roots, "a"), "root");
+});
+
+test("treeOutline: triangles on segment starts, 2 columns per level below a head, … past MAX_DEPTH", () => {
+	const rows = forest();
+	const text = (outline: Map<string, { indent: string; marker: string }>, id: string) => `${outline.get(id)!.indent}${outline.get(id)!.marker}`;
+	const open = treeOutline(rows, new Set());
+	assert.deepEqual(
+		rows.map((r) => text(open, r.entryId)),
+		[
+			"", // root: a lone root is not a segment start, nothing in front of it
+			"▾ ", // a: child of a branch point with children; the triangle sits where the trunk's text starts
+			"  ", // a1: one level below a, right under a's text
+			"▾ ", // b
+			"  ▾ ", // b1: inside b, itself a segment start
+			"    ", // b1x: inside b1
+			"  ─ ", // b2: segment start without children
+		],
+	);
+	const folded = treeOutline(rows, new Set(["a"]));
+	assert.equal(text(folded, "a"), MARK_FOLDED);
+	assert.equal(text(folded, "b"), MARK_OPEN);
+	// a linear conversation is flat: no indent, no marker
+	const chain = [node("r"), node("s", "r"), node("t", "s")];
+	assert.deepEqual([...treeOutline(chain, new Set()).values()], [{ indent: "", marker: "" }, { indent: "", marker: "" }, { indent: "", marker: "" }]);
+	// depth is capped: rows past MAX_DEPTH keep the width of a MAX_DEPTH row with `… ` standing in for the outer levels
+	const deep = treeOutline(deepChain(), new Set());
+	assert.equal(text(deep, "n3"), `${"  ".repeat(MAX_DEPTH)}${MARK_OPEN}`);
+	assert.equal(text(deep, "n4"), `${ELLIPSIS}${"  ".repeat(MAX_DEPTH - 1)}${MARK_OPEN}`);
+	assert.equal(text(deep, "n5"), `${ELLIPSIS}${"  ".repeat(MAX_DEPTH - 1)}${MARK_LEAF}`);
+});
+
+test("renderTreePane draws the outline with at most MAX_DEPTH levels; the dialog draws full guide lines and ⊞ for folded rows", () => {
+	const deep = deepChain();
 	const pane = renderTreePane({ rows: deep, cursor: deep.length - 1, focused: true, theme: plainTheme as never }, 60, deep.length + 2).map((l) =>
 		stripTerminalSequences(l),
 	);
-	// n5 sits 6 levels deep (18 columns of prefix); the pane keeps 3 levels and folds the rest into "… "
+	// n3 is the deepest level drawn as such; n5 (6 levels deep) is capped to the same width with a leading …
+	assert.ok(pane.some((l) => l.includes(`${"  ".repeat(MAX_DEPTH)}${MARK_OPEN}• `) && l.includes("user: n3")), pane.join("\n"));
 	const last = pane.at(-2)!;
-	assert.ok(last.includes(`… ${" ".repeat(6)}└─ `), last);
+	assert.ok(last.includes(`› ${ELLIPSIS}${"  ".repeat(MAX_DEPTH - 1)}${MARK_LEAF}• `) && last.includes("user: n5"), last);
 	for (const l of pane) assert.equal(visibleWidth(l), 60);
 
 	const dlg = new TreeDialog({ theme: plainTheme as never, onChange: () => {} });
 	dlg.open({ rows: deep, initialIndex: deep.length - 1, filter: "default", onClose: () => {} });
-	const box = dlg.render(80, deep.length + 6).map((l) => stripTerminalSequences(l));
-	assert.ok(!box.some((l) => l.includes("… ")), "dialog never folds");
+	let box = dlg.render(80, deep.length + 6).map((l) => stripTerminalSequences(l));
+	assert.ok(!box.some((l) => l.includes(ELLIPSIS)), "dialog never caps the depth");
 	assert.ok(box.some((l) => l.includes(`${" ".repeat(15)}└─ `) && l.includes("user: n5")), box.join("\n"));
 	for (const l of box) assert.equal(visibleWidth(l), 80);
+	// the dialog shares the pane's fold state: a folded row shows ⊞ and its descendants are gone
+	const folded = new Set(["n2"]);
+	dlg.open({ rows: applyTreeFold(deep, folded), folded, filter: "default", onClose: () => {} });
+	box = dlg.render(80, deep.length + 6).map((l) => stripTerminalSequences(l));
+	assert.ok(box.some((l) => l.includes("└⊞ ") && l.includes("user: n2")), box.join("\n"));
+	assert.ok(!box.some((l) => l.includes("user: n3")));
 });
 
 test("frame draws FRAME_DIVIDER body lines as ├──┤", () => {
