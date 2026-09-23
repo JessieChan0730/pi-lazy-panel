@@ -31,3 +31,15 @@
 - 现象：按 s 在 threaded → recent → fuzzy 之间循环，标题右侧的排序名变了，列表顺序却一样。
 - 原因：三种排序照搬 pi 内置 `/resume`（`session-selector-search.js` 的 `filterAndSortSessions`）：recent 按最后更新时间倒序；threaded 只是把 `/fork` 出来的子会话缩进挂到父会话下面、父会话按"自己和子会话里最近的一次更新"排序，没有 fork 关系时每个会话都是根，顺序和 recent 相同；fuzzy（pi 里叫 relevance）只在有搜索关键字时按匹配分数排序，没有关键字时 pi 自己也原样返回列表。插件的 `/` 搜索目前是跳转不排序，所以 fuzzy 现在和 recent 完全一样。
 - 备选方案（暂不处理）：让 SESSIONS 的搜索生效期间 fuzzy 按匹配分数重排列表（要给 `matchSessionRow` 加打分），或者把 fuzzy 从循环里去掉只留 threaded / recent。
+
+### 导出 / 分享的 HTML 和 pi 自带的 /export、/share 不完全一样（2026-09-24）
+
+- 现象：面板 `e` 导出的 HTML、`S` 上传的 HTML 里没有系统提示词和工具定义，配色是 pi 的默认主题；pi 自带的 `/export` / `/share` 对当前会话会带上这些、用当前主题。`S` 也不会像 pi 那样先试 Radius（组织内分享），只走 GitHub gist。
+- 原因：扩展 API 只有 `AgentSession.exportToHtml`（只能导出当前会话，ctx 上也没开放），包的 `exports` 只开放入口，渲染 HTML 的 `exportFromFile` 引不到，所以插件调用 pi 公开的 CLI `pi --export <file> <out>`，它本来就是为"任意会话文件"准备的、不带运行时状态。Radius 要 pi 的 `modelRuntime` 取凭据，扩展拿不到。
+- 备选方案（暂不处理）：pi 以后在 ctx 上开放导出 / 分享时改用官方 API；或者对当前会话单独走 pi 自带的 `/export`（需要扩展能触发内置命令，目前不行）。
+
+### Windows 上 `deleteSession` 的假 trash 测试失败（2026-09-24 发现，原有问题）
+
+- 现象：`test/session-actions.test.ts` 的 `deleteSession: a trash command that removes the file counts as trash` 在 Windows 上失败（期望 `trash`，实际 `unlink`），改动前的代码上同样失败，其他平台应当正常。
+- 原因：测试用一个 `trash.cmd` 包装脚本假扮 trash，但 Node 在 Windows 上不再允许不开 shell 直接 `spawnSync` 一个 `.cmd`（CVE-2024-27980 之后会报 EINVAL），于是回退到了 unlink。功能本身不受影响：Windows 上通常也没有 `trash` 命令，本来就是 unlink。
+- 备选方案（暂不处理）：`DeleteOptions.trashCommand` 改成和导出 / 分享一样的 `{ command, args }`（`session-actions.ts` 的 `CommandSpec`），测试传 `node 假脚本.cjs`，就不需要 .cmd 了。

@@ -333,13 +333,45 @@
 - footer 提示顺序（`FOOTER_HINTS.sessions`）把 fork / clone / copy-reply 放在 `s Sort` / `i Info` 后面：实测 120 列时前面的提示正好排到 `o Fork`，把常用的 Sort / Info 挤掉不划算；? 帮助里仍然全都有。
 - 测试：`test/session-actions.test.ts` 加了 6 个（`loadForkPoints` 两个、`loadLastReply` 两个、`newSession`、`forkSession` 分流、`checkForkable` 的五种拒绝、`cloneSession`）；`test/panel.test.ts` 加了 7 个（n 往返 / o 选择器 → 确认 → fork / o 的两级 Esc / 没有 user 消息 / y 确认 / Y 两种结果 / 四个键在没有 actions 时的提示），并把两个老的搜索测试里断言 `session-new: not implemented yet` 的地方改成 `new: actions unavailable`（那两个面板没注入 actions）；`SelectDialog` 的滚动几何测试加在 `test/panel.test.ts` 里（和已有的 SelectDialog 组件测试放一起）。全量 `npm run check` + `npm test`：113 个测试全过。
 
+### SESSIONS 的导出 / 导入 / 分享（2026-09-23）
+
+背景："下一步"清单里的第 2、3 项。`e`（session-export）/ `I`（session-import）/ `S`（session-share）三个键早已绑好，`actions/session-actions.ts` 里 `exportSession` / `importSession` / `shareSession` 还是 TODO 空壳。按风险从低到高做：先导出、再导入、分享放最后。
+
+- ~~动手前先查 pi 0.85.1：内置 `/export` / `/import` / `/share` 分别怎么实现（`interactive-mode.js`、`agent-session.js`、`agent-session-runtime.js`）；导出能不能对**任意会话文件**做（`exportToHtml` / `exportToJsonl` 只作用于当前会话），包里有没有导出的独立函数；导入用的 `importFromJsonl` 在扩展 ctx 上没有开放，确认有没有别的路子（例如自己复制文件再 `switchSession`），做不了就记到 issues.md。不猜。~~
+- ~~`e` 导出：先用 `SelectDialog` 选 HTML / JSONL，再用 `InputDialog` 输入输出路径（预填 pi 的默认路径，空值用默认），导出光标所在会话，footer 显示写到了哪里；非破坏、不切会话、面板不关。~~
+- ~~`I` 导入：用 `InputDialog` 输入 JSONL 路径，导入后切到导入的会话（和内置 `/import` 一样），走 `enter()` 流程；文件不存在 / 格式不对在 footer 报错、不关面板。会替换当前会话，注意 `ctx.switchSession` / `withSession` 的注意事项。~~
+- ~~`S` 分享：外发操作，先弹确认框（CLAUDE.md 第 7 条），照 pi 的 `/share` 做（大概率是 `gh gist create`），footer 显示生成的链接并可复制；`gh` 不存在 / 没登录时报 pi 同样的提示。~~
+- ~~接线：`ActionSource` 加方法、`index.ts` 组装、`dispatch` 分发、footer / `ACTION_DESCRIPTIONS` / `docs/keybindings.md` / `docs/design.md` 同步。~~
+- ~~测试：`test/session-actions.test.ts` 用临时会话文件验证导出（两种格式、默认路径、任意会话）、导入（复制 + 切换 / 报错）、分享（用假 `gh` 命令验证参数与链接解析）；`test/panel.test.ts` 加三个键的弹窗往返与无 actions 提示。~~
+
+实现说明（2026-09-24）：
+
+- 先查了 pi 0.85.1 的真实实现，结论是三个都能做，不需要 `importFromJsonl`：
+  - `/export`（`interactive-mode.js` 的 `handleExportCommand`）：路径以 `.jsonl` 结尾走 `AgentSession.exportToJsonl`，否则 `exportToHtml`，两者都只作用于当前会话，扩展 ctx 上也没有。包的 `exports` 只开放了入口，`export-html/index.js` 里对任意文件导出的 `exportFromFile` 引不到；但 pi 的 CLI 公开了同一个函数：`pi --export <file> [out]`（`main.js`，在加载扩展 / 会话之前就处理完退出，本机实测约 1 秒）。JSONL 导出（`core/session-export.js`）只是"新 header + 活动分支上的条目、parentId 重新串成链"，用包导出的 `SessionManager` + `CURRENT_SESSION_VERSION` 就能照搬。
+  - `/import`（`agent-session-runtime.js` 的 `importFromJsonl`）：把文件复制进当前会话目录（重名加 `-1`、`-2`，本来就在目录里则不复制），`SessionManager.open` 后切过去。`ctx.switchSession` 做的是同一件事的后半段（同样发 `session_before_switch`、目录不存在时同样弹"要不要在当前目录继续"），所以"自己复制 + switchSession"等价。
+  - `/share`（`session-share.js`）：先试 Radius（要 pi 的 `modelRuntime`，扩展拿不到），不行再走 gist：`gh auth status` 检查登录 → 当前会话导出 HTML 到临时目录 → `gh gist create --public=false` → 从 gist 地址取 id，拼 `PI_SHARE_VIEWER_URL || https://pi.dev/session/` + `#id`。插件只走 gist 这条。
+- actions（`actions/session-actions.ts`）：
+  - `exportTarget(cwd, file, format, input)`：空输入 = pi 的默认文件名（`pi-session-<文件名>.html` / `session-<时间>.jsonl`）放在 pi 的工作目录；输入已存在的目录或以 `/`、`\` 结尾就在里面用默认文件名；返回绝对路径和是否已存在（面板据此决定要不要问覆盖）。用户输入的路径统一走新模块 `utils/paths.ts` 的 `resolveUserPath`（去引号、`~` 用 `os.homedir()` 展开、相对路径按 cwd 解析），Windows 下 `~/`、`~\` 都能用（CLAUDE.md 第 12 条）。
+  - `exportSession(ctx, file, format, outputPath)`：JSONL 照搬 pi（当前会话用 pi 内存里的 manager，跳转后没落盘的叶子也算；其他会话读文件）；HTML 调 `pi --export`。拒绝把会话文件自己当输出（JSONL 只留一条分支会丢数据）；输出目录不存在就建（pi 的 `exportFromFile` 不建目录会失败）。
+  - 调 pi CLI 用的是**正在运行的 pi**（`runningPi`）：npm 安装时 `process.execPath` + `process.argv[1]`（cli.js），Bun 编译的单文件里可执行文件本身就是 pi（argv[1] 是磁盘上不存在的虚拟路径）。不走 PATH 上的 `pi`：Windows 上那是 `pi.cmd`，不开 shell 起不来，版本也可能不同。子进程 stdin 关掉（否则会和 pi 抢终端按键），60 秒超时。
+  - `importSession(ctx, input)`：校验（空 / 不存在 / 不是文件 / 空文件，空文件会被 `SessionManager.open` 当新会话初始化）→ 复制进 `ctx.sessionManager.getSessionDir()` → 交给 `resumeSession`（先 `SessionManager.open` 校验格式，必须在 `ctx.switchSession` 之前拦下，那里的异常会让 pi 直接退出）。校验失败或切换被取消时删掉刚复制的副本。
+  - `shareSession(file)`：`gh auth status`（命令不存在报 pi 的 "GitHub CLI (gh) is not installed…"，未登录报 "…Run 'gh auth login' first."）→ `pi --export` 到临时目录 → `gh gist create --public=false` → 取 stdout 最后一行的 gist 地址；临时目录最后删掉。外部命令都可以通过 `ExternalCommands`（`{ command, args }`）替换，测试用 `node 假脚本.cjs`，不需要 shell / .cmd。
+- 面板（`app.ts`）：
+  - `e`：`Export as` 菜单（HTML / JSONL）→ `Export to` 输入框预填默认路径（绝对路径，一眼能看到写到哪），Esc 退回菜单且光标停在刚选的格式；目标已存在弹 `Overwrite file?`（覆盖是破坏性操作），No / Esc 退回输入框并保留刚才的输入；导出期间 footer `exporting…`，完成 `exported to <路径>`，面板不关、不隐藏。
+  - `I`：`Import session` 输入框 → `Import and switch to it?` 确认（照 pi 的 "Replace current session with …?"；Esc / No 退回输入框保留路径）→ 走 `enter()`（隐藏面板、成功关闭、失败重新显示并在 footer 报原因）。空路径直接报 `import: no file given`。
+  - `S`：`Upload as secret gist?` 确认（默认 No）→ footer `sharing…` → 成功后把 pi.dev 链接复制到剪贴板（链接长，footer 可能放不下）并显示 `share URL copied: <链接>`；剪贴板失败时显示 `shared: <链接>`。
+  - 新增两个预设 `ui/widgets/export-dialog.ts`、`ui/widgets/import-dialog.ts`，确认框标题加 `SHARE_SESSION_TITLE` / `IMPORT_SESSION_TITLE` / `OVERWRITE_FILE_TITLE`；`PanelMode` 加 `export` / `import` / `share`；`ActionSource` 加 `exportTarget` / `exportSession` / `importSession` / `shareSession`（都可选，没注入时 footer 报 `export: actions unavailable` 等）；footer 提示补 `e Export` / `I Import` / `S Share`（排在最后，窄终端先被挤掉，? 帮助里都有）。
+- 和 pi 的差异（记在 issues.md）：HTML 走 CLI，所以不带系统提示词 / 工具定义、用 pi 的默认主题（pi 的 `/export` 对当前会话会带上、用当前主题）；分享只走 gist、不试 Radius。
+- 验证：本机用真实会话 + 全局 pi 的 `cli.js` 跑了一遍 HTML / JSONL 导出（HTML 写进新建的子目录，JSONL 用 `SessionManager.open` 能重新打开、id 一致）。分享没有真的上传（会把内容发出去），只用假 `gh` 测了流程。
+- 测试：`test/session-actions.test.ts` 加 7 个（`utils/paths` 的引号 / `~` / 相对路径、`exportTarget` 的默认名 / 目录 / 已存在、JSONL 导出的 header 与链、当前会话按内存叶子导出、拒绝覆盖会话文件、HTML 调 pi 的参数与报错、导入的复制 / 重名 / 原地切换、导入的各种拒绝与取消后清理副本、分享的成功 / 未登录 / 未安装 / gist 失败）；`test/panel.test.ts` 加 9 个（e 的两级弹窗往返 / JSONL / 覆盖确认 / 失败，I 的确认往返 / 空路径 / 失败重新显示，S 的确认 / 复制链接 / 失败 / 剪贴板失败，三个键在没有 actions 时的提示）。`npm run check` 通过，`npm test` 129 个里 128 个通过；唯一失败的是**原有的** `deleteSession: a trash command that removes the file counts as trash`，在 Windows 上改动前就失败（见 issues.md），和本次无关。
+
 ### 下一步可以做的任务（2026-09-23 记录，方便换机器后接着做）
 
 当前状态：SESSIONS 面板的 Enter / d / r / s / i / n / o / y / Y 都做完了，TREE 面板和树对话框的功能也齐了，三个面板的 `/` 搜索齐了。`npm run check` + `npm test`（113 个）全过。剩下的按建议顺序：
 
 1. **`space` 多选 + 批量删除**（`session-toggle-select` 已绑好键，`PanelState.selectedSessionFiles` 这个集合在删除时已经在维护了，但没有任何地方往里加）。做法：space 切换光标行的选中态、行首画标记、标题显示 `3 selected`；`d` 在有选中时改成批量确认（确认框标题带数量），逐个调 `deleteSession`、失败的留在列表里并把第一条错误写进 footer；按 design.md 的要求，选中多个时 `r`（rename）和 `o`（fork）要提示"不能对多个对象操作"。范围最小、没有新的 pi API。
-2. **`e` 导出 / `I` 导入**（`session-export` / `session-import` 已绑好键，`actions/session-actions.ts` 里 `exportSession` / `importSession` 还是 TODO 空壳）。pi 侧的 API 已经查到：导出是 `AgentSession.exportToHtml(outputPath?, { themeName? })` 和 `exportToJsonl(outputPath?)`（都在 `dist/core/agent-session.d.ts`，只对**当前打开的会话**有效，所以其他会话要么先切过去，要么自己按 session-format.md 拼 JSONL——动手前先查 pi 有没有对任意文件导出的路子）；导入是 `AgentSessionRuntime.importFromJsonl(inputPath, cwdOverride?)`，扩展 ctx 上**没有**暴露它（`ExtensionCommandContextActions` 里只有 waitForIdle / newSession / fork / navigateTree / switchSession / reload），所以导入可能做不了，先查清楚，做不了就记到 issues.md。UI 上两个都需要一个"输入路径"的输入框（`InputDialog` 直接能用），导出还要选 HTML / JSONL（`SelectDialog`）。
-3. **`S` 分享为私有 Gist**（`session-share` 已绑好键，`shareSession` 是空壳）。风险最高：要走网络、要 GitHub 凭据、是外发操作，一定要确认框并在 footer 显示生成的链接。建议放最后，动手前先查 pi 自己的 `/share` 怎么实现的（大概在 `interactive-mode.js` 里搜 `gist`）。
+2. ~~**`e` 导出 / `I` 导入**~~（2026-09-24 完成，见上面"SESSIONS 的导出 / 导入 / 分享"）（`session-export` / `session-import` 已绑好键，`actions/session-actions.ts` 里 `exportSession` / `importSession` 还是 TODO 空壳）。pi 侧的 API 已经查到：导出是 `AgentSession.exportToHtml(outputPath?, { themeName? })` 和 `exportToJsonl(outputPath?)`（都在 `dist/core/agent-session.d.ts`，只对**当前打开的会话**有效，所以其他会话要么先切过去，要么自己按 session-format.md 拼 JSONL——动手前先查 pi 有没有对任意文件导出的路子）；导入是 `AgentSessionRuntime.importFromJsonl(inputPath, cwdOverride?)`，扩展 ctx 上**没有**暴露它（`ExtensionCommandContextActions` 里只有 waitForIdle / newSession / fork / navigateTree / switchSession / reload），所以导入可能做不了，先查清楚，做不了就记到 issues.md。UI 上两个都需要一个"输入路径"的输入框（`InputDialog` 直接能用），导出还要选 HTML / JSONL（`SelectDialog`）。
+3. ~~**`S` 分享为私有 Gist**~~（2026-09-24 完成，同上）（`session-share` 已绑好键，`shareSession` 是空壳）。风险最高：要走网络、要 GitHub 凭据、是外发操作，一定要确认框并在 footer 显示生成的链接。建议放最后，动手前先查 pi 自己的 `/share` 怎么实现的（大概在 `interactive-mode.js` 里搜 `gist`）。
 
 注意事项（这次踩到的，做上面几项时同样适用）：
 
