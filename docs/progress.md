@@ -305,3 +305,44 @@
 6. ~~剪贴板~~：查了 pi 0.85.1 的 `copyToClipboard` 实现：先试 OSC 52，再按平台走 `pbcopy`（darwin）/ `clip`（win32）/ `wl-copy`、`xclip` 等（linux），Windows 已覆盖，无需插件侧处理。
 7. ~~配置路径~~：无问题。
 8. ~~文档~~：`CLAUDE.md`、`docs/design.md`、`docs/keybindings.md` 里的路径示例都已是 `~/.pi/agent/...` 写法，没有 bash 专有命令。
+
+### SESSIONS 的新建 / fork / clone / 复制末条回复（2026-09-23）
+
+背景：SESSIONS 面板已经能看、能进（Enter 恢复 / 跳节点）、能搜、能删 / 改名 / 排序 / 看信息，但"创建新会话文件"这一族命令还没接：`n`（/new）、`o`（/fork）、`y`（/clone）、`Y`（/copy 复制 AI 末条回复）。这四个键在 `keymap.ts` 里早已绑好，`actions/session-actions.ts` 里是 TODO 空壳。这一步把它们做完——三大核心命令 /resume /tree /new 里的 /new 就是这次补齐。
+
+先查了 pi 0.85.1（`interactive-mode.js`）：内置 /fork 弹一个 user 消息选择器（`AgentSession.getUserMessagesForForking()` 取全部 user 消息，默认选中最后一条），选中后 `fork(id)`（position `before`）并把该 prompt 填回编辑器；/clone 直接 `fork(getLeafId(), { position: "at" })` 并清空编辑器；两者都只作用于当前打开的会话（`ctx.fork` 操作当前 session）。`getUserMessagesForForking` / `getLeafId` 都能从 `SessionManager.open(file)` 拿到，所以选择器列表可以直接读光标会话的文件、不必先切。
+
+四个都作用于 SESSIONS 光标所在的会话（和 Enter / d / r / i 一致）；`o` / `y` 若光标会话不是当前会话，先 `switchSession` 再在 `withSession` 里 fork（照搬 `restoreNode` 处理"其他会话"的做法），最终停在 fork / clone 出来的新会话。
+
+- ~~`n` 新建：先弹 `InputDialog` 输入名字（复用 rename 那套预设），名字非空才设置（对应 /name 的 `[name]` 参数），空则不设。`ctx.newSession({ setup: sm => 非空时 sm.appendSessionInfo(name) })`，走现有 `enter()` 流程：面板隐藏 → 成功后关闭，落到新的空对话。创建、非破坏，不弹确认。~~
+- ~~`o` fork（按反馈弹选择器）：先弹 **user 消息选择器**让用户挑分叉点（默认光标停在最后一条 user 消息）→ 再弹确认框（CLAUDE.md 第 7 条 / design 第 3 条）→ fork 在选中的 user 消息之前，把该 prompt 填回编辑器。该会话没有 user 消息时 footer 报 `No messages to fork from`（pi 原话），不弹选择器。~~
+- ~~`y` clone（按反馈加确认）：弹确认框（虽然无损但会把用户切走）→ `fork(leafId, { position: "at" })` 复制活动分支、清空编辑器。~~
+- ~~`Y` 复制末条回复：读光标会话活动分支里最后一条 assistant 正文 `copyToClipboard`，footer 反馈（`copied last reply` / `no assistant reply to copy`），面板不关（和 TREE 的 `y` 一致）；不切会话。~~
+- ~~分层：`session-actions.ts` 补 `newSession` / `forkSession` / `cloneSession`；末条回复文本读取放 `data/content.ts`（action 里复制，和 tree-actions 调 `loadNodeText` 同构）。`SelectDialog` 增加可滚动窗口（选项多到超过终端高度时按窗口滚动，默认定位到 `initialIndex`），fork 选择器基于它 + 新预设 `fork-dialog.ts`（`ui/widgets/`）。~~
+- ~~接线：`ActionSource` 加四个方法、`index.ts` 组装、`dispatch` 分发；footer 提示补 `n New` / `o Fork` / `y Clone` / `Y Copy reply`；`docs/keybindings.md`、`docs/design.md` 同步。~~
+- ~~测试：`test/session-actions.test.ts` 用临时会话文件验证 `newSession`（名字透传 / 空名字不设 setup）、`forkSession`（选中 entryId 透传、当前 vs 其他会话分流）、`cloneSession`（叶子 id、分流）、末条回复读取；`test/panel.test.ts` 加 dispatch（new 输入框往返、fork 选择器 → 确认、clone 确认、copy 反馈与无回复分支、无 actions 提示）；`test/ui.test.ts` 加 `SelectDialog` 滚动窗口的几何。~~
+
+实现说明（2026-09-23）：
+
+- 先查了 pi 0.85.1 的真实行为：`/new` 就是 `handleClearCommand`（新会话，名字另说）；`/fork` 的选择器来自 `AgentSession.getUserMessagesForForking()`（遍历所有条目，只取有文字的 user 消息），选中后 `fork(id)`；`/clone` 是 `fork(getLeafId(), { position: "at" })`；`/copy` 是 `getLastAssistantText()`（跳过中止且无内容的回复，只拼 text 片段）。插件按这些行为一一对齐，`data/content.ts` 的 `loadForkPoints` / `loadLastReply` 就是这两个读取的复刻（只读文件，不碰 pi 内存）。
+- **踩到的坑（重要）**：pi 给扩展的 `ctx.fork` 包装（`interactive-mode.js` 的 `commandContextActions`）把 fork 抛的任何异常都交给 `handleFatalRuntimeError`，那个函数直接 `process.exit(1)` —— 也就是说传一个非法 entryId 进去会把用户整个 pi 退掉。所以 `session-actions.ts` 新增 `checkForkable`，在调用 `ctx.fork` 之前把 pi 会抛的几种情况全部拦下：条目不存在、position `before` 但不是 user 消息、会话文件不存在、会话记的 cwd 已被删除（fork 出来的会话要在那个目录重建）。`newSession` 的 `setup` 同理（异常也会被当致命错误），所以它只做一次 `appendSessionInfo`。
+- 分流和 `restoreNode` 一致：`ctx.fork` 只能 fork 当前打开的会话，所以光标会话是别的会话时先 `switchSession`，在 `withSession` 给的新 ctx 上 fork（旧 ctx 切换后失效）；切换后面板已被 pi 收掉，fork 失败只能 `next.ui.notify`。
+- 编辑器回填不用插件做：pi 的 fork 包装自己会 `this.editor.setText(result.selectedText ?? "")`，所以 `forkSession` 不接 `editorText` 参数（第一版写了，查了 pi 源码后删掉）。
+- UI：`SelectDialog` 新增可选的 `maxRows`（超出就按窗口滚动，`ensureVisible` 保证光标行可见，`open` 时按 `initialIndex` 定位），fork 选择器用 `dialogMaxRows()`（终端高度 - 6）当上限；新增两个预设 `ui/widgets/fork-dialog.ts`、`ui/widgets/new-session-dialog.ts`，确认框标题加 `CLONE_SESSION_TITLE` / `FORK_SESSION_TITLE`。`PanelMode` 加 `new` / `fork` / `clone` 三个模式名（footer 左侧显示）。
+- fork 的两级弹窗：选择器 → 确认框都走同一个 `selectDialog`，Esc / No 从确认框退回选择器时用 `openForkSelector(index)` 重开并把光标停在刚才那条（顺手修了第一版重开时丢掉标题右侧会话名的问题，测试里加了断言）。
+- footer 提示顺序（`FOOTER_HINTS.sessions`）把 fork / clone / copy-reply 放在 `s Sort` / `i Info` 后面：实测 120 列时前面的提示正好排到 `o Fork`，把常用的 Sort / Info 挤掉不划算；? 帮助里仍然全都有。
+- 测试：`test/session-actions.test.ts` 加了 6 个（`loadForkPoints` 两个、`loadLastReply` 两个、`newSession`、`forkSession` 分流、`checkForkable` 的五种拒绝、`cloneSession`）；`test/panel.test.ts` 加了 7 个（n 往返 / o 选择器 → 确认 → fork / o 的两级 Esc / 没有 user 消息 / y 确认 / Y 两种结果 / 四个键在没有 actions 时的提示），并把两个老的搜索测试里断言 `session-new: not implemented yet` 的地方改成 `new: actions unavailable`（那两个面板没注入 actions）；`SelectDialog` 的滚动几何测试加在 `test/panel.test.ts` 里（和已有的 SelectDialog 组件测试放一起）。全量 `npm run check` + `npm test`：113 个测试全过。
+
+### 下一步可以做的任务（2026-09-23 记录，方便换机器后接着做）
+
+当前状态：SESSIONS 面板的 Enter / d / r / s / i / n / o / y / Y 都做完了，TREE 面板和树对话框的功能也齐了，三个面板的 `/` 搜索齐了。`npm run check` + `npm test`（113 个）全过。剩下的按建议顺序：
+
+1. **`space` 多选 + 批量删除**（`session-toggle-select` 已绑好键，`PanelState.selectedSelectedFiles` 这个集合在删除时已经在维护了，但没有任何地方往里加）。做法：space 切换光标行的选中态、行首画标记、标题显示 `3 selected`；`d` 在有选中时改成批量确认（确认框标题带数量），逐个调 `deleteSession`、失败的留在列表里并把第一条错误写进 footer；按 design.md 的要求，选中多个时 `r`（rename）和 `o`（fork）要提示"不能对多个对象操作"。范围最小、没有新的 pi API。
+2. **`e` 导出 / `I` 导入**（`session-export` / `session-import` 已绑好键，`actions/session-actions.ts` 里 `exportSession` / `importSession` 还是 TODO 空壳）。pi 侧的 API 已经查到：导出是 `AgentSession.exportToHtml(outputPath?, { themeName? })` 和 `exportToJsonl(outputPath?)`（都在 `dist/core/agent-session.d.ts`，只对**当前打开的会话**有效，所以其他会话要么先切过去，要么自己按 session-format.md 拼 JSONL——动手前先查 pi 有没有对任意文件导出的路子）；导入是 `AgentSessionRuntime.importFromJsonl(inputPath, cwdOverride?)`，扩展 ctx 上**没有**暴露它（`ExtensionCommandContextActions` 里只有 waitForIdle / newSession / fork / navigateTree / switchSession / reload），所以导入可能做不了，先查清楚，做不了就记到 issues.md。UI 上两个都需要一个"输入路径"的输入框（`InputDialog` 直接能用），导出还要选 HTML / JSONL（`SelectDialog`）。
+3. **`S` 分享为私有 Gist**（`session-share` 已绑好键，`shareSession` 是空壳）。风险最高：要走网络、要 GitHub 凭据、是外发操作，一定要确认框并在 footer 显示生成的链接。建议放最后，动手前先查 pi 自己的 `/share` 怎么实现的（大概在 `interactive-mode.js` 里搜 `gist`）。
+
+注意事项（这次踩到的，做上面几项时同样适用）：
+
+- 凡是调 `ctx.fork` / `ctx.newSession` 这类会话替换 API，**异常会让 pi 直接 `process.exit(1)`**（见上面 fork 那条），所有能提前判断的非法情况都要在 actions 层先拦下。
+- 会话替换后旧 ctx 立刻失效，后续动作只能放进 `withSession` 拿到的新 ctx。
+- 破坏性 / 外发操作（批量删除、share）必须先过 `ui/widgets/confirm-dialog.ts`（CLAUDE.md 第 7 条）。

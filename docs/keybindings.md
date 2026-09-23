@@ -106,15 +106,15 @@ matches instead of `n` starting a new session.
 | ~~`Enter`~~   | ~~Resume session: pi switches to it and the panel closes; a failure (file missing, switch cancelled) stays in the footer~~ |
 | ~~`d`~~       | ~~Delete: a centered *Delete session?* box asks Yes / No (cursor on No, `y` / `n` pick directly, `Enter` confirms the highlighted entry, `Esc` cancels). Like pi's `/resume` the file goes to the system trash via the `trash` CLI when available, else it is unlinked (the footer says which); the session pi currently has open is refused without asking. The list reloads, the cursor is clamped and TREE / CONTENT follow~~ |
 | ~~`r`~~       | ~~Rename in a centered box pre-filled with the current name (`Enter` save, `Esc` cancel, empty removes the name; same as `/name` / ctrl+r in `/resume`). The list reloads with the cursor still on the session~~ |
-| `o`           | Fork and open the fork (confirm y/n)            |
+| ~~`n`~~       | ~~New session (`/new`): a centered *New session* box asks for a name (`Enter` create, `Esc` cancel, **empty starts it unnamed** — the `[name]` argument of `/name` is simply left unset). pi switches to the new session and the panel closes~~ |
+| ~~`o`~~       | ~~Fork (`/fork`): a centered selector lists the session's user messages (cursor on the last one, like pi's own `/fork`; `j` / `k` move, long lists scroll), `Enter` picks one and a *Fork session?* Yes / No box confirms (`Esc` / No goes back to the selector). The fork starts **before** that message and pi restores its text into the editor. Sessions other than the open one are switched to first; a session with no user message reports *No messages to fork from*~~ |
+| ~~`y`~~       | ~~Clone (`/clone`): a *Clone session?* Yes / No box confirms (cursor on No), then the active branch is copied to a new session file and pi opens it~~ |
+| ~~`Y`~~       | ~~Copy the last assistant reply to the clipboard (`/copy`): only its text parts, skipping thinking and tool calls; the panel stays open and the footer reports it (*copied last reply*, or *no assistant reply to copy*)~~ |
 | `Space`       | Toggle multi-select                             |
 | `e`           | Export (prompts for output directory)           |
 | `I`           | Import (prompts for JSONL path)                 |
 | `S`           | Share as private GitHub Gist                    |
-| `y`           | Clone active branch to a new session            |
-| `Y`           | Copy last assistant reply                       |
 | ~~`s`~~       | ~~Cycle sort: recent (last update) → created → title (by the title shown — name, else first-message preview — A–Z, empty sessions last) → threaded (forks indented under their parent) → …; the header shows the current one, the cursor follows its session~~ |
-| `n`           | New session (prompts for name)                  |
 | ~~`i`~~       | ~~Session info in a centered box (what `/session` shows: name, model, messages, tokens, cost, created / updated, path, id); `y` copies the whole text, `Esc` / `q` close~~ |
 
 ## Tree pane
