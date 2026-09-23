@@ -25,3 +25,9 @@
 - 现象：在 pi 里用 `/tree`（或面板 Enter → No summary）跳到旧节点后、还没发下一条消息时打开面板，当前会话的 TREE 仍把之前的分支画成活动分支，`isLeaf`（决定 Enter 弹不弹菜单）也跟着错：真正的叶子会弹菜单（无害，restore 是 no-op），被放弃的旧叶子反而不弹。
 - 原因：pi 的 `SessionManager.branch()` 只改内存里的 leaf 指针，不落盘；`data/tree.ts` / `data/content.ts` 都是 `SessionManager.open(file)` 从文件重建，文件里最后一条还是旧叶子。发一条新消息（或带摘要跳转，会追加 `branch_summary` 条目）后就恢复正常。actions 层的 `restoreNode` 用的是 pi 内存里的 `ctx.sessionManager`，判断本身不受影响。
 - 备选方案（暂不处理）：`loadTree` / `loadContent` 接受一个可选的 manager，`index.ts` 对当前会话传 `ctx.sessionManager`（`ReadonlySessionManager` 有 `getTree` / `getBranch` / `getLeafId` / `getEntries`），其他会话照旧读文件。
+
+### ~~SESSIONS 的 s 排序在没有 fork 会话时看不出变化（2026-09-23）~~（同日解决：fuzzy 去掉，换成 created / title，见 progress.md）
+
+- 现象：按 s 在 threaded → recent → fuzzy 之间循环，标题右侧的排序名变了，列表顺序却一样。
+- 原因：三种排序照搬 pi 内置 `/resume`（`session-selector-search.js` 的 `filterAndSortSessions`）：recent 按最后更新时间倒序；threaded 只是把 `/fork` 出来的子会话缩进挂到父会话下面、父会话按"自己和子会话里最近的一次更新"排序，没有 fork 关系时每个会话都是根，顺序和 recent 相同；fuzzy（pi 里叫 relevance）只在有搜索关键字时按匹配分数排序，没有关键字时 pi 自己也原样返回列表。插件的 `/` 搜索目前是跳转不排序，所以 fuzzy 现在和 recent 完全一样。
+- 备选方案（暂不处理）：让 SESSIONS 的搜索生效期间 fuzzy 按匹配分数重排列表（要给 `matchSessionRow` 加打分），或者把 fuzzy 从循环里去掉只留 threaded / recent。

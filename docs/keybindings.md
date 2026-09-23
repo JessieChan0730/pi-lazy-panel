@@ -104,8 +104,8 @@ matches instead of `n` starting a new session.
 | ~~`gg` / `G`~~ | ~~Top / bottom~~                               |
 | ~~`J` / `K`~~ | ~~Scroll the content pane~~                     |
 | ~~`Enter`~~   | ~~Resume session: pi switches to it and the panel closes; a failure (file missing, switch cancelled) stays in the footer~~ |
-| `d`           | Delete (confirm y/n; works on multi-select)     |
-| `r`           | Rename                                          |
+| ~~`d`~~       | ~~Delete: a centered *Delete session?* box asks Yes / No (cursor on No, `y` / `n` pick directly, `Enter` confirms the highlighted entry, `Esc` cancels). Like pi's `/resume` the file goes to the system trash via the `trash` CLI when available, else it is unlinked (the footer says which); the session pi currently has open is refused without asking. The list reloads, the cursor is clamped and TREE / CONTENT follow~~ |
+| ~~`r`~~       | ~~Rename in a centered box pre-filled with the current name (`Enter` save, `Esc` cancel, empty removes the name; same as `/name` / ctrl+r in `/resume`). The list reloads with the cursor still on the session~~ |
 | `o`           | Fork and open the fork (confirm y/n)            |
 | `Space`       | Toggle multi-select                             |
 | `e`           | Export (prompts for output directory)           |
@@ -113,9 +113,9 @@ matches instead of `n` starting a new session.
 | `S`           | Share as private GitHub Gist                    |
 | `y`           | Clone active branch to a new session            |
 | `Y`           | Copy last assistant reply                       |
-| `s`           | Cycle sort: Threaded / Recent / Fuzzy           |
+| ~~`s`~~       | ~~Cycle sort: recent (last update) → created → title (by the title shown — name, else first-message preview — A–Z, empty sessions last) → threaded (forks indented under their parent) → …; the header shows the current one, the cursor follows its session~~ |
 | `n`           | New session (prompts for name)                  |
-| `i`           | Session info dialog (`y` inside copies it)      |
+| ~~`i`~~       | ~~Session info in a centered box (what `/session` shows: name, model, messages, tokens, cost, created / updated, path, id); `y` copies the whole text, `Esc` / `q` close~~ |
 
 ## Tree pane
 
