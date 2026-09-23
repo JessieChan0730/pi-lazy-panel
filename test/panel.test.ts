@@ -11,11 +11,13 @@ import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { DEFAULT_KEYMAP } from "../src/config/keymap.ts";
 import { mergeKeymap } from "../src/config/config.ts";
 import { SUMMARIZING_STATUS } from "../src/constants.ts";
-import type { ContentBlock, RestoreOptions, SessionInfo, SessionRow, SessionSortMode, TreeFilter, TreeRow } from "../src/types.ts";
+import type { ContentBlock, ForkPoint, RestoreOptions, SessionInfo, SessionRow, SessionSortMode, TreeFilter, TreeRow } from "../src/types.ts";
 import { type ActionSource, type DataSource, LazyPanel } from "../src/ui/app.ts";
-import { DELETE_SESSION_TITLE } from "../src/ui/widgets/confirm-dialog.ts";
+import { CLONE_SESSION_TITLE, DELETE_SESSION_TITLE, FORK_SESSION_TITLE } from "../src/ui/widgets/confirm-dialog.ts";
+import { FORK_DIALOG_TITLE } from "../src/ui/widgets/fork-dialog.ts";
 import { InputDialog } from "../src/ui/widgets/input-dialog.ts";
 import { LABEL_DIALOG_TITLE } from "../src/ui/widgets/label-dialog.ts";
+import { NEW_SESSION_DIALOG_TITLE } from "../src/ui/widgets/new-session-dialog.ts";
 import { RENAME_DIALOG_TITLE } from "../src/ui/widgets/rename-dialog.ts";
 import { CUSTOM_PROMPT_TITLE, SUMMARY_MENU, SUMMARY_MENU_TITLE } from "../src/ui/widgets/restore-dialog.ts";
 import { SEARCH_LABEL } from "../src/ui/widgets/search-bar.ts";
@@ -242,7 +244,7 @@ test("/ shows the 搜索 bar, typing searches live, Enter keeps the query, Esc i
 	assert.equal(h.panel.state.search.sessions, undefined);
 	assert.equal(h.closed(), false);
 	h.panel.handleInput("n");
-	assert.ok(h.text().at(-1)!.includes("session-new: not implemented yet"), "n is new session again without a search");
+	assert.ok(h.text().at(-1)!.includes("new: actions unavailable"), "n is new session again without a search");
 
 	// Esc in the bar drops what was typed
 	h.panel.handleInput("/");
@@ -1470,6 +1472,37 @@ test("SelectDialog is a reusable centered menu: items / cursor / subject / hints
 	assert.deepEqual(picked, [1], "a closed dialog ignores input");
 });
 
+test("SelectDialog scrolls a long list within maxRows, keeping the cursor visible", () => {
+	const dlg = new SelectDialog({ theme: fakeTheme, onChange: () => {} });
+	const items = Array.from({ length: 8 }, (_, i) => `item${i}`);
+	const spec = { title: "Fork", items, hints: [], maxRows: 3, onSelect: () => {}, onCancel: () => {} };
+
+	// only maxRows entries are drawn (+ 2 borders), starting at the top
+	dlg.open({ ...spec, initialIndex: 0 });
+	let lines = dlg.render(30).map((l) => stripTerminalSequences(l));
+	assert.equal(lines.length, 5, "3 visible rows + 2 borders");
+	assert.ok(lines.some((l) => l.includes("› item0")), "cursor on the first item");
+	assert.ok(!lines.some((l) => l.includes("item3")), "items past the window are hidden");
+	for (const l of dlg.render(30)) assert.equal(visibleWidth(l), 30);
+
+	// moving past the bottom edge scrolls the window down, keeping the cursor row shown
+	dlg.handleInput("j");
+	dlg.handleInput("j");
+	dlg.handleInput("j");
+	assert.equal(dlg.selectedIndex, 3);
+	lines = dlg.render(30).map((l) => stripTerminalSequences(l));
+	assert.equal(lines.length, 5);
+	assert.ok(lines.some((l) => l.includes("› item3")), "cursor row stays visible after scrolling");
+	assert.ok(!lines.some((l) => l.includes("item0")), "the top item scrolled out of view");
+
+	// opening with the cursor at the end shows the bottom window
+	dlg.open({ ...spec, initialIndex: 7 });
+	lines = dlg.render(30).map((l) => stripTerminalSequences(l));
+	assert.equal(lines.length, 5);
+	assert.ok(lines.some((l) => l.includes("› item7")), "last item visible");
+	assert.ok(!lines.some((l) => l.includes("item4")), "earlier items scrolled off");
+});
+
 test("the sessions cursor starts on pi's current session and stays put when it is not listed", async () => {
 	const make = (currentSessionFile?: string) => {
 		const data: DataSource = {
@@ -1607,7 +1640,7 @@ test("/ in SESSIONS jumps live to the first match from the cursor, Enter keeps i
 	assert.ok(header().includes("4/4 · Current"), header());
 	assert.equal(footer().includes("搜索"), false, footer());
 	h.panel.handleInput("n");
-	assert.ok(footer().includes("session-new: not implemented yet"), footer());
+	assert.ok(footer().includes("new: actions unavailable"), footer());
 	assert.equal(h.panel.state.cursor.sessions, 3);
 
 	// Esc in the bar: the query is dropped and the cursor goes back to where / was pressed
@@ -1807,7 +1840,7 @@ test("each pane keeps its own query: switching panes shows the other pane's hint
  * `listSessions` honours the sort it is asked for (threaded lists the rows
  * backwards) so the cursor-follows-its-session behaviour can be observed.
  */
-function makeSessionActionPanel(opts: { actions?: Partial<ActionSource> | null; currentSessionFile?: string; info?: boolean } = {}) {
+function makeSessionActionPanel(opts: { actions?: Partial<ActionSource> | null; currentSessionFile?: string; info?: boolean; forkPoints?: ForkPoint[] } = {}) {
 	const sessions: SessionRow[] = [
 		{ ...row(1, "/a"), name: "alpha", preview: "first words" },
 		{ ...row(2, "/a"), name: "beta", preview: "second words" },
@@ -1819,6 +1852,17 @@ function makeSessionActionPanel(opts: { actions?: Partial<ActionSource> | null; 
 	const renames: Array<{ file: string; name: string }> = [];
 	const copies: string[] = [];
 	const infoCalls: string[] = [];
+	const news: string[] = [];
+	const forks: Array<{ file: string; entryId: string }> = [];
+	const clones: string[] = [];
+	const lastReplies: string[] = [];
+	const forkPointCalls: string[] = [];
+	let closed = false;
+	const hidden: boolean[] = [];
+	const forkPoints = opts.forkPoints ?? [
+		{ entryId: "e1", text: "first question" },
+		{ entryId: "e2", text: "second question" },
+	];
 	const data: DataSource = {
 		listSessions: async (_scope, sort) => {
 			lists.push(sort);
@@ -1829,6 +1873,10 @@ function makeSessionActionPanel(opts: { actions?: Partial<ActionSource> | null; 
 			return [treeRow(0), treeRow(1, true, { isLeaf: true })];
 		},
 		loadContent: async () => [block(0), block(1)],
+		loadForkPoints: async (file: string) => {
+			forkPointCalls.push(file);
+			return forkPoints;
+		},
 		...(opts.info === false
 			? {}
 			: {
@@ -1868,6 +1916,22 @@ function makeSessionActionPanel(opts: { actions?: Partial<ActionSource> | null; 
 			if (name) s.name = name;
 			else delete s.name;
 		},
+		newSession: async (name) => {
+			news.push(name);
+			return "switched";
+		},
+		forkSession: async (file, entryId) => {
+			forks.push({ file, entryId });
+			return "switched";
+		},
+		cloneSession: async (file) => {
+			clones.push(file);
+			return "switched";
+		},
+		copyLastReply: async (file) => {
+			lastReplies.push(file);
+			return true;
+		},
 		copyText: async (text) => void copies.push(text),
 		...(opts.actions ?? {}),
 	};
@@ -1877,7 +1941,10 @@ function makeSessionActionPanel(opts: { actions?: Partial<ActionSource> | null; 
 		...(opts.actions === null ? {} : { actions: source }),
 		getHeight: () => 24,
 		requestRender: () => {},
-		onClose: () => {},
+		onClose: () => {
+			closed = true;
+		},
+		setHidden: (v) => void hidden.push(v),
 		...(opts.currentSessionFile ? { currentSessionFile: opts.currentSessionFile } : {}),
 	});
 	return {
@@ -1889,6 +1956,13 @@ function makeSessionActionPanel(opts: { actions?: Partial<ActionSource> | null; 
 		renames,
 		copies,
 		infoCalls,
+		news,
+		forks,
+		clones,
+		lastReplies,
+		forkPointCalls,
+		closed: () => closed,
+		hidden,
 		text: (width = 120) => panel.render(width).map((l) => stripTerminalSequences(l)),
 		footer: () => stripTerminalSequences(panel.render(120).at(-1)!),
 		// 200 列：左栏 50 列，标题右侧放得下 "2/3 · Current · created"
@@ -2237,4 +2311,164 @@ test("Session Info wraps a value too wide for the box (the path) onto continuati
 	assert.ok(body[pathRow + 1]!.includes("ID") === false, "the continuation comes before the ID row");
 	for (const l of h.panel.render(160)) assert.equal(visibleWidth(l), 160);
 	h.panel.dispose();
+});
+
+// ---------------------------------------------------------------------------
+// SESSIONS: n new / o fork / y clone / Y copy last reply
+// ---------------------------------------------------------------------------
+
+test("n prompts for an optional name, creates the session and closes; empty name creates it unnamed", async () => {
+	const h = makeSessionActionPanel();
+	await h.panel.load();
+
+	h.panel.handleInput("n");
+	assert.equal(h.panel.state.mode, "new");
+	assert.ok(dialogAt(h.text(), NEW_SESSION_DIALOG_TITLE), "the New session prompt is drawn");
+	assert.ok(h.footer().includes("NEW") && h.footer().includes("Enter create"), h.footer());
+
+	for (const ch of "My chat") h.panel.handleInput(ch);
+	h.panel.handleInput("\r");
+	await flush();
+	assert.deepEqual(h.news, ["My chat"]);
+	assert.deepEqual(h.hidden, [true], "the panel is hidden while pi creates the session");
+	assert.equal(h.closed(), true);
+
+	// empty name creates an unnamed session (the name is left unset)
+	const bare = makeSessionActionPanel();
+	await bare.panel.load();
+	bare.panel.handleInput("n");
+	bare.panel.handleInput("\r");
+	await flush();
+	assert.deepEqual(bare.news, [""]);
+	assert.equal(bare.closed(), true);
+
+	// Esc cancels the prompt without creating anything
+	const cancel = makeSessionActionPanel();
+	await cancel.panel.load();
+	cancel.panel.handleInput("n");
+	cancel.panel.handleInput("\x1b");
+	assert.equal(cancel.panel.state.mode, "normal");
+	assert.deepEqual(cancel.news, []);
+	assert.equal(cancel.closed(), false);
+});
+
+test("o lists the user messages to fork before (last selected), confirms, then forks with the picked prompt", async () => {
+	const h = makeSessionActionPanel();
+	await h.panel.load();
+
+	h.panel.handleInput("o");
+	await flush();
+	assert.deepEqual(h.forkPointCalls, ["/tmp/s1.jsonl"]);
+	assert.equal(h.panel.state.mode, "fork");
+	const sel = dialogAt(h.text(), FORK_DIALOG_TITLE);
+	assert.ok(sel, "the fork selector is drawn");
+	// cursor defaults to the last user message (pi's default)
+	assert.ok(sel.body.some((l) => l.includes("› second question")), sel.body.join("|"));
+
+	// Enter on a message opens the Yes / No confirmation on that message
+	h.panel.handleInput("\r");
+	const confirm = dialogAt(h.text(), FORK_SESSION_TITLE);
+	assert.ok(confirm, "the confirmation is drawn");
+	assert.ok(confirm.title.includes("second question"), confirm.title);
+	assert.ok(confirm.body[1]!.includes("› No"), "the cursor starts on No");
+	assert.deepEqual(h.forks, [], "nothing is forked until confirmed");
+
+	// y confirms → fork before that entry (pi fills the fork's editor with it), panel closes
+	h.panel.handleInput("y");
+	await flush();
+	assert.deepEqual(h.forks, [{ file: "/tmp/s1.jsonl", entryId: "e2" }]);
+	assert.deepEqual(h.hidden, [true]);
+	assert.equal(h.closed(), true);
+});
+
+test("o: Esc on the confirmation returns to the selector; Esc on the selector cancels the fork", async () => {
+	const h = makeSessionActionPanel();
+	await h.panel.load();
+
+	// pick the first message, then back out of the confirmation
+	h.panel.handleInput("o");
+	await flush();
+	h.panel.handleInput("k"); // move up to the first message
+	h.panel.handleInput("\r");
+	assert.ok(dialogAt(h.text(), FORK_SESSION_TITLE), "confirmation open");
+	h.panel.handleInput("\x1b");
+	const sel = dialogAt(h.text(), FORK_DIALOG_TITLE);
+	assert.ok(sel, "back on the selector");
+	assert.ok(sel.body.some((l) => l.includes("› first question")), "cursor kept on the message that was being confirmed");
+	assert.ok(sel.title.includes("alpha"), `the re-opened selector keeps its subject: ${sel.title}`);
+	assert.deepEqual(h.forks, []);
+
+	// Esc on the selector cancels everything
+	h.panel.handleInput("\x1b");
+	assert.equal(h.panel.state.mode, "normal");
+	assert.deepEqual(h.forks, []);
+	assert.equal(h.closed(), false);
+});
+
+test("o on a session with no user messages reports it and opens nothing", async () => {
+	const h = makeSessionActionPanel({ forkPoints: [] });
+	await h.panel.load();
+	h.panel.handleInput("o");
+	await flush();
+	assert.equal(h.panel.state.mode, "normal");
+	assert.equal(dialogAt(h.text(), FORK_DIALOG_TITLE), undefined);
+	assert.ok(h.footer().includes("No messages to fork from"), h.footer());
+	assert.deepEqual(h.forks, []);
+});
+
+test("y asks Clone session? and only clones once confirmed; n / Esc cancel", async () => {
+	const h = makeSessionActionPanel();
+	await h.panel.load();
+
+	// n cancels
+	h.panel.handleInput("y");
+	assert.equal(h.panel.state.mode, "clone");
+	const dlg = dialogAt(h.text(), CLONE_SESSION_TITLE);
+	assert.ok(dlg && dlg.title.includes("alpha"), dlg?.title);
+	assert.ok(dlg!.body[1]!.includes("› No"), "cursor starts on No");
+	assert.ok(h.footer().includes("CLONE"), h.footer());
+	h.panel.handleInput("n");
+	assert.equal(h.panel.state.mode, "normal");
+	assert.deepEqual(h.clones, []);
+
+	// y confirms → clone the active branch, panel closes
+	h.panel.handleInput("y");
+	h.panel.handleInput("y");
+	await flush();
+	assert.deepEqual(h.clones, ["/tmp/s1.jsonl"]);
+	assert.deepEqual(h.hidden, [true]);
+	assert.equal(h.closed(), true);
+});
+
+test("Y copies the last assistant reply to the clipboard and stays open, reporting when there is none", async () => {
+	const h = makeSessionActionPanel();
+	await h.panel.load();
+	h.panel.handleInput("Y");
+	await flush();
+	assert.deepEqual(h.lastReplies, ["/tmp/s1.jsonl"]);
+	assert.equal(h.closed(), false);
+	assert.ok(h.footer().includes("copied last reply"), h.footer());
+
+	// no reply yet: the footer says so, nothing is copied to the clipboard as a reply
+	const empty = makeSessionActionPanel({ actions: { copyLastReply: async () => false } });
+	await empty.panel.load();
+	empty.panel.handleInput("Y");
+	await flush();
+	assert.ok(empty.footer().includes("no assistant reply to copy"), empty.footer());
+});
+
+test("n / o / y / Y report when no actions are wired", async () => {
+	const h = makeSessionActionPanel({ actions: null });
+	await h.panel.load();
+	h.panel.handleInput("n");
+	assert.ok(h.footer().includes("new: actions unavailable"), h.footer());
+	h.panel.handleInput("o");
+	await flush();
+	assert.ok(h.footer().includes("fork: actions unavailable"), h.footer());
+	h.panel.handleInput("y");
+	assert.ok(h.footer().includes("clone: actions unavailable"), h.footer());
+	h.panel.handleInput("Y");
+	await flush();
+	assert.ok(h.footer().includes("copy: actions unavailable"), h.footer());
+	assert.equal(h.panel.state.mode, "normal");
 });

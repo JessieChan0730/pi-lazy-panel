@@ -7,8 +7,8 @@
  */
 
 import { SessionManager, type SessionEntry } from "@earendil-works/pi-coding-agent";
-import type { ContentBlock, SessionInfo } from "../types.ts";
-import { normalizeNewlines } from "../utils/format.ts";
+import type { ContentBlock, ForkPoint, SessionInfo } from "../types.ts";
+import { normalizeNewlines, singleLine } from "../utils/format.ts";
 
 export interface LoadContentOptions {
 	sessionFile: string;
@@ -60,6 +60,53 @@ function isConversation(entry: SessionEntry): boolean {
 	if (entry.type !== "message") return false;
 	const role = entry.message.role;
 	return role === "user" || role === "assistant" || role === "toolResult";
+}
+
+/**
+ * Every user message in the file, in order, as fork points for `/fork`'s selector.
+ *
+ * 照搬 pi 内置 /fork 的 `getUserMessagesForForking`：遍历所有条目（不限活动分支），
+ * 只取有文字的 user 消息（只有图片的不列），文本压成一行给选择器显示（选择器再按宽度截断）。
+ */
+export async function loadForkPoints(sessionFile: string): Promise<ForkPoint[]> {
+	const manager = SessionManager.open(sessionFile);
+	const points: ForkPoint[] = [];
+	for (const entry of manager.getEntries()) {
+		if (entry.type !== "message" || entry.message.role !== "user") continue;
+		const text = singleLine(textParts(entry.message.content, " "));
+		if (text) points.push({ entryId: entry.id, text });
+	}
+	return points;
+}
+
+/**
+ * Text of the last assistant message on the active branch (what `/copy` copies).
+ * `undefined` when there is nothing to copy.
+ *
+ * 照搬 pi 的 `getLastAssistantText`：跳过中止且没有内容的回复，取最后一条回复里的 text 片段
+ * 原样拼接（不含思考过程和工具调用）；这条回复只有工具调用时算没有可复制的，不再往前找。
+ */
+export async function loadLastReply(sessionFile: string): Promise<string | undefined> {
+	const manager = SessionManager.open(sessionFile);
+	const branch = manager.getBranch(resolveContentLeaf(manager));
+	for (let i = branch.length - 1; i >= 0; i--) {
+		const entry = branch[i]!;
+		if (entry.type !== "message") continue;
+		const m = entry.message;
+		if (m.role !== "assistant") continue;
+		if (m.stopReason === "aborted" && m.content.length === 0) continue;
+		return textParts(m.content, "").trim() || undefined;
+	}
+	return undefined;
+}
+
+/** The `text` parts of a message joined by `separator` (images, thinking and tool calls left out). */
+function textParts(content: string | Part[], separator: string): string {
+	if (typeof content === "string") return normalizeNewlines(content);
+	return content
+		.filter((p) => p.type === "text")
+		.map((p) => normalizeNewlines(p.text ?? ""))
+		.join(separator);
 }
 
 type Part = { type: string; text?: string; name?: string; arguments?: Record<string, unknown> };

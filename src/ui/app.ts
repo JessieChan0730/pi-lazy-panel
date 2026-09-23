@@ -68,6 +68,7 @@ import type {
 	ContentBlock,
 	DeleteMethod,
 	EnterOutcome,
+	ForkPoint,
 	KeyHint,
 	Keymap,
 	ListScope,
@@ -87,11 +88,18 @@ import { type ContentLayout, layoutContent, maxScroll, renderContentPane } from 
 import { renderSessionsPane } from "./panes/sessions-pane.ts";
 import { renderTreePane } from "./panes/tree-pane.ts";
 import { type OutlinePrefix, treeOutline } from "./tree-outline.ts";
-import { confirmDialogSpec, DELETE_SESSION_TITLE } from "./widgets/confirm-dialog.ts";
+import {
+	CLONE_SESSION_TITLE,
+	confirmDialogSpec,
+	DELETE_SESSION_TITLE,
+	FORK_SESSION_TITLE,
+} from "./widgets/confirm-dialog.ts";
 import { renderFooter } from "./widgets/footer.ts";
+import { FORK_DIALOG_HINTS, FORK_DIALOG_TITLE } from "./widgets/fork-dialog.ts";
 import { compactKeys, helpLineCount, overlayHelp } from "./widgets/help-overlay.ts";
 import { InputDialog } from "./widgets/input-dialog.ts";
 import { LABEL_DIALOG_HINTS, LABEL_DIALOG_TITLE } from "./widgets/label-dialog.ts";
+import { NEW_SESSION_DIALOG_HINTS, NEW_SESSION_DIALOG_TITLE } from "./widgets/new-session-dialog.ts";
 import { RENAME_DIALOG_HINTS, RENAME_DIALOG_TITLE } from "./widgets/rename-dialog.ts";
 import {
 	CUSTOM_PROMPT_HINTS,
@@ -161,6 +169,8 @@ export interface DataSource {
 	loadContent(sessionFile: string, leafEntryId?: string): Promise<ContentBlock[]>;
 	/** `i` in SESSIONS: what /session shows; undefined when the file cannot be read. */
 	loadSessionInfo?(sessionFile: string): Promise<SessionInfo | undefined>;
+	/** `o` in SESSIONS: the user messages the fork selector lists (empty = nothing to fork). */
+	loadForkPoints?(sessionFile: string): Promise<ForkPoint[]>;
 }
 
 /**
@@ -183,6 +193,14 @@ export interface ActionSource {
 	deleteSession?(sessionFile: string): Promise<DeleteMethod>;
 	/** r in SESSIONS: set the display name ("" clears it). */
 	renameSession?(sessionFile: string, name: string): Promise<void>;
+	/** n in SESSIONS: start a fresh session, naming it when `name` is non-empty (/new). */
+	newSession?(name: string): Promise<EnterOutcome>;
+	/** o in SESSIONS (after picking a message and confirming): fork before that user message and open the fork (/fork). */
+	forkSession?(sessionFile: string, entryId: string): Promise<EnterOutcome>;
+	/** y in SESSIONS (after confirmation): clone the active branch to a new file (/clone). */
+	cloneSession?(sessionFile: string): Promise<EnterOutcome>;
+	/** Y in SESSIONS: copy the last assistant reply to the clipboard; `false` = no reply yet. */
+	copyLastReply?(sessionFile: string): Promise<boolean>;
 	/** y in the Session Info dialog: copy its text to the clipboard. */
 	copyText?(text: string): Promise<void>;
 }
@@ -296,6 +314,10 @@ export class LazyPanel implements Component, Focusable {
 	private renameTarget: SessionRow | undefined;
 	/** Session the delete confirmation is about while `mode === "confirm"`. */
 	private deleteTarget: SessionRow | undefined;
+	/** Session being forked while `mode === "fork"`: its file, title-bar subject and the user messages to pick from. */
+	private forkTarget: { file: string; subject: string; points: ForkPoint[] } | undefined;
+	/** Session the clone confirmation is about while `mode === "clone"`. */
+	private cloneTarget: SessionRow | undefined;
 	/** True while an Enter action is waiting for pi (keys are ignored, the panel is hidden). */
 	private entering = false;
 	/** Raw key chunks of an unfinished multi-key sequence. */
@@ -790,6 +812,18 @@ export class LazyPanel implements Component, Focusable {
 				return;
 			case "session-info":
 				void this.openSessionInfo();
+				return;
+			case "session-new":
+				this.openNewSessionInput();
+				return;
+			case "session-fork":
+				void this.startFork();
+				return;
+			case "session-clone":
+				this.confirmCloneSession();
+				return;
+			case "session-copy-last-reply":
+				void this.copyLastReply();
 				return;
 			default:
 				this.setStatus(`${action}: not implemented yet`);
@@ -1646,6 +1680,179 @@ export class LazyPanel implements Component, Focusable {
 		this.inputDialog.focused = false;
 		this.renameTarget = undefined;
 		this.o.requestRender();
+	}
+
+	/** n: prompt for an optional name, then start a fresh session (/new) and close the panel. */
+	private openNewSessionInput(): void {
+		if (!this.o.actions?.newSession) {
+			this.setStatus("new: actions unavailable");
+			return;
+		}
+		this.state.mode = "new";
+		this.inputDialog.open({
+			title: NEW_SESSION_DIALOG_TITLE,
+			value: "",
+			hints: NEW_SESSION_DIALOG_HINTS,
+			onSubmit: (v) => void this.submitNewSession(v),
+			onCancel: () => this.closeNewSessionInput(),
+		});
+		this.inputDialog.focused = this._focused;
+		this.o.requestRender();
+	}
+
+	/** Enter in the New session prompt: create it (naming it when non-empty), then close via `enter()`. */
+	private async submitNewSession(value: string): Promise<void> {
+		const create = this.o.actions?.newSession;
+		this.closeNewSessionInput();
+		if (!create) return;
+		const name = value.trim();
+		await this.enter("new", () => create(name));
+	}
+
+	private closeNewSessionInput(): void {
+		this.state.mode = this.baseMode();
+		this.inputDialog.close();
+		this.inputDialog.focused = false;
+		this.o.requestRender();
+	}
+
+	/** o: pick the user message to fork before (pi's /fork selector), then confirm and fork. */
+	private async startFork(): Promise<void> {
+		const row = this.currentSessionRow();
+		if (!row) return;
+		if (!this.o.actions?.forkSession || !this.o.data.loadForkPoints) {
+			this.setStatus("fork: actions unavailable");
+			return;
+		}
+		let points: ForkPoint[];
+		try {
+			points = await this.o.data.loadForkPoints(row.file);
+			if (this.disposed) return;
+		} catch (err) {
+			this.setStatus(`fork failed: ${(err as Error).message}`);
+			return;
+		}
+		if (points.length === 0) {
+			this.setStatus("No messages to fork from");
+			return;
+		}
+		this.forkTarget = { file: row.file, subject: this.sessionTitle(row), points };
+		// 默认停在最后一条 user 消息（和 pi 内置 /fork 一致）。
+		this.openForkSelector(points.length - 1);
+	}
+
+	/** The fork selector with the cursor on `index` (Esc / No on the confirmation comes back onto that message). */
+	private openForkSelector(index: number): void {
+		const target = this.forkTarget;
+		if (!target) return;
+		this.state.mode = "fork";
+		this.selectDialog.open({
+			title: FORK_DIALOG_TITLE,
+			items: target.points.map((p) => p.text),
+			initialIndex: index,
+			subject: target.subject,
+			hints: FORK_DIALOG_HINTS,
+			// 消息多了按窗口滚动，不撑破终端。
+			maxRows: this.dialogMaxRows(),
+			onSelect: (i) => this.confirmFork(i),
+			onCancel: () => this.closeForkDialogs(),
+		});
+		this.o.requestRender();
+	}
+
+	/** A picked message → the Yes / No confirmation (CLAUDE.md rule 7) before the fork happens. */
+	private confirmFork(index: number): void {
+		const target = this.forkTarget;
+		const point = target?.points[index];
+		if (!target || !point) {
+			this.closeForkDialogs();
+			return;
+		}
+		this.state.mode = "fork";
+		this.selectDialog.open(
+			confirmDialogSpec({
+				title: FORK_SESSION_TITLE,
+				subject: point.text,
+				onConfirm: () => void this.runFork(target.file, point.entryId),
+				// Esc / No：退回选择器，光标停在刚选中的那条消息上。
+				onCancel: () => this.openForkSelector(index),
+			}),
+		);
+		this.o.requestRender();
+	}
+
+	/** Confirmed: fork before the picked message (pi puts its text back into the fork's editor), then close. */
+	private async runFork(file: string, entryId: string): Promise<void> {
+		const fork = this.o.actions?.forkSession;
+		this.closeForkDialogs();
+		if (!fork) return;
+		await this.enter("fork", () => fork(file, entryId));
+	}
+
+	private closeForkDialogs(): void {
+		this.state.mode = this.baseMode();
+		this.selectDialog.close();
+		this.forkTarget = undefined;
+		this.o.requestRender();
+	}
+
+	/** y: confirm, then clone the active branch of the session under the cursor to a new file (/clone). */
+	private confirmCloneSession(): void {
+		const row = this.currentSessionRow();
+		if (!row) return;
+		if (!this.o.actions?.cloneSession) {
+			this.setStatus("clone: actions unavailable");
+			return;
+		}
+		this.cloneTarget = row;
+		this.state.mode = "clone";
+		this.selectDialog.open(
+			confirmDialogSpec({
+				title: CLONE_SESSION_TITLE,
+				subject: this.sessionTitle(row),
+				onConfirm: () => void this.runClone(),
+				onCancel: () => this.closeCloneConfirm(),
+			}),
+		);
+		this.o.requestRender();
+	}
+
+	private async runClone(): Promise<void> {
+		const row = this.cloneTarget;
+		const clone = this.o.actions?.cloneSession;
+		this.closeCloneConfirm();
+		if (!row || !clone) return;
+		await this.enter("clone", () => clone(row.file));
+	}
+
+	private closeCloneConfirm(): void {
+		this.state.mode = this.baseMode();
+		this.selectDialog.close();
+		this.cloneTarget = undefined;
+		this.o.requestRender();
+	}
+
+	/** Y: copy the last assistant reply of the session under the cursor to the clipboard (/copy). */
+	private async copyLastReply(): Promise<void> {
+		const row = this.currentSessionRow();
+		if (!row) return;
+		const copy = this.o.actions?.copyLastReply;
+		if (!copy) {
+			this.setStatus("copy: actions unavailable");
+			return;
+		}
+		try {
+			const copied = await copy(row.file);
+			if (this.disposed) return;
+			this.setStatus(copied ? "copied last reply" : "no assistant reply to copy");
+		} catch (err) {
+			this.setStatus(`copy failed: ${(err as Error).message}`);
+		}
+	}
+
+	/** Rows a centered menu may show at once before it scrolls: leave room for borders + footer. */
+	private dialogMaxRows(): number {
+		return Math.max(1, this.o.getHeight() - 6);
 	}
 
 	/** s: the next sort order (recent → created → title → threaded → …); the cursor follows its session. */

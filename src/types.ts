@@ -25,7 +25,7 @@ export type SessionSortMode = (typeof SESSION_SORT_MODES)[number];
  * dialog (`a` in the tree pane) is open, `confirm` / `rename` / `info` = the
  * delete confirmation, the Rename prompt or the Session Info dialog is open.
  */
-export type PanelMode = "normal" | "search" | "label" | "restore" | "tree" | "confirm" | "rename" | "info" | "visual" | "preview";
+export type PanelMode = "normal" | "search" | "label" | "restore" | "tree" | "confirm" | "rename" | "info" | "new" | "fork" | "clone" | "visual" | "preview";
 
 /** A `key description` pair shown as a hint in the footer or a prompt bar. */
 export type KeyHint = [key: string, text: string];
@@ -129,6 +129,12 @@ export interface ContentBlock {
 	timestamp: number;
 	/** Raw markdown to render. */
 	markdown: string;
+}
+
+/** A user message the `/fork` selector can fork before (entry id + one-line preview). */
+export interface ForkPoint {
+	entryId: string;
+	text: string;
 }
 
 /** Data shown in the Session Info dialog (mirrors /session). */

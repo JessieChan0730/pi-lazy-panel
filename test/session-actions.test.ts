@@ -11,8 +11,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { CURRENT_SESSION_DELETE_ERROR, deleteSession, renameSession, resumeSession } from "../src/actions/session-actions.ts";
+import {
+	cloneSession,
+	CURRENT_SESSION_DELETE_ERROR,
+	deleteSession,
+	type ForkContext,
+	forkSession,
+	type NewSessionContext,
+	newSession,
+	renameSession,
+	resumeSession,
+} from "../src/actions/session-actions.ts";
 import { type RestoreContext, restoreNode } from "../src/actions/tree-actions.ts";
+import { loadForkPoints, loadLastReply } from "../src/data/content.ts";
 import { isEffectiveLeaf } from "../src/data/tree.ts";
 
 type AnyMessage = Parameters<SessionManager["appendMessage"]>[0];
@@ -56,6 +67,8 @@ interface FakeCtxOptions {
 	idle?: boolean;
 	cancelSwitch?: boolean;
 	cancelNavigate?: boolean;
+	cancelFork?: boolean;
+	cancelNew?: boolean;
 	/** Make `navigateTree` of the replacement context throw with this message. */
 	nextNavigateError?: string;
 }
@@ -68,6 +81,11 @@ function fakeCtx(sessionManager: SessionManager, opts: FakeCtxOptions = {}) {
 	const navigations: Array<{ entryId: string; options: unknown }> = [];
 	const nextNavigations: Array<{ entryId: string; options: unknown }> = [];
 	const notifies: Array<[string, string | undefined]> = [];
+	/** fork calls on the old ctx / on the replacement ctx handed to withSession. */
+	const forks: Array<{ entryId: string; position: string | undefined }> = [];
+	const nextForks: Array<{ entryId: string; position: string | undefined }> = [];
+	/** newSession calls: the names the setup callback would write ([] when no setup). */
+	const newSessions: Array<{ hadSetup: boolean; appended: string[] }> = [];
 	/** `ui.setStatus` calls: `[key, text]` on the old ctx, `["next:" + key, text]` on the replacement ctx. */
 	const statuses: Array<[string, string | undefined]> = [];
 	// 切换后 pi 给 withSession 的是绑定到新会话的另一个 ctx；这里用单独的记录器区分它和旧 ctx。
@@ -80,12 +98,16 @@ function fakeCtx(sessionManager: SessionManager, opts: FakeCtxOptions = {}) {
 			if (opts.nextNavigateError) throw new Error(opts.nextNavigateError);
 			return { cancelled: false };
 		},
+		fork: async (entryId: string, options?: { position?: string }) => {
+			nextForks.push({ entryId, position: options?.position });
+			return { cancelled: opts.cancelFork ?? false };
+		},
 		ui: {
 			notify: (msg: string, level?: string) => void notifies.push([msg, level]),
 			setStatus: (key: string, text: string | undefined) => void statuses.push([`next:${key}`, text]),
 		},
 	};
-	const ctx: RestoreContext = {
+	const ctx = {
 		sessionManager,
 		isIdle: () => idle,
 		abort: () => {
@@ -93,12 +115,24 @@ function fakeCtx(sessionManager: SessionManager, opts: FakeCtxOptions = {}) {
 			idle = true;
 		},
 		waitForIdle: async () => void log.push("wait"),
-		navigateTree: async (entryId, options) => {
+		navigateTree: async (entryId: string, options: unknown) => {
 			log.push("navigate");
 			navigations.push({ entryId, options });
 			return { cancelled: opts.cancelNavigate ?? false };
 		},
-		switchSession: async (file, options) => {
+		fork: async (entryId: string, options?: { position?: string }) => {
+			log.push("fork");
+			forks.push({ entryId, position: options?.position });
+			return { cancelled: opts.cancelFork ?? false };
+		},
+		newSession: async (options?: { setup?: (sm: unknown) => Promise<void> }) => {
+			log.push("new");
+			const appended: string[] = [];
+			await options?.setup?.({ appendSessionInfo: (n: string) => void appended.push(n) } as never);
+			newSessions.push({ hadSetup: options?.setup !== undefined, appended });
+			return { cancelled: opts.cancelNew ?? false };
+		},
+		switchSession: async (file: string, options?: { withSession?: (c: unknown) => Promise<void> }) => {
 			log.push("switch");
 			switches.push({ file, withSession: options?.withSession !== undefined });
 			if (opts.cancelSwitch) return { cancelled: true };
@@ -108,9 +142,9 @@ function fakeCtx(sessionManager: SessionManager, opts: FakeCtxOptions = {}) {
 		ui: {
 			notify: (msg: string, level?: string) => void notifies.push([`old:${msg}`, level]),
 			setStatus: (key: string, text: string | undefined) => void statuses.push([key, text]),
-		} as never,
-	};
-	return { ctx, log, switches, navigations, nextNavigations, notifies, statuses };
+		},
+	} as unknown as RestoreContext & NewSessionContext & ForkContext;
+	return { ctx, log, switches, navigations, nextNavigations, notifies, statuses, forks, nextForks, newSessions };
 }
 
 test("isEffectiveLeaf: the leaf itself, or a non-user entry followed only by bookkeeping entries", (t) => {
@@ -327,4 +361,186 @@ test("renameSession: pi.setSessionName for the current session, a session_info e
 	assert.deepEqual(names, ["Refactor auth", ""]);
 
 	await assert.rejects(renameSession(pi, ctx, join(dir, "missing.jsonl"), "x"), /session file not found/);
+});
+
+test("loadForkPoints: every user message in the file, in order, collapsed to one line (what /fork's selector lists)", async (t) => {
+	const dir = tempDir(t);
+	const manager = SessionManager.create(dir, dir);
+	const u1 = manager.appendMessage(userMessage("first  question\nsecond line", 1));
+	manager.appendMessage(assistantMessage("an answer", 2));
+	const u2 = manager.appendMessage(userMessage("follow up", 3));
+	manager.appendMessage(assistantMessage("another answer", 4));
+	const file = manager.getSessionFile();
+	assert.ok(file);
+
+	assert.deepEqual(await loadForkPoints(file), [
+		{ entryId: u1, text: "first question second line" },
+		{ entryId: u2, text: "follow up" },
+	]);
+
+	// a session with no user messages has nothing to fork from
+	const empty = SessionManager.create(mkdtempSync(join(dir, "empty-")), dir);
+	empty.appendMessage(assistantMessage("system talking to itself", 1));
+	const emptyFile = empty.getSessionFile();
+	assert.ok(emptyFile);
+	assert.deepEqual(await loadForkPoints(emptyFile), []);
+});
+
+test("loadLastReply: text of the last assistant message on the active branch (undefined when there is none)", async (t) => {
+	const dir = tempDir(t);
+	const s = makeSession(dir);
+	assert.equal(await loadLastReply(s.file), "hi");
+
+	// no assistant message yet
+	const bare = SessionManager.create(mkdtempSync(join(dir, "bare-")), dir);
+	bare.appendMessage(userMessage("hello?", 1));
+	const bareFile = bare.getSessionFile();
+	assert.ok(bareFile);
+	assert.equal(await loadLastReply(bareFile), undefined);
+
+	// follows the active branch: after branching from u1, the alt reply is the last one
+	const m = SessionManager.open(s.file);
+	m.branch(s.u1);
+	m.appendMessage(assistantMessage("alternative reply", 5));
+	assert.equal(await loadLastReply(s.file), "alternative reply");
+});
+
+test("loadLastReply copies what pi's /copy copies: only the text parts, aborted empty replies skipped", async (t) => {
+	const dir = tempDir(t);
+	const manager = SessionManager.create(dir, dir);
+	manager.appendMessage(userMessage("q", 1));
+	manager.appendMessage(assistantMessage("earlier answer", 2));
+	// an aborted reply with no content is skipped (pi's getLastAssistantText)
+	manager.appendMessage({ ...(assistantMessage("", 3) as object), content: [], stopReason: "aborted" } as unknown as AnyMessage);
+	const file = manager.getSessionFile();
+	assert.ok(file);
+	assert.equal(await loadLastReply(file), "earlier answer");
+
+	// text parts are joined as-is (tool calls and thinking are not copied), then trimmed
+	manager.appendMessage({
+		...(assistantMessage("", 4) as object),
+		content: [
+			{ type: "thinking", thinking: "hmm" },
+			{ type: "text", text: " Part one." },
+			{ type: "toolCall", id: "t1", name: "bash", arguments: { command: "ls" } },
+			{ type: "text", text: " Part two. " },
+		],
+	} as unknown as AnyMessage);
+	assert.equal(await loadLastReply(file), "Part one. Part two.");
+
+	// the last reply holding only a tool call has no text: nothing to copy (pi does not fall back further)
+	manager.appendMessage({
+		...(assistantMessage("", 5) as object),
+		content: [{ type: "toolCall", id: "t2", name: "bash", arguments: { command: "pwd" } }],
+		stopReason: "toolUse",
+	} as unknown as AnyMessage);
+	assert.equal(await loadLastReply(file), undefined);
+});
+
+test("loadForkPoints lists only user messages that have text (pi's selector skips image-only ones)", async (t) => {
+	const dir = tempDir(t);
+	const manager = SessionManager.create(dir, dir);
+	manager.appendMessage({ role: "user", content: [{ type: "image", data: "", mimeType: "image/png" }], timestamp: 1 } as unknown as AnyMessage);
+	const u2 = manager.appendMessage({
+		role: "user",
+		content: [{ type: "image", data: "", mimeType: "image/png" }, { type: "text", text: "what is this?" }],
+		timestamp: 2,
+	} as unknown as AnyMessage);
+	manager.appendMessage(assistantMessage("a cat", 3));
+	const file = manager.getSessionFile();
+	assert.ok(file);
+	assert.deepEqual(await loadForkPoints(file), [{ entryId: u2, text: "what is this?" }]);
+});
+
+test("newSession: appends the trimmed name only when non-empty, otherwise no setup", async (t) => {
+	const dir = tempDir(t);
+	const s = makeSession(dir);
+	const ctx = fakeCtx(SessionManager.open(s.file));
+
+	assert.equal(await newSession(ctx.ctx, "  My chat  "), "switched");
+	assert.equal(await newSession(ctx.ctx, "   "), "switched");
+	assert.deepEqual(ctx.newSessions, [
+		{ hadSetup: true, appended: ["My chat"] },
+		{ hadSetup: false, appended: [] },
+	]);
+
+	const cancelling = fakeCtx(SessionManager.open(s.file), { cancelNew: true });
+	await assert.rejects(newSession(cancelling.ctx, "x"), /cancelled/);
+});
+
+test("forkSession: current session forks before the entry in place; other sessions switch first and fork on the new ctx", async (t) => {
+	const dir = tempDir(t);
+	const s = makeSession(dir);
+	const other = makeSession(mkdtempSync(join(dir, "other-")));
+
+	// current session: fork in place (pi's own fork wrapper puts the prompt back into the editor)
+	const current = fakeCtx(SessionManager.open(s.file));
+	assert.equal(await forkSession(current.ctx, s.file, s.u1), "switched");
+	assert.deepEqual(current.forks, [{ entryId: s.u1, position: "before" }]);
+	assert.deepEqual(current.switches, []);
+
+	// other session: switch first, then fork on the replacement ctx
+	const cross = fakeCtx(SessionManager.open(s.file));
+	assert.equal(await forkSession(cross.ctx, other.file, other.u1), "switched");
+	assert.deepEqual(cross.switches, [{ file: other.file, withSession: true }]);
+	assert.deepEqual(cross.nextForks, [{ entryId: other.u1, position: "before" }]);
+	assert.deepEqual(cross.forks, [], "the stale pre-switch ctx must not fork");
+
+	// pi / an extension cancelling the fork surfaces as an error (current session, panel still up)
+	const cancelling = fakeCtx(SessionManager.open(s.file), { cancelFork: true });
+	await assert.rejects(forkSession(cancelling.ctx, s.file, s.u1), /cancelled/);
+});
+
+test("forkSession / cloneSession refuse up front what pi's fork would throw on (pi exits the process on those)", async (t) => {
+	const dir = tempDir(t);
+	const s = makeSession(dir);
+	const other = makeSession(mkdtempSync(join(dir, "other-")));
+	const ctx = fakeCtx(SessionManager.open(s.file));
+
+	// unknown entry, in the current session and in another one
+	await assert.rejects(forkSession(ctx.ctx, s.file, "nope"), /not found/);
+	await assert.rejects(forkSession(ctx.ctx, other.file, "nope"), /not found/);
+	// "before" only works on a user message (pi: "Invalid entry ID for forking")
+	await assert.rejects(forkSession(ctx.ctx, s.file, s.a1), /user message/);
+	await assert.rejects(forkSession(ctx.ctx, other.file, other.a1), /user message/);
+	// a file that is gone
+	await assert.rejects(forkSession(ctx.ctx, join(dir, "missing.jsonl"), s.u1), /session file not found/);
+	await assert.rejects(cloneSession(ctx.ctx, join(dir, "missing.jsonl")), /session file not found/);
+
+	// a session whose working directory no longer exists (the fork would be re-created there)
+	const gone = SessionManager.create(join(dir, "deleted-project"), mkdtempSync(join(dir, "gone-")));
+	const gu1 = gone.appendMessage(userMessage("hello", 1));
+	gone.appendMessage(assistantMessage("hi", 2));
+	const goneFile = gone.getSessionFile();
+	assert.ok(goneFile);
+	await assert.rejects(forkSession(ctx.ctx, goneFile, gu1), /folder no longer exists/);
+	await assert.rejects(cloneSession(ctx.ctx, goneFile), /folder no longer exists/);
+
+	// none of the refusals reached pi
+	assert.deepEqual(ctx.forks, []);
+	assert.deepEqual(ctx.switches, []);
+});
+
+test("cloneSession: forks the active leaf with position 'at', switching first for other sessions", async (t) => {
+	const dir = tempDir(t);
+	const s = makeSession(dir);
+	const other = makeSession(mkdtempSync(join(dir, "other-")));
+
+	// current session: clone the active branch (leaf = the label entry)
+	const current = fakeCtx(SessionManager.open(s.file));
+	assert.equal(await cloneSession(current.ctx, s.file), "switched");
+	assert.deepEqual(current.forks, [{ entryId: s.labelId, position: "at" }]);
+
+	// other session: switch first, then clone on the replacement ctx
+	const cross = fakeCtx(SessionManager.open(s.file));
+	assert.equal(await cloneSession(cross.ctx, other.file), "switched");
+	assert.deepEqual(cross.switches, [{ file: other.file, withSession: true }]);
+	assert.deepEqual(cross.nextForks, [{ entryId: other.labelId, position: "at" }]);
+
+	// a session with no entries yet has no leaf to clone
+	const empty = SessionManager.create(mkdtempSync(join(dir, "empty-")), dir);
+	const emptyFile = empty.getSessionFile();
+	assert.ok(emptyFile);
+	const bare = fakeCtx(empty); // its own manager, so isCurrentSession is true and we read its (null) leaf
+	await assert.rejects(cloneSession(bare.ctx, emptyFile), /nothing to clone/);
 });

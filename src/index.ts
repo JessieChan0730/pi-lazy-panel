@@ -11,12 +11,21 @@
  */
 
 import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { copyText, deleteSession, renameSession, resumeSession } from "./actions/session-actions.ts";
+import {
+	cloneSession,
+	copyLastReply,
+	copyText,
+	deleteSession,
+	forkSession,
+	newSession,
+	renameSession,
+	resumeSession,
+} from "./actions/session-actions.ts";
 import { copyNodeText, labelNode, restoreNode } from "./actions/tree-actions.ts";
 import { loadConfig } from "./config/config.ts";
 import { loadPiSettings } from "./config/pi-settings.ts";
 import { COMMAND_NAME } from "./constants.ts";
-import { loadContent, loadSessionInfo } from "./data/content.ts";
+import { loadContent, loadForkPoints, loadSessionInfo } from "./data/content.ts";
 import { listSessions, sortSessions } from "./data/sessions.ts";
 import { applyTreeFilter, loadTree } from "./data/tree.ts";
 import { type ActionSource, type DataSource, LazyPanel } from "./ui/app.ts";
@@ -39,6 +48,7 @@ export default function (pi: ExtensionAPI) {
 				loadContent: (file, leafEntryId) =>
 					loadContent(leafEntryId ? { sessionFile: file, leafEntryId } : { sessionFile: file }),
 				loadSessionInfo,
+				loadForkPoints,
 			};
 			// 副作用统一走 actions 层；目标是当前会话时用 pi 内存里的 API（setLabel / setSessionName / navigateTree），
 			// 其他历史会话则直接读写文件或先 switchSession。
@@ -49,6 +59,10 @@ export default function (pi: ExtensionAPI) {
 				restoreNode: (file, entryId, options) => restoreNode(ctx, file, entryId, options),
 				deleteSession: (file) => deleteSession(ctx, file),
 				renameSession: (file, name) => renameSession(pi, ctx, file, name),
+				newSession: (name) => newSession(ctx, name),
+				forkSession: (file, entryId) => forkSession(ctx, file, entryId),
+				cloneSession: (file) => cloneSession(ctx, file),
+				copyLastReply,
 				copyText,
 			};
 			// overlay 句柄在面板显示后才拿到；Enter 等待 pi 切换时用它暂时隐藏面板。

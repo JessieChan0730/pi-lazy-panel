@@ -205,8 +205,13 @@ export const FOOTER_HINTS: Record<PaneId, ActionId[]> = {
 		"session-resume",
 		"session-delete",
 		"session-rename",
+		"session-new",
 		"session-sort",
 		"session-info",
+		// fork / clone / 复制回复用得少，放后面：窄终端里先被挤掉，? 帮助里仍然都有。
+		"session-fork",
+		"session-clone",
+		"session-copy-last-reply",
 		"quit",
 	],
 	tree: ["search", "help", "focus-next", "tree-restore", "tree-fold", "tree-open", "tree-label", "tree-copy", "quit"],

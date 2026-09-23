@@ -42,6 +42,12 @@ export interface SelectDialogSpec {
 	 * moving the cursor first — a confirmation's `y` / `n`.
 	 */
 	shortcuts?: Record<string, number>;
+	/**
+	 * Cap on how many entries are visible at once; a longer list scrolls a
+	 * window around the cursor (the box is then `maxRows + 2` tall). Unset =
+	 * show every entry. Used by the fork selector, which can be long.
+	 */
+	maxRows?: number;
 	/** Enter (or a shortcut): the index of the picked entry. */
 	onSelect: (index: number) => void;
 	onCancel: () => void;
@@ -56,6 +62,8 @@ export interface SelectDialogOptions {
 export class SelectDialog {
 	private spec: SelectDialogSpec | undefined;
 	private index = 0;
+	/** Index of the first visible entry when the list scrolls (see `maxRows`). */
+	private scroll = 0;
 
 	constructor(private readonly o: SelectDialogOptions) {}
 
@@ -78,6 +86,8 @@ export class SelectDialog {
 	open(spec: SelectDialogSpec): void {
 		this.spec = spec;
 		this.index = clamp(spec.initialIndex ?? 0, 0, spec.items.length - 1);
+		this.scroll = 0;
+		this.ensureVisible();
 	}
 
 	/** Drop the current menu without firing a callback. */
@@ -120,16 +130,39 @@ export class SelectDialog {
 		const next = clamp(this.index + delta, 0, items.length - 1);
 		if (next === this.index) return;
 		this.index = next;
+		this.ensureVisible();
 		this.o.onChange();
 	}
 
-	/** Render the box itself: one row per entry plus the borders, every line exactly `width` columns. */
+	/** How many entries are drawn at once (all of them, unless `maxRows` caps it). */
+	private visibleRows(): number {
+		const count = this.spec?.items.length ?? 0;
+		const max = this.spec?.maxRows;
+		return max && max > 0 ? Math.min(count, max) : count;
+	}
+
+	/** Slide the scroll window so the cursor stays inside it, without showing empty space past the end. */
+	private ensureVisible(): void {
+		const rows = this.visibleRows();
+		const count = this.spec?.items.length ?? 0;
+		if (rows <= 0) {
+			this.scroll = 0;
+			return;
+		}
+		if (this.index < this.scroll) this.scroll = this.index;
+		else if (this.index >= this.scroll + rows) this.scroll = this.index - rows + 1;
+		this.scroll = Math.max(0, Math.min(this.scroll, count - rows));
+	}
+
+	/** Render the box itself: one row per visible entry plus the borders, every line exactly `width` columns. */
 	render(width: number): string[] {
 		const { theme } = this.o;
 		const title = this.spec?.title ?? "";
 		const items = this.spec?.items ?? [];
+		const rows = this.visibleRows();
 		const inner = width - 2;
-		const body = items.map((item, i) => {
+		const body = items.slice(this.scroll, this.scroll + rows).map((item, k) => {
+			const i = this.scroll + k;
 			const selected = i === this.index;
 			// 选中行：accent 色的 › 标记 + 整行选中背景，和三个面板里的光标行一致。
 			const marker = selected ? "› " : "  ";
@@ -139,7 +172,7 @@ export class SelectDialog {
 		const meta = truncateToWidth(this.spec?.subject ?? "", metaBudget(width, title) - 3, "…", false);
 		return frame(body, {
 			width,
-			height: items.length + 2,
+			height: rows + 2,
 			title,
 			...(meta ? { meta } : {}),
 			border: (s) => theme.fg("borderAccent", s),

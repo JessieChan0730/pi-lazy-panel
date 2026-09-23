@@ -34,6 +34,12 @@ export const CONFIRM_HINTS: KeyHint[] = [
 /** Title of the delete-session confirmation. */
 export const DELETE_SESSION_TITLE = "Delete session?";
 
+/** Title of the clone-session confirmation (`y`). */
+export const CLONE_SESSION_TITLE = "Clone session?";
+
+/** Title of the fork confirmation, shown after a message is picked (`o`). */
+export const FORK_SESSION_TITLE = "Fork session?";
+
 export interface ConfirmSpecOptions {
 	/** Title on the top border, e.g. "Delete session?". */
 	title: string;
