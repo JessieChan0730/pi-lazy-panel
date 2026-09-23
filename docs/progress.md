@@ -239,6 +239,19 @@
 - `app.ts`：只在第一次 `load()` 时定位（`locateSessionFile` 用过即清），找到就把 SESSIONS 光标放到那一行，TREE / CONTENT 随之加载该会话；没找到（新会话、或当前会话不在当前范围里）留在第一行。之后 C / A 切范围仍回到顶部，行为不变。
 - 测试：`test/panel.test.ts` 加了初始光标 / 未列出 / 切范围后回顶部；新增 `test/sessions.test.ts` 验证 `findSessionIndex` 的路径比较。
 
+### 三个面板的 / 搜索（2026-09-23）
+
+背景：三个面板的 `/` 目前只打开底部搜索栏，回车后只是记住 query，匹配、高亮、n/N 都没做；`data/search.ts` 的 `parseSearchQuery` 已能解析 `name:` / `model:` / `path:` / `tag:` / `after:` / `before:`，但只有树对话框的实时搜索在用，SESSIONS / CONTENT 的匹配函数还没有。这一步把 lazygit 风格的搜索在三个面板上做完整。
+
+- 交互统一参考 lazygit：`/` 打开底部搜索栏，输入时实时跳到第一个匹配（光标 / 滚动位置跟着走），Enter 确认并退出输入栏、关键字保留，`n` / `N` 在匹配之间往下 / 往上跳并回绕，Esc 在输入栏里取消搜索（清掉关键字并恢复原位置）；搜索生效期间面板标题右侧显示 `2/7 matches`，footer 显示当前关键字，没有匹配显示 `no matches`。搜索只作用于当前聚焦的面板，切换面板不清掉该面板的关键字。
+- SESSIONS：匹配名称 / 首条消息预览 / 模型 / 路径，限定词按 `parseSearchQuery` 已经定义的语义生效：`name:` 只看会话名、`model:` 只看模型、`path:` 只看 cwd、`after:` / `before:` 看时间，`tag:` 在这里忽略。新增 `matchSessionRow`。列表不过滤只跳转（lazygit 的做法，和树对话框的过滤不同），匹配的行里命中的文字高亮。
+- TREE：复用 `matchTreeRow`（label + role + 正文，`tag:` 只看 label），在折叠大纲上跳转：目标行藏在折叠段里时展开它的祖先（`foldedAncestors`），右侧 CONTENT 跟着高亮。
+- CONTENT：按渲染后的行匹配自由文本（不支持限定词），跳转即把该行滚到面板顶部，命中的文字高亮；Markdown 渲染结果已有缓存，高亮在缓存行上叠加，不要重新渲染。
+- 高亮方式三个面板统一：命中的片段用 theme 的一个背景色，光标所在的当前匹配再加强调（和 lazygit 一样能区分"当前匹配"和"其他匹配"）。
+- 键位：`/`、`n`、`N` 已经是 global 绑定，本次只接上 `dispatch`；把 footer 里 `n/N` 的提示补上，`docs/keybindings.md` 同步说明限定词。
+- 树对话框（a 打开）里的搜索功能不要动，保持现状：仍然是顶部搜索框实时过滤列表、Esc 退出搜索框保留关键字、Enter 无含义，不改成跳转、不加 n/N、不加高亮。本次只做面板底部的 `/`，两边只是共用 `parseSearchQuery` / `matchTreeRow` 这两个纯函数，改动它们时不能影响对话框的行为（`test/panel.test.ts` 里已有的对话框搜索测试必须原样通过）。
+- 测试：`test/search.test.ts` 加 `matchSessionRow` 和 CONTENT 行匹配；`test/panel.test.ts` 加三个面板的 / → 实时跳转 → Enter / Esc → n / N 回绕 → 标题计数 → 折叠段展开 → 切面板保留关键字。
+
 ### 跨平台适配（分支 `feat/windows-support`，2026-09-21）
 
 背景：`npm run install:pi` 在 Windows 上报 `Path does not exist: ...\$(pwd)`。npm 在 Windows 默认用 cmd.exe 跑 scripts，`$(pwd)` 这种 bash 命令替换会被原样传给 pi。说明之前的写法只考虑了 Linux / macOS，需要系统性排查。先在本分支把 Windows 适配好，再考虑 macOS。
