@@ -44,7 +44,8 @@
  *   - SESSIONS：d 删除（先弹 Yes / No 确认框，默认停在 No，y / n 直接选；当前打开的会话拒绝删除；删完重新拉列表、光标夹回范围内），
  *     r 重命名（居中输入框，预填当前名字，空值清除；改完重新拉列表、光标留在同一会话上），
  *     s 循环切换排序（recent → created → title → threaded，光标跟着同一会话走），i 会话信息弹窗（y 复制全部内容，Esc 关闭）
- *   - 其余面板动作（fork、多选…）只做分发，具体实现留给后续任务
+ *   - space 多选：d 在有选中时批量删除（跳过当前会话，失败的留在列表和选中里），选中多个时 r / o / y / e / S 拒绝；
+ *     Esc 先清空选中再退出。@（global）打开 pi 的 changelog 弹窗（j/k 滚动，Esc / q / @ 关闭）
  */
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
@@ -101,6 +102,7 @@ import {
 	SHARE_SESSION_TITLE,
 } from "./widgets/confirm-dialog.ts";
 import { EXPORT_FORMAT_HINTS, EXPORT_FORMAT_TITLE, EXPORT_FORMATS, EXPORT_PATH_HINTS, EXPORT_PATH_TITLE } from "./widgets/export-dialog.ts";
+import { ChangelogDialog } from "./widgets/changelog-dialog.ts";
 import { renderFooter } from "./widgets/footer.ts";
 import { FORK_DIALOG_HINTS, FORK_DIALOG_TITLE } from "./widgets/fork-dialog.ts";
 import { compactKeys, helpLineCount, overlayHelp } from "./widgets/help-overlay.ts";
@@ -179,6 +181,8 @@ export interface DataSource {
 	loadSessionInfo?(sessionFile: string): Promise<SessionInfo | undefined>;
 	/** `o` in SESSIONS: the user messages the fork selector lists (empty = nothing to fork). */
 	loadForkPoints?(sessionFile: string): Promise<ForkPoint[]>;
+	/** `@`: pi's changelog as markdown (what /changelog shows). */
+	loadChangelog?(): Promise<string>;
 }
 
 /**
@@ -317,6 +321,8 @@ export class LazyPanel implements Component, Focusable {
 	private readonly treeDialog: TreeDialog;
 	/** `i` in SESSIONS: the read-only Session Info box. */
 	private readonly infoDialog: SessionInfoDialog;
+	/** `@`: pi's changelog in a big scrollable box. */
+	private readonly changelogDialog: ChangelogDialog;
 	/**
 	 * Fold state from before the dialog's search started: a search shows every
 	 * match, so folds are cleared meanwhile and restored when the query is gone.
@@ -330,6 +336,8 @@ export class LazyPanel implements Component, Focusable {
 	private renameTarget: SessionRow | undefined;
 	/** Session the delete confirmation is about while `mode === "confirm"`. */
 	private deleteTarget: SessionRow | undefined;
+	/** Sessions the batch delete confirmation is about (d with a multi-selection). */
+	private batchDeleteTargets: SessionRow[] | undefined;
 	/** Session being forked while `mode === "fork"`: its file, title-bar subject and the user messages to pick from. */
 	private forkTarget: { file: string; subject: string; points: ForkPoint[] } | undefined;
 	/** Session the clone confirmation is about while `mode === "clone"`. */
@@ -383,6 +391,7 @@ export class LazyPanel implements Component, Focusable {
 			onChange: () => this.o.requestRender(),
 		});
 		this.infoDialog = new SessionInfoDialog({ theme: o.theme });
+		this.changelogDialog = new ChangelogDialog({ theme: o.theme, onClose: () => this.closeChangelog() });
 	}
 
 	/** Focusable: forwarded to the active prompt so the IME cursor lands in the bar. */
@@ -429,6 +438,9 @@ export class LazyPanel implements Component, Focusable {
 			this.setStatus(`failed to list sessions: ${(err as Error).message}`);
 			return false;
 		}
+		// 多选里已经不在列表中的会话（被删掉、换了范围）一并去掉。
+		const listed = new Set(this.sessions.map((r) => r.file));
+		for (const file of this.state.selectedSessionFiles) if (!listed.has(file)) this.state.selectedSessionFiles.delete(file);
 		const idx = findSessionIndex(this.sessions, keepFile);
 		this.state.cursor.sessions = idx >= 0 ? idx : clamp(this.state.cursor.sessions, 0, Math.max(0, this.sessions.length - 1));
 		// 列表变了（首次加载、C / A 切范围、删除 / 改名 / 排序）：SESSIONS 的搜索结果按新列表重算，关键字保留。
@@ -639,6 +651,14 @@ export class LazyPanel implements Component, Focusable {
 			return;
 		}
 
+		// changelog 弹窗：滚动 / 关闭由弹窗处理，再按一次 @（用户绑定给 changelog 的键）也关闭。
+		if (this.changelogDialog.isOpen) {
+			if (this.isAction(data, "global", "changelog")) this.closeChangelog();
+			else this.changelogDialog.handleInput(data);
+			this.o.requestRender();
+			return;
+		}
+
 		// 帮助弹窗打开时只响应关闭 / 滚动。
 		if (this.state.helpOpen) {
 			this.handleHelpInput(data);
@@ -659,6 +679,11 @@ export class LazyPanel implements Component, Focusable {
 			}
 			if (this.state.search[this.state.focus]) {
 				this.clearSearch(this.state.focus);
+				return;
+			}
+			// SESSIONS 有多选时 Esc 先清空选中，再按一次才退出面板（lazygit 的做法）。
+			if (this.state.focus === "sessions" && this.state.selectedSessionFiles.size > 0) {
+				this.clearSelection();
 				return;
 			}
 			this.close();
@@ -851,6 +876,12 @@ export class LazyPanel implements Component, Focusable {
 				return;
 			case "session-share":
 				this.confirmShareSession();
+				return;
+			case "session-toggle-select":
+				this.toggleSelect();
+				return;
+			case "changelog":
+				void this.openChangelog();
 				return;
 			default:
 				this.setStatus(`${action}: not implemented yet`);
@@ -1602,6 +1633,10 @@ export class LazyPanel implements Component, Focusable {
 	 * open is refused up front, like pi's /resume (no dialog, just the message).
 	 */
 	private confirmDeleteSession(): void {
+		if (this.state.selectedSessionFiles.size > 0) {
+			this.confirmDeleteSelected();
+			return;
+		}
 		const row = this.currentSessionRow();
 		if (!row) return;
 		if (!this.o.actions?.deleteSession) {
@@ -1626,10 +1661,124 @@ export class LazyPanel implements Component, Focusable {
 		this.o.requestRender();
 	}
 
+	/**
+	 * d with a multi-selection: one confirmation for all selected sessions. The
+	 * session pi has open is left out (like a single d refuses it); when that
+	 * leaves nothing the footer says so without asking.
+	 *
+	 * 批量删除：列表顺序排好，跳过 pi 当前打开的会话，确认框标题带数量。
+	 */
+	private confirmDeleteSelected(): void {
+		if (!this.o.actions?.deleteSession) {
+			this.setStatus("delete: actions unavailable");
+			return;
+		}
+		const rows = this.sessions.filter((r) => this.state.selectedSessionFiles.has(r.file));
+		const targets = rows.filter((r) => findSessionIndex([r], this.currentSessionFile) !== 0);
+		if (targets.length === 0) {
+			this.setStatus(CURRENT_SESSION_DELETE_STATUS);
+			return;
+		}
+		const skipped = rows.length - targets.length;
+		// 当前打开的会话被跳过：它不会被删，也不该继续留在选中里。
+		for (const r of rows) if (!targets.includes(r)) this.state.selectedSessionFiles.delete(r.file);
+		this.batchDeleteTargets = targets;
+		this.state.mode = "confirm";
+		this.selectDialog.open(
+			confirmDialogSpec({
+				title: `Delete ${targets.length} session${targets.length === 1 ? "" : "s"}?`,
+				subject: skipped ? `current session skipped · ${targets.map((r) => this.sessionTitle(r)).join(", ")}` : targets.map((r) => this.sessionTitle(r)).join(", "),
+				onConfirm: () => void this.deleteSelected(),
+				onCancel: () => this.closeConfirm(),
+			}),
+		);
+		this.o.requestRender();
+	}
+
+	/**
+	 * Yes on the batch confirmation: delete one by one; the ones that fail stay
+	 * listed and selected, the first error goes to the footer.
+	 */
+	private async deleteSelected(): Promise<void> {
+		const targets = this.batchDeleteTargets ?? [];
+		this.closeConfirm();
+		const remove = this.o.actions?.deleteSession;
+		if (!remove || targets.length === 0) return;
+		this.setStatus(`deleting ${targets.length}…`);
+		let deleted = 0;
+		let firstError: string | undefined;
+		for (const row of targets) {
+			try {
+				await remove(row.file);
+				deleted++;
+				this.state.selectedSessionFiles.delete(row.file);
+			} catch (err) {
+				firstError ??= `${this.sessionTitle(row)}: ${(err as Error).message}`;
+			}
+			if (this.disposed) return;
+		}
+		const failed = targets.length - deleted;
+		const summary = failed ? `deleted ${deleted}, ${failed} failed — ${firstError}` : `${deleted} session${deleted === 1 ? "" : "s"} deleted`;
+		if (await this.listSessions(undefined)) this.setStatus(summary);
+		await this.followSessionsCursor();
+	}
+
+	/** space: toggle the session under the cursor in the multi-selection. */
+	private toggleSelect(): void {
+		const row = this.currentSessionRow();
+		if (!row) return;
+		const selected = this.state.selectedSessionFiles;
+		if (selected.has(row.file)) selected.delete(row.file);
+		else selected.add(row.file);
+		this.o.requestRender();
+	}
+
+	private clearSelection(): void {
+		this.state.selectedSessionFiles.clear();
+		this.setStatus("selection cleared");
+	}
+
+	/**
+	 * Actions that only make sense for one session (rename, fork, clone, export,
+	 * share) refuse while several sessions are selected. Returns true when refused.
+	 */
+	private refuseMultiSelect(label: string): boolean {
+		if (this.state.selectedSessionFiles.size <= 1) return false;
+		this.setStatus(`${label}: cannot act on multiple sessions (Esc clears the selection)`);
+		return true;
+	}
+
+	/** @: load pi's changelog and show it in the scrollable dialog. */
+	private async openChangelog(): Promise<void> {
+		const load = this.o.data.loadChangelog;
+		if (!load) {
+			this.setStatus("changelog: unavailable");
+			return;
+		}
+		let markdown: string;
+		try {
+			markdown = await load();
+			if (this.disposed) return;
+		} catch (err) {
+			this.setStatus(`changelog failed: ${(err as Error).message}`);
+			return;
+		}
+		this.state.mode = "changelog";
+		this.changelogDialog.open(markdown);
+		this.o.requestRender();
+	}
+
+	private closeChangelog(): void {
+		this.changelogDialog.close();
+		this.state.mode = this.baseMode();
+		this.o.requestRender();
+	}
+
 	private closeConfirm(): void {
 		this.state.mode = this.baseMode();
 		this.selectDialog.close();
 		this.deleteTarget = undefined;
+		this.batchDeleteTargets = undefined;
 		this.o.requestRender();
 	}
 
@@ -1656,6 +1805,7 @@ export class LazyPanel implements Component, Focusable {
 
 	/** r: open the Rename prompt pre-filled with the session's current name. */
 	private openRenameInput(): void {
+		if (this.refuseMultiSelect("rename")) return;
 		const row = this.currentSessionRow();
 		if (!row) return;
 		if (!this.o.actions?.renameSession) {
@@ -1745,6 +1895,7 @@ export class LazyPanel implements Component, Focusable {
 
 	/** o: pick the user message to fork before (pi's /fork selector), then confirm and fork. */
 	private async startFork(): Promise<void> {
+		if (this.refuseMultiSelect("fork")) return;
 		const row = this.currentSessionRow();
 		if (!row) return;
 		if (!this.o.actions?.forkSession || !this.o.data.loadForkPoints) {
@@ -1825,6 +1976,7 @@ export class LazyPanel implements Component, Focusable {
 
 	/** y: confirm, then clone the active branch of the session under the cursor to a new file (/clone). */
 	private confirmCloneSession(): void {
+		if (this.refuseMultiSelect("clone")) return;
 		const row = this.currentSessionRow();
 		if (!row) return;
 		if (!this.o.actions?.cloneSession) {
@@ -1879,6 +2031,7 @@ export class LazyPanel implements Component, Focusable {
 
 	/** e: pick HTML / JSONL, then the output path, for the session under the cursor (/export). */
 	private startExport(): void {
+		if (this.refuseMultiSelect("export")) return;
 		const row = this.currentSessionRow();
 		if (!row) return;
 		if (!this.o.actions?.exportSession || !this.o.actions.exportTarget) {
@@ -2053,6 +2206,7 @@ export class LazyPanel implements Component, Focusable {
 
 	/** S: confirm (the session leaves the machine), then upload it as a secret gist (/share). */
 	private confirmShareSession(): void {
+		if (this.refuseMultiSelect("share")) return;
 		const row = this.currentSessionRow();
 		if (!row) return;
 		if (!this.o.actions?.shareSession) {
@@ -2436,6 +2590,9 @@ export class LazyPanel implements Component, Focusable {
 		if (this.infoDialog.isOpen) {
 			lines = this.infoDialog.overlay(lines, width);
 		}
+		if (this.changelogDialog.isOpen) {
+			lines = this.changelogDialog.overlay(lines, width);
+		}
 		if (this.state.helpOpen) {
 			lines = overlayHelp(lines, { keymap: this.keymap, focus: this.state.focus, scroll: this.state.helpScroll, theme }, width);
 		}
@@ -2457,9 +2614,11 @@ export class LazyPanel implements Component, Focusable {
 				? this.selectDialog
 				: this.infoDialog.isOpen
 					? this.infoDialog
-					: this.treeDialog.isOpen
-						? this.treeDialog
-						: undefined;
+					: this.changelogDialog.isOpen
+						? this.changelogDialog
+						: this.treeDialog.isOpen
+							? this.treeDialog
+							: undefined;
 		if (dialog) {
 			return renderFooter({ ...footer, hints: dialog.hints, ...(status ? { status } : {}) }, width)[0]!;
 		}

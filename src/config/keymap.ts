@@ -30,6 +30,8 @@ export const DEFAULT_KEYMAP: Keymap = {
 		search: "/",
 		"search-next": "n",
 		"search-prev": "N",
+		// 和 pi 的 /changelog 一样查看 pi 的更新日志（居中大弹窗，可滚动）。
+		changelog: "@",
 	},
 
 	sessions: {
@@ -104,6 +106,7 @@ export const ACTION_DESCRIPTIONS: Record<ActionId, string> = {
 	search: "Search in the focused pane",
 	"search-next": "Next search match",
 	"search-prev": "Previous search match",
+	changelog: "Show pi's changelog (/changelog)",
 	"move-down": "Move cursor down",
 	"move-up": "Move cursor up",
 	"go-top": "Go to top",
@@ -139,8 +142,8 @@ export const ACTION_DESCRIPTIONS: Record<ActionId, string> = {
 /**
  * Actions of outer scopes that do nothing while `scope` has the keys.
  * Inside the tree dialog, pane switching, list scope, n / N, quitting the
- * panel, `?` (every key is on the dialog's own hint row) and `a` (the dialog
- * is already open) are switched off.
+ * panel, `?` (every key is on the dialog's own hint row), `a` (the dialog
+ * is already open) and `@` (the changelog) are switched off.
  *
  * 外层 scope 里在这里关掉的动作：对话框里 h/1/2/3/Tab 等不再切换面板（l 被对话框自己的
  * labeled 过滤遮住了），? 也不开帮助——对话框底部一行已经列全了它的键。
@@ -159,6 +162,7 @@ export const DISABLED_ACTIONS: Partial<Record<KeyScope, ActionId[]>> = {
 		"help",
 		"quit",
 		"tree-open",
+		"changelog",
 	],
 };
 
@@ -215,10 +219,11 @@ export const FOOTER_HINTS: Record<PaneId, ActionId[]> = {
 		"session-export",
 		"session-import",
 		"session-share",
+		"changelog",
 		"quit",
 	],
-	tree: ["search", "help", "focus-next", "tree-restore", "tree-fold", "tree-open", "tree-label", "tree-copy", "quit"],
-	content: ["search", "help", "focus-next", "go-top", "go-bottom", "quit"],
+	tree: ["search", "help", "focus-next", "tree-restore", "tree-fold", "tree-open", "tree-label", "tree-copy", "changelog", "quit"],
+	content: ["search", "help", "focus-next", "go-top", "go-bottom", "changelog", "quit"],
 };
 
 /**

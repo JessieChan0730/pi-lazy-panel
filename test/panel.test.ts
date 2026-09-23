@@ -2748,3 +2748,150 @@ test("e / I / S report when no actions are wired", async () => {
 	assert.ok(h.footer().includes("share: actions unavailable"), h.footer());
 	assert.equal(h.panel.state.mode, "normal");
 });
+
+test("space toggles the multi-selection: • marker, header count, Esc clears it before quitting", async () => {
+	const h = makeSessionActionPanel();
+	await h.panel.load();
+	h.panel.handleInput(" ");
+	h.panel.handleInput("j");
+	await settle();
+	h.panel.handleInput(" ");
+	assert.deepEqual([...h.panel.state.selectedSessionFiles].sort(), ["/tmp/s1.jsonl", "/tmp/s2.jsonl"]);
+	const lines = h.text();
+	assert.ok(lines.some((l) => l.includes(" •alpha")), "a selected row off the cursor shows •");
+	assert.ok(lines.some((l) => l.includes("›•beta")), "the cursor row keeps both marks");
+	assert.ok(h.header().includes("2 selected"), h.header());
+	// space again unselects
+	h.panel.handleInput(" ");
+	assert.deepEqual([...h.panel.state.selectedSessionFiles], ["/tmp/s1.jsonl"]);
+	for (const l of h.panel.render(120)) assert.equal(visibleWidth(l), 120);
+	// Esc clears the selection first, then quits
+	h.panel.handleInput("\x1b");
+	assert.equal(h.panel.state.selectedSessionFiles.size, 0);
+	assert.equal(h.closed(), false);
+	assert.ok(!h.header().includes("selected"), h.header());
+	h.panel.handleInput("\x1b");
+	assert.equal(h.closed(), true);
+});
+
+test("d with a selection deletes them all after one confirmation, skipping the open session; failures stay selected", async () => {
+	const h = makeSessionActionPanel({
+		currentSessionFile: "/tmp/s1.jsonl",
+		actions: {
+			deleteSession: async (file) => {
+				if (file === "/tmp/s3.jsonl") throw new Error("EACCES");
+				h.deletes.push(file);
+				h.sessions.splice(
+					h.sessions.findIndex((r) => r.file === file),
+					1,
+				);
+				return "trash";
+			},
+		},
+	});
+	await h.panel.load();
+	for (const k of [" ", "j", " ", "j", " "]) {
+		h.panel.handleInput(k);
+		await settle();
+	}
+	assert.equal(h.panel.state.selectedSessionFiles.size, 3);
+	h.panel.handleInput("d");
+	assert.equal(h.panel.state.mode, "confirm");
+	const dlg = dialogAt(h.text(), "Delete 2 sessions?");
+	assert.ok(dlg, "the batch confirmation carries the count");
+	h.panel.handleInput("y");
+	await flush();
+	await flush();
+	assert.deepEqual(h.deletes, ["/tmp/s2.jsonl"]);
+	assert.deepEqual([...h.panel.state.selectedSessionFiles], ["/tmp/s3.jsonl"], "only the failed one stays selected");
+	assert.ok(h.footer().includes("deleted 1, 1 failed") && h.footer().includes("EACCES"), h.footer());
+	h.panel.dispose();
+
+	// only the open session selected: refused without asking
+	const cur = makeSessionActionPanel({ currentSessionFile: "/tmp/s1.jsonl" });
+	await cur.panel.load();
+	cur.panel.handleInput(" ");
+	cur.panel.handleInput("d");
+	assert.equal(cur.panel.state.mode, "normal");
+	assert.ok(cur.footer().includes("Cannot delete the currently active session"), cur.footer());
+	cur.panel.dispose();
+});
+
+test("r / o / y / e / S refuse while several sessions are selected", async () => {
+	const h = makeSessionActionPanel();
+	await h.panel.load();
+	h.panel.handleInput(" ");
+	h.panel.handleInput("j");
+	await settle();
+	h.panel.handleInput(" ");
+	for (const [key, what] of [
+		["r", "rename"],
+		["o", "fork"],
+		["y", "clone"],
+		["e", "export"],
+		["S", "share"],
+	] as const) {
+		h.panel.handleInput(key);
+		await flush();
+		assert.equal(h.panel.state.mode, "normal", key);
+		assert.ok(h.footer().includes(`${what}: cannot act on multiple sessions`), h.footer());
+	}
+	h.panel.dispose();
+});
+
+test("@ opens pi's changelog in a big box: j/k/arrows scroll, G / g jump, Esc / q / @ close", async () => {
+	const md = Array.from({ length: 60 }, (_, i) => `line ${i + 1}`).join("\n\n");
+	let loads = 0;
+	const panel = new LazyPanel({
+		theme: fakeTheme,
+		data: {
+			listSessions: async () => [row(1, "/a")],
+			loadTree: async () => [],
+			loadContent: async () => [],
+			loadChangelog: async () => {
+				loads++;
+				return md;
+			},
+		},
+		getHeight: () => 20,
+		requestRender: () => {},
+		onClose: () => {},
+	});
+	await panel.load();
+	const text = () => panel.render(100).map((l) => stripTerminalSequences(l));
+	panel.handleInput("@");
+	await flush();
+	assert.equal(loads, 1);
+	assert.equal(panel.state.mode, "changelog");
+	let lines = text();
+	const dlg = dialogAt(lines, "What's New");
+	assert.ok(dlg, "the dialog is drawn");
+	assert.ok(dlg.body.some((l) => l.includes("line 1 ")), dlg.body.join("\n"));
+	assert.ok(lines.at(-1)!.includes("j/k scroll"), lines.at(-1));
+	for (const l of panel.render(100)) assert.equal(visibleWidth(l), 100);
+
+	panel.handleInput("j");
+	panel.handleInput("\x1b[B");
+	lines = text();
+	assert.ok(dialogAt(lines, "What's New")!.title.includes("3-"), dialogAt(lines, "What's New")!.title);
+	panel.handleInput("k");
+	assert.ok(dialogAt(text(), "What's New")!.title.includes("2-"));
+	panel.handleInput("G");
+	assert.ok(dialogAt(text(), "What's New")!.body.some((l) => l.includes("line 60")));
+	panel.handleInput("g");
+	assert.ok(dialogAt(text(), "What's New")!.title.includes("1-"));
+	// pane keys do not leak through
+	panel.handleInput("l");
+	assert.equal(panel.state.focus, "sessions");
+
+	for (const close of ["\x1b", "q", "@"]) {
+		if (panel.state.mode !== "changelog") {
+			panel.handleInput("@");
+			await flush();
+		}
+		panel.handleInput(close);
+		assert.equal(panel.state.mode, "normal", close);
+		assert.equal(dialogAt(text(), "What's New"), undefined);
+	}
+	panel.dispose();
+});

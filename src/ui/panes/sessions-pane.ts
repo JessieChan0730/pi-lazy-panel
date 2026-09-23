@@ -6,7 +6,8 @@
  *   › FilmRecall                       09-20 22:18
  *     opus-4 · ~/code/myself/FilmRecall · 128 msgs
  *
- * The cursor row is highlighted. While a `/` search is active in the pane the
+ * The cursor row is highlighted; sessions picked with space show a `•` in the
+ * second marker column and the header starts with "3 selected". While a `/` search is active in the pane the
  * matching rows get their hits painted (see ../search-highlight.ts) and the
  * header counts them ("2/7 matches"); the list itself is never filtered.
  */
@@ -61,7 +62,11 @@ export function renderSessionsPane(p: SessionsPaneProps, width: number, height: 
 
 	const title = p.title ?? "SESSIONS";
 	const budget = metaBudget(width, title);
-	const meta = p.search ? searchMeta(p.search.position, p.search.total, budget) : sessionsMeta(p.rows.length, p.cursor, p.scope, p.sort, budget);
+	const selected = selectedMeta(p.selected.size);
+	const rest = Math.max(0, budget - (selected ? visibleWidth(selected) + 3 : 0));
+	const base = p.search ? searchMeta(p.search.position, p.search.total, rest) : sessionsMeta(p.rows.length, p.cursor, p.scope, p.sort, rest);
+	// 有多选时标题右侧先显示 "3 selected"，剩下的空间再放位置 / 搜索计数。
+	const meta = selected && visibleWidth(selected) <= budget ? (base && rest > 0 ? `${selected} · ${base}` : selected) : base;
 	return frame(body, {
 		width,
 		height,
@@ -76,7 +81,9 @@ export function renderSessionsPane(p: SessionsPaneProps, width: number, height: 
 function renderRow(row: SessionRow, inner: number, isCursor: boolean, p: SessionsPaneProps): string[] {
 	const { theme } = p;
 	const indent = "  ".repeat(row.threadDepth ?? 0);
-	const marker = isCursor ? "› " : p.selected.has(row.file) ? "• " : "  ";
+	// 两列标记：第一列是光标 ›，第二列是多选的 •（光标停在选中行上时两个都看得见）。
+	const isSelected = p.selected.has(row.file);
+	const marker = `${isCursor ? "›" : " "}${isSelected ? "•" : " "}`;
 	const date = formatShortDate(row.updatedAt);
 	const title = row.name ?? row.preview ?? "(empty session)";
 
@@ -93,11 +100,11 @@ function renderRow(row: SessionRow, inner: number, isCursor: boolean, p: Session
 	if (isCursor) {
 		const hl = (s: string) => theme.bg("selectedBg", fit(s, inner));
 		return [
-			hl(theme.bold(theme.fg("accent", marker)) + indent + theme.bold(titleText) + " " + theme.fg("dim", date)),
+			hl(theme.bold(theme.fg("accent", marker[0]!)) + theme.bold(theme.fg("warning", marker.slice(1))) + indent + theme.bold(titleText) + " " + theme.fg("dim", date)),
 			hl(theme.fg("muted", line2Raw)),
 		];
 	}
-	const markerStyle = p.selected.has(row.file) ? (s: string) => theme.fg("warning", s) : (s: string) => s;
+	const markerStyle = isSelected ? (s: string) => theme.fg("warning", s) : (s: string) => s;
 	return [
 		fit(markerStyle(marker) + indent + theme.fg("text", titleText) + " " + theme.fg("dim", date), inner),
 		fit(theme.fg("muted", line2Raw), inner),
@@ -123,6 +130,11 @@ export function sessionsMeta(total: number, cursor: number, scope: ListScope, so
 		? [`${pos} · ${label.long} · ${sort}`, `${pos} · ${label.long}`, `${pos} · ${label.short}`, pos]
 		: [label.long, label.short];
 	return candidates.find((c) => visibleWidth(c) <= budget) ?? candidates[candidates.length - 1]!;
+}
+
+/** "3 selected" while sessions are multi-selected with space, "" otherwise. */
+export function selectedMeta(count: number): string {
+	return count > 0 ? `${count} selected` : "";
 }
 
 /** First visible index so that `cursor` stays inside a window of `visible` rows. */

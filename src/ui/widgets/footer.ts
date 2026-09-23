@@ -64,6 +64,7 @@ const SHORT: Partial<Record<ActionId, string>> = {
 	"tree-copy": "Copy",
 	"go-top": "Top",
 	"go-bottom": "Bottom",
+	changelog: "Changelog",
 };
 
 export function renderFooter(p: FooterProps, width: number): string[] {

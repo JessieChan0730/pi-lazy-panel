@@ -29,6 +29,7 @@ import { copyNodeText, labelNode, restoreNode } from "./actions/tree-actions.ts"
 import { loadConfig } from "./config/config.ts";
 import { loadPiSettings } from "./config/pi-settings.ts";
 import { COMMAND_NAME } from "./constants.ts";
+import { loadChangelog } from "./data/changelog.ts";
 import { loadContent, loadForkPoints, loadSessionInfo } from "./data/content.ts";
 import { listSessions, sortSessions } from "./data/sessions.ts";
 import { applyTreeFilter, loadTree } from "./data/tree.ts";
@@ -53,6 +54,7 @@ export default function (pi: ExtensionAPI) {
 					loadContent(leafEntryId ? { sessionFile: file, leafEntryId } : { sessionFile: file }),
 				loadSessionInfo,
 				loadForkPoints,
+				loadChangelog: () => loadChangelog(),
 			};
 			// 副作用统一走 actions 层；目标是当前会话时用 pi 内存里的 API（setLabel / setSessionName / navigateTree），
 			// 其他历史会话则直接读写文件或先 switchSession。

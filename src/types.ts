@@ -24,7 +24,8 @@ export type SessionSortMode = (typeof SESSION_SORT_MODES)[number];
  * summary menu / custom prompt of TREE Enter is open, `tree` = the full tree
  * dialog (`a` in the tree pane) is open, `confirm` / `rename` / `info` = the
  * delete confirmation, the Rename prompt or the Session Info dialog is open;
- * `export` / `import` / `share` = the dialogs of SESSIONS `e` / `I` / `S`.
+ * `export` / `import` / `share` = the dialogs of SESSIONS `e` / `I` / `S`;
+ * `changelog` = the `@` changelog dialog.
  */
 export type PanelMode =
 	| "normal"
@@ -41,6 +42,7 @@ export type PanelMode =
 	| "export"
 	| "import"
 	| "share"
+	| "changelog"
 	| "visual"
 	| "preview";
 
@@ -261,6 +263,7 @@ export type ActionId =
 	| "search"
 	| "search-next"
 	| "search-prev"
+	| "changelog"
 	// list navigation
 	| "move-down"
 	| "move-up"
