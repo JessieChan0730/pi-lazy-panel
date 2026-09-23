@@ -55,18 +55,19 @@ src/
 ├── types.ts                  # 共享类型（只放类型，禁止运行时代码）
 ├── constants.ts              # 常量：扩展 id、命令名、布局比例、面板 id、键位 scope（KEY_SCOPES = global + 面板 + tree-dialog）
 ├── ui/                       # 渲染层：pi-tui Component。不做 I/O，不调用 pi 会话 API
-│   ├── app.ts                # 根组件 LazyPanel + PanelState；数据通过 DataSource 接口注入
+│   ├── app.ts                # 根组件 LazyPanel + PanelState；数据通过 DataSource 接口注入；/ 搜索的流程（原位置、实时跳转、n/N、折叠展开）也在这里
 │   ├── frame.ts              # 纯函数：画边框（FRAME_DIVIDER 哨兵行画 ├──┤）、左右拼列、按可见宽度补齐/截断、居中叠加弹窗（overlayCentered）、弹窗宽度（dialogWidth）
+│   ├── search-highlight.ts   # 纯函数：搜索命中的高亮（highlightLine 在画好的整行上按可见列叠加样式，照 pi 全屏搜索的做法，前后颜色 / 光标背景不断；matchStyle 其他匹配下划线、当前匹配反色；searchMeta 标题的 2/7 matches）
 │   ├── tree-lines.ts         # 纯函数：按 parentId 算 pi /tree 风格的树线前缀（treePrefixes，折叠的段头画 ⊞），只给树对话框用
 │   ├── tree-outline.ts       # 纯函数：TREE 面板的折叠大纲前缀（treeOutline）：段头画 ▸/▾、没有后代的旁支画 ─，段内每层缩进 2 列、最多 4 层、更深的以 … 代替；三角直接占段头行首两列、不预留空列（lazygit 文件树的画法），线性对话完全不缩进
 │   ├── panes/
-│   │   ├── sessions-pane.ts  # 左上 SESSIONS 面板
-│   │   ├── tree-pane.ts      # 左下 TREE 面板：折叠大纲（前缀来自 tree-outline.ts，可见行由 app.ts 用 applyTreeFold 算好）；renderTreeRow（光标 › + 已配色的前缀 + 活动路径 • + [label] + 时间 + role + 正文）和树对话框共用
-│   │   └── content-pane.ts   # 右侧 CONTENT 面板，用 pi-tui 的 Markdown 渲染消息
+│   │   ├── sessions-pane.ts  # 左上 SESSIONS 面板（search prop：命中行高亮、标题计数）
+│   │   ├── tree-pane.ts      # 左下 TREE 面板：折叠大纲（前缀来自 tree-outline.ts，可见行由 app.ts 用 applyTreeFold 算好）；renderTreeRow（光标 › + 已配色的前缀 + 活动路径 • + [label] + 时间 + role + 正文，可选的搜索高亮）和树对话框共用
+│   │   └── content-pane.ts   # 右侧 CONTENT 面板，用 pi-tui 的 Markdown 渲染消息；排版结果带 searchable[]（只有正文行参与 / 搜索），命中只叠加在窗口里的行上
 │   └── widgets/
 │       ├── footer.ts         # 底部一行：模式 + 当前面板快捷键提示（弹窗打开时显示弹窗的提示）
 │       ├── prompt-bar.ts     # 底部一行输入的通用组件（包装 pi-tui Input），搜索栏和树对话框的搜索行基于它
-│       ├── search-bar.ts     # 底部搜索输入：显示 `搜索:`（匹配/高亮 TODO；三个面板都能打开）
+│       ├── search-bar.ts     # 底部搜索输入：显示 `搜索:`；renderSearchStatus 是回车后的状态行（关键字 + 2/7 + n/N/Esc 提示 + 状态文字）
 │       ├── input-dialog.ts   # 通用的居中单行输入弹窗（包装 pi-tui Input，3 行高）：标题 / 预填值 / 提示 / 回调在 open 时传入
 │       ├── label-dialog.ts   # T 打标签：InputDialog 的预设（标题 + footer 提示）；给 session 起名等场景照此加预设
 │       ├── select-dialog.ts  # 通用的居中选择菜单（j/k/方向键移动、Enter 确认、Esc 取消，高度 = 选项数 + 2）：标题 / 选项 / 回调在 open 时传入
@@ -83,7 +84,7 @@ src/
 │   ├── tree.ts               # getTree -> TreeRow[]（parentId 指向最近的"也是行"的祖先，含 isLeaf 标记；kind 分 message/tool/system/meta，和 pi /tree 一致）；applyTreeFilter（default 只藏 meta、no-tools 再藏工具结果，删行后重新挂父节点走 tree-fold.ts 的 filterTreeRows）；isEffectiveLeaf
 │   ├── tree-fold.ts          # 纯函数：filterTreeRows（删行并把幸存的行挂到最近保留的祖先上，过滤和搜索共用）；折叠（z）：foldableIds（段头 = 父节点有多个子节点且自己有后代；单根不可折叠）、defaultFolded（旁支默认折叠）、applyTreeFold（隐藏折叠段的后代）、foldTarget（z 作用的段头：自己或最近的可折叠祖先）；对话框用的 nearestListedIndex（行被藏掉时光标落到最近还列出来的祖先）、foldedAncestors（关对话框时要展开的段）
 │   ├── content.ts            # getBranch -> ContentBlock[]；loadSessionInfo；resolveContentLeaf
-│   └── search.ts             # 纯函数：parseSearchQuery 解析 name:/model:/path:/tag:/after:/before: + 自由文本；matchTreeRow（树对话框的实时搜索：每个词都要出现在 label + role + 正文里，tag: 只看 label，after:/before: 看时间）；会话 / 正文匹配 TODO
+│   └── search.ts             # 纯函数：parseSearchQuery 解析 name:/model:/path:/tag:/role:/after:/before: + 自由文本；普通词只搜 名称 / 标题 / label，其他字段都要限定词：matchTreeRow（TREE 面板和树对话框：每个词都要出现在 label + 正文里，tag: 只看 label，role: 只看角色，after:/before: 看时间）；matchSessionRow（SESSIONS：普通词只看 名称 + 首条消息预览，模型 / 路径只通过 model: / path: 匹配，path: 也认 ~/… 写法，after:/before: 看更新时间）；matchesTokens（CONTENT 行）；highlightTerms / findMatchRanges 给高亮用
 ├── config/
 │   ├── keymap.ts             # 默认键位 + 动作描述 + footer 提示顺序（纯数据），含 tree-dialog scope（d/t/u/l/a 过滤、q 关闭）；DISABLED_ACTIONS 列出在某个 scope 里关掉的外层动作（对话框里的切面板 / C A / n N / quit / help / tree-open）；TREE_DIALOG_FOOTER 是对话框提示的顺序
 │   ├── keys.ts               # 纯函数：chord 解析（ctrl+d / G / gg）、按键匹配、按 scope 解析 ActionId；scopeChain 定义查找顺序（对话框 → tree → global，面板 → global）
@@ -95,12 +96,12 @@ src/
 test/
 ├── smoke.test.ts             # 键位表、搜索解析的冒烟测试
 ├── keymap.test.ts            # chord 解析、多键序列、scope 链（tree-dialog → tree → global）、用户配置合并
-├── panel.test.ts             # LazyPanel 行为：焦点切换、C/A、? 帮助、/ 搜索栏、自定义键位、y/T/Enter（含摘要菜单）、树对话框（移动、搜索、过滤、z 折叠、y/T/Enter、关闭后面板光标跟随）、InputDialog / SelectDialog
+├── panel.test.ts             # LazyPanel 行为：焦点切换、C/A、? 帮助、/ 搜索（三个面板的实时跳转 / Enter / Esc / n N 回绕 / 标题计数 / 折叠展开 / 高亮 / 切面板保留关键字）、自定义键位、y/T/Enter（含摘要菜单）、树对话框（移动、搜索、过滤、z 折叠、y/T/Enter、关闭后面板光标跟随）、InputDialog / SelectDialog
 ├── tree-actions.test.ts      # 临时会话文件上验证 loadNodeText / labelNode 的分流、loadTree 的 isLeaf 标记
 ├── session-actions.test.ts   # 临时会话文件上验证 isEffectiveLeaf / resumeSession / restoreNode 的分流与摘要选项透传
 ├── pi-settings.test.ts       # 临时目录上验证 branchSummary.skipPrompt 的全局 / 项目两级读取、treeFilterMode 映射
-├── search.test.ts            # parseSearchQuery 的限定词解析、matchTreeRow 的匹配规则
-└── ui.test.ts                # 格式化、frame 几何、树过滤 / 折叠、TreeDialog 搜索行
+├── search.test.ts            # parseSearchQuery 的限定词解析、matchTreeRow / matchSessionRow / matchesTokens 的匹配规则、findMatchRanges
+└── ui.test.ts                # 格式化、frame 几何、树过滤 / 折叠、TreeDialog 搜索行、highlightLine / searchMeta
 
 docs/keybindings.md           # 默认快捷键表，新增 ActionId 时同步更新
 docs/design.md                # 产品设计（原 计划.md）
@@ -109,7 +110,7 @@ docs/issues.md                # 已知问题 / 搁置的问题，解决后划掉
 AGENTS.md                     # 仅指向本文件，规则统一在这里维护
 ```
 
-数据流：`sessions.ts` → `SessionRow[]` → SESSIONS 面板；选中行驱动 `tree.ts` → `TreeRow[]` → `tree-fold.ts` 隐藏折叠段（`PanelState.treeFolded`，默认旁支折叠）→ TREE 面板；选中节点（或活动叶子）驱动 `content.ts` → `ContentBlock[]` → CONTENT 面板。所有 UI 状态集中在 `PanelState`（`src/ui/app.ts`）。
+数据流：`sessions.ts` → `SessionRow[]` → SESSIONS 面板；选中行驱动 `tree.ts` → `TreeRow[]` → `tree-fold.ts` 隐藏折叠段（`PanelState.treeFolded`，默认旁支折叠）→ TREE 面板；选中节点（或活动叶子）驱动 `content.ts` → `ContentBlock[]` → CONTENT 面板。所有 UI 状态集中在 `PanelState`（`src/ui/app.ts`）。`/` 搜索是每个面板一份的 `PanelState.search`（关键字 + 匹配行号），列表不过滤只跳转；面板拿到的是 `SearchView`（可见行号的匹配集合、当前匹配、要高亮的词），高亮由 `ui/search-highlight.ts` 在画好的行上叠加。
 
 快捷键是间接绑定：按键 → `resolveKeys`（`src/config/keys.ts`，按 `scopeChain` 的顺序查：面板 scope 再 global，树对话框是 tree-dialog → tree → global，支持 `gg` 这类多键序列） → `ActionId`（`src/types.ts`） → `LazyPanel.dispatch`（对话框里是 `dispatchInTreeDialog`）。默认值在 `src/config/keymap.ts`，`loadConfig` 深合并用户覆盖。新增动作时要同时改：`ActionId`、默认键位、`ACTION_DESCRIPTIONS`、`dispatch` 里的分发、`docs/keybindings.md`。
 
