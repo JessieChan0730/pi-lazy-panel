@@ -337,7 +337,7 @@
 
 当前状态：SESSIONS 面板的 Enter / d / r / s / i / n / o / y / Y 都做完了，TREE 面板和树对话框的功能也齐了，三个面板的 `/` 搜索齐了。`npm run check` + `npm test`（113 个）全过。剩下的按建议顺序：
 
-1. **`space` 多选 + 批量删除**（`session-toggle-select` 已绑好键，`PanelState.selectedSelectedFiles` 这个集合在删除时已经在维护了，但没有任何地方往里加）。做法：space 切换光标行的选中态、行首画标记、标题显示 `3 selected`；`d` 在有选中时改成批量确认（确认框标题带数量），逐个调 `deleteSession`、失败的留在列表里并把第一条错误写进 footer；按 design.md 的要求，选中多个时 `r`（rename）和 `o`（fork）要提示"不能对多个对象操作"。范围最小、没有新的 pi API。
+1. **`space` 多选 + 批量删除**（`session-toggle-select` 已绑好键，`PanelState.selectedSessionFiles` 这个集合在删除时已经在维护了，但没有任何地方往里加）。做法：space 切换光标行的选中态、行首画标记、标题显示 `3 selected`；`d` 在有选中时改成批量确认（确认框标题带数量），逐个调 `deleteSession`、失败的留在列表里并把第一条错误写进 footer；按 design.md 的要求，选中多个时 `r`（rename）和 `o`（fork）要提示"不能对多个对象操作"。范围最小、没有新的 pi API。
 2. **`e` 导出 / `I` 导入**（`session-export` / `session-import` 已绑好键，`actions/session-actions.ts` 里 `exportSession` / `importSession` 还是 TODO 空壳）。pi 侧的 API 已经查到：导出是 `AgentSession.exportToHtml(outputPath?, { themeName? })` 和 `exportToJsonl(outputPath?)`（都在 `dist/core/agent-session.d.ts`，只对**当前打开的会话**有效，所以其他会话要么先切过去，要么自己按 session-format.md 拼 JSONL——动手前先查 pi 有没有对任意文件导出的路子）；导入是 `AgentSessionRuntime.importFromJsonl(inputPath, cwdOverride?)`，扩展 ctx 上**没有**暴露它（`ExtensionCommandContextActions` 里只有 waitForIdle / newSession / fork / navigateTree / switchSession / reload），所以导入可能做不了，先查清楚，做不了就记到 issues.md。UI 上两个都需要一个"输入路径"的输入框（`InputDialog` 直接能用），导出还要选 HTML / JSONL（`SelectDialog`）。
 3. **`S` 分享为私有 Gist**（`session-share` 已绑好键，`shareSession` 是空壳）。风险最高：要走网络、要 GitHub 凭据、是外发操作，一定要确认框并在 footer 显示生成的链接。建议放最后，动手前先查 pi 自己的 `/share` 怎么实现的（大概在 `interactive-mode.js` 里搜 `gist`）。
 
