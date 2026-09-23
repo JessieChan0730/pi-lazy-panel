@@ -6,12 +6,12 @@
  */
 
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { resumeSession } from "../src/actions/session-actions.ts";
+import { CURRENT_SESSION_DELETE_ERROR, deleteSession, renameSession, resumeSession } from "../src/actions/session-actions.ts";
 import { type RestoreContext, restoreNode } from "../src/actions/tree-actions.ts";
 import { isEffectiveLeaf } from "../src/data/tree.ts";
 
@@ -259,4 +259,72 @@ test("restoreNode passes the summary choice through to navigateTree and shows pr
 	const cancelled = fakeCtx(SessionManager.open(s.file), { cancelNavigate: true });
 	await assert.rejects(restoreNode(cancelled.ctx, s.file, s.u1, { summarize: true }), /branch summary cancelled/);
 	assert.deepEqual(cancelled.statuses.at(-1), ["lazy-panel", undefined]);
+});
+
+/** A `trash` command that certainly does not exist, so the tests never touch the real system trash. */
+const NO_TRASH = { trashCommand: "lazy-panel-no-such-trash-command" };
+
+test("deleteSession: refuses the current session, falls back to unlink when trash is unavailable, reports missing files", async (t) => {
+	const dir = tempDir(t);
+	const s = makeSession(dir);
+	const other = makeSession(mkdtempSync(join(dir, "other-")));
+	const ctx = { sessionManager: SessionManager.open(s.file) };
+
+	// the session pi has open is never deleted (pi's /resume wording)
+	await assert.rejects(deleteSession(ctx, s.file, NO_TRASH), new RegExp(CURRENT_SESSION_DELETE_ERROR));
+	assert.ok(existsSync(s.file));
+
+	// trash cannot be spawned → unlink, and the caller learns which one did it
+	assert.equal(await deleteSession(ctx, other.file, NO_TRASH), "unlink");
+	assert.equal(existsSync(other.file), false);
+
+	// gone already: reported, nothing thrown from unlink
+	await assert.rejects(deleteSession(ctx, other.file, NO_TRASH), /session file not found/);
+	await assert.rejects(deleteSession(ctx, join(dir, "missing.jsonl"), NO_TRASH), /session file not found/);
+});
+
+test("deleteSession: a trash command that removes the file counts as trash", async (t) => {
+	const dir = tempDir(t);
+	const s = makeSession(dir);
+	const other = makeSession(mkdtempSync(join(dir, "other-")));
+	const ctx = { sessionManager: SessionManager.open(s.file) };
+	// `node -e` stands in for the trash CLI: it deletes its argument like a real one would move it away
+	const fake = join(dir, "fake-trash.js");
+	const { writeFileSync } = await import("node:fs");
+	writeFileSync(fake, "require('node:fs').unlinkSync(process.argv[2]);\n");
+	// spawnSync 直接找命令名：用一个包装脚本把 node 和脚本路径拼起来（Windows 上是 .cmd）
+	const wrapper = process.platform === "win32" ? join(dir, "trash.cmd") : join(dir, "trash");
+	writeFileSync(
+		wrapper,
+		process.platform === "win32" ? `@"${process.execPath}" "${fake}" %*\r\n` : `#!/bin/sh\nexec "${process.execPath}" "${fake}" "$@"\n`,
+		{ mode: 0o755 },
+	);
+	assert.equal(await deleteSession(ctx, other.file, { trashCommand: wrapper }), "trash");
+	assert.equal(existsSync(other.file), false);
+});
+
+test("renameSession: pi.setSessionName for the current session, a session_info entry in the file for others, empty clears", async (t) => {
+	const dir = tempDir(t);
+	const s = makeSession(dir);
+	const other = makeSession(mkdtempSync(join(dir, "other-")));
+	const names: string[] = [];
+	const pi = { setSessionName: (name: string) => void names.push(name) };
+	const ctx = { sessionManager: SessionManager.open(s.file) };
+
+	// current session: pi keeps its in-memory manager in sync itself
+	await renameSession(pi, ctx, s.file, "  Refactor auth  ");
+	assert.deepEqual(names, ["Refactor auth"]);
+	assert.equal(SessionManager.open(s.file).getSessionName(), undefined, "the file is pi's job for the current session");
+
+	// other session: appended to its file, visible to the next open
+	await renameSession(pi, ctx, other.file, "Notes");
+	assert.equal(SessionManager.open(other.file).getSessionName(), "Notes");
+	assert.deepEqual(names, ["Refactor auth"]);
+	// empty clears the name (pi's getSessionName treats an empty session_info as none)
+	await renameSession(pi, ctx, other.file, "   ");
+	assert.equal(SessionManager.open(other.file).getSessionName(), undefined);
+	await renameSession(pi, ctx, s.file, "");
+	assert.deepEqual(names, ["Refactor auth", ""]);
+
+	await assert.rejects(renameSession(pi, ctx, join(dir, "missing.jsonl"), "x"), /session file not found/);
 });

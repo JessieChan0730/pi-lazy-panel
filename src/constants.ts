@@ -18,6 +18,15 @@ export const LEFT_COLUMN_RATIO = 0.25;
 export const PANE_IDS = ["sessions", "tree", "content"] as const;
 
 /**
+ * Sort orders of the sessions pane in the order `s` cycles through them:
+ * recent (last update) → created → title (by the title the pane shows — name,
+ * else first-message preview — A–Z, empty sessions last) → threaded (forks
+ * indented under their parent, like pi's /resume). pi's "fuzzy" order only
+ * means something with a search query, so it is not offered here.
+ */
+export const SESSION_SORT_MODES = ["recent", "created", "title", "threaded"] as const;
+
+/**
  * Key scope of the full tree dialog (`a` in the tree pane). Its bindings sit on
  * top of the tree pane's, which sit on top of the global ones.
  *

@@ -17,8 +17,8 @@
 
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { CONFIG_FILE_NAME, KEY_SCOPES } from "../constants.ts";
-import type { ActionId, KeyChord, Keymap, KeyScope, PaneKeymap, UserConfig, UserPaneKeymap } from "../types.ts";
+import { CONFIG_FILE_NAME, KEY_SCOPES, SESSION_SORT_MODES } from "../constants.ts";
+import type { ActionId, KeyChord, Keymap, KeyScope, PaneKeymap, SessionSortMode, UserConfig, UserPaneKeymap } from "../types.ts";
 import { DEFAULT_KEYMAP } from "./keymap.ts";
 
 /** Fully resolved configuration used at runtime. */
@@ -74,8 +74,9 @@ export function resolveConfig(user: unknown): ResolvedConfig {
 		u.defaultScope === "all" || u.defaultScope === "current-folder" ? u.defaultScope : DEFAULT_CONFIG.defaultScope;
 	if (u.defaultScope !== undefined && defaultScope !== u.defaultScope) warnings.push(`config: unknown defaultScope "${String(u.defaultScope)}"`);
 
-	const defaultSort =
-		u.defaultSort === "threaded" || u.defaultSort === "recent" || u.defaultSort === "fuzzy" ? u.defaultSort : DEFAULT_CONFIG.defaultSort;
+	const defaultSort = (SESSION_SORT_MODES as readonly string[]).includes(u.defaultSort as string)
+		? (u.defaultSort as SessionSortMode)
+		: DEFAULT_CONFIG.defaultSort;
 	if (u.defaultSort !== undefined && defaultSort !== u.defaultSort) warnings.push(`config: unknown defaultSort "${String(u.defaultSort)}"`);
 
 	let leftColumnRatio = DEFAULT_CONFIG.leftColumnRatio;

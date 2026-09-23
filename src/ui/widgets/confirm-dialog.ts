@@ -1,10 +1,61 @@
 /**
- * Confirm dialog.
+ * Confirm dialog: the Yes / No menu shown before every destructive action
+ * (deleting a session now, forking and batch deletes later — CLAUDE.md rule 7).
  *
- * Vertical layout with a title, a message and [y] Confirm / [n] Cancel.
- * Required before every delete and fork (see 计划.md, 注意点 3).
+ *   ┌─ Delete session? ──────────── FilmRecall ─┐
+ *   │   Yes                                      │
+ *   │ › No                                       │
+ *   └────────────────────────────────────────────┘
+ *    CONFIRM │ y/n choose   Enter confirm   Esc cancel     <- footer while open
  *
- * TODO: implement as an overlay component returning Promise<boolean>.
+ * A preset of ./select-dialog.ts, like ./restore-dialog.ts: the cursor starts
+ * on No so a stray Enter never destroys anything, `y` / `n` pick directly,
+ * Enter confirms the highlighted entry and Esc cancels.
+ *
+ * 删除 / fork 前的确认框是通用选择菜单（SelectDialog）的一个预设：默认停在 No，
+ * y / n 直接选，Enter 确认光标所在项，Esc 取消。这里只放文案、顺序和提示，不做 I/O。
  */
 
-export {};
+import type { KeyHint } from "../../types.ts";
+import type { SelectDialogSpec } from "./select-dialog.ts";
+
+/** Menu entries; `CONFIRM_YES_INDEX` / `CONFIRM_NO_INDEX` name them. */
+export const CONFIRM_ITEMS = ["Yes", "No"] as const;
+export const CONFIRM_YES_INDEX = 0;
+export const CONFIRM_NO_INDEX = 1;
+
+/** Footer hints while a confirmation is open. */
+export const CONFIRM_HINTS: KeyHint[] = [
+	["y/n", "choose"],
+	["Enter", "confirm"],
+	["Esc", "cancel"],
+];
+
+/** Title of the delete-session confirmation. */
+export const DELETE_SESSION_TITLE = "Delete session?";
+
+export interface ConfirmSpecOptions {
+	/** Title on the top border, e.g. "Delete session?". */
+	title: string;
+	/** What is about to be acted on, shown at the right end of the title bar. */
+	subject?: string;
+	onConfirm: () => void;
+	onCancel: () => void;
+}
+
+/**
+ * The `SelectDialog.open` spec of a confirmation: Yes / No with the cursor on
+ * No; picking No is the same as Esc.
+ */
+export function confirmDialogSpec(o: ConfirmSpecOptions): SelectDialogSpec {
+	return {
+		title: o.title,
+		items: [...CONFIRM_ITEMS],
+		initialIndex: CONFIRM_NO_INDEX,
+		...(o.subject ? { subject: o.subject } : {}),
+		hints: CONFIRM_HINTS,
+		shortcuts: { y: CONFIRM_YES_INDEX, n: CONFIRM_NO_INDEX },
+		onSelect: (index) => (index === CONFIRM_YES_INDEX ? o.onConfirm() : o.onCancel()),
+		onCancel: o.onCancel,
+	};
+}

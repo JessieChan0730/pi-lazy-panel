@@ -41,7 +41,10 @@
  *     Summarize branch? 三选菜单（No summary / Summarize / Summarize with custom prompt，自定义指令再弹一个输入框），
  *     光标就在活动叶子上或 pi 设置了 branchSummary.skipPrompt 时不问、直接进入；
  *     成功后关闭面板，失败原因留在 footer 里、面板不关；等待 pi 切换 / 写摘要期间面板隐藏且不响应按键
- *   - 其余面板动作（删除、fork…）只做分发，具体实现留给后续任务
+ *   - SESSIONS：d 删除（先弹 Yes / No 确认框，默认停在 No，y / n 直接选；当前打开的会话拒绝删除；删完重新拉列表、光标夹回范围内），
+ *     r 重命名（居中输入框，预填当前名字，空值清除；改完重新拉列表、光标留在同一会话上），
+ *     s 循环切换排序（recent → created → title → threaded，光标跟着同一会话走），i 会话信息弹窗（y 复制全部内容，Esc 关闭）
+ *   - 其余面板动作（fork、多选…）只做分发，具体实现留给后续任务
  */
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
@@ -49,7 +52,7 @@ import type { Component, Focusable } from "@earendil-works/pi-tui";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import { type Binding, compileKeymap, labelsFor, labelsForFocus, matchesKeyId, resolveKeys } from "../config/keys.ts";
 import { DEFAULT_KEYMAP, FOCUS_ACTIONS, isDisabledIn, PANE_TITLES, TREE_DIALOG_FOOTER, TREE_DIALOG_HINT_TEXT } from "../config/keymap.ts";
-import { LEFT_COLUMN_RATIO, PANE_IDS, SUMMARIZING_STATUS, TREE_DIALOG_SCOPE } from "../constants.ts";
+import { LEFT_COLUMN_RATIO, PANE_IDS, SESSION_SORT_MODES, SUMMARIZING_STATUS, TREE_DIALOG_SCOPE } from "../constants.ts";
 import { highlightTerms, matchesTokens, matchSessionRow, matchTreeRow, parseSearchQuery, searchTokens } from "../data/search.ts";
 import { findSessionIndex } from "../data/sessions.ts";
 import {
@@ -63,6 +66,7 @@ import {
 import type {
 	ActionId,
 	ContentBlock,
+	DeleteMethod,
 	EnterOutcome,
 	KeyHint,
 	Keymap,
@@ -72,6 +76,7 @@ import type {
 	PaneSearch,
 	RestoreOptions,
 	SearchView,
+	SessionInfo,
 	SessionRow,
 	SessionSortMode,
 	TreeFilter,
@@ -82,10 +87,12 @@ import { type ContentLayout, layoutContent, maxScroll, renderContentPane } from 
 import { renderSessionsPane } from "./panes/sessions-pane.ts";
 import { renderTreePane } from "./panes/tree-pane.ts";
 import { type OutlinePrefix, treeOutline } from "./tree-outline.ts";
+import { confirmDialogSpec, DELETE_SESSION_TITLE } from "./widgets/confirm-dialog.ts";
 import { renderFooter } from "./widgets/footer.ts";
 import { compactKeys, helpLineCount, overlayHelp } from "./widgets/help-overlay.ts";
 import { InputDialog } from "./widgets/input-dialog.ts";
 import { LABEL_DIALOG_HINTS, LABEL_DIALOG_TITLE } from "./widgets/label-dialog.ts";
+import { RENAME_DIALOG_HINTS, RENAME_DIALOG_TITLE } from "./widgets/rename-dialog.ts";
 import {
 	CUSTOM_PROMPT_HINTS,
 	CUSTOM_PROMPT_INDEX,
@@ -96,6 +103,7 @@ import {
 } from "./widgets/restore-dialog.ts";
 import { renderSearchStatus, SearchBar } from "./widgets/search-bar.ts";
 import { SelectDialog } from "./widgets/select-dialog.ts";
+import { SessionInfoDialog } from "./widgets/session-info-dialog.ts";
 import { TreeDialog } from "./widgets/tree-dialog.ts";
 
 /** Mutable UI state of the panel. Kept in one place for easy debugging. */
@@ -151,11 +159,13 @@ export interface DataSource {
 	listSessions(scope: ListScope, sort: SessionSortMode): Promise<SessionRow[]>;
 	loadTree(sessionFile: string, filter: TreeFilter): Promise<TreeRow[]>;
 	loadContent(sessionFile: string, leafEntryId?: string): Promise<ContentBlock[]>;
+	/** `i` in SESSIONS: what /session shows; undefined when the file cannot be read. */
+	loadSessionInfo?(sessionFile: string): Promise<SessionInfo | undefined>;
 }
 
 /**
  * Side effects injected by the entry point (they wrap src/actions/*).
- * 面板本身不做 I/O：复制、打标签、恢复会话都通过这里交给 actions 层。
+ * 面板本身不做 I/O：复制、打标签、恢复会话、删除、改名都通过这里交给 actions 层。
  */
 export interface ActionSource {
 	/** Copy the node's full text to the clipboard; `false` = the entry has no text. */
@@ -169,6 +179,12 @@ export interface ActionSource {
 	 * switching session first if needed; `options` is the summary choice.
 	 */
 	restoreNode(sessionFile: string, entryId: string, options: RestoreOptions): Promise<EnterOutcome>;
+	/** d in SESSIONS (after confirmation): remove the file; resolves to how it was removed. */
+	deleteSession?(sessionFile: string): Promise<DeleteMethod>;
+	/** r in SESSIONS: set the display name ("" clears it). */
+	renameSession?(sessionFile: string, name: string): Promise<void>;
+	/** y in the Session Info dialog: copy its text to the clipboard. */
+	copyText?(text: string): Promise<void>;
 }
 
 export interface LazyPanelOptions {
@@ -196,7 +212,7 @@ export interface LazyPanelOptions {
 	/**
 	 * File of the session pi currently has open. On the first load the SESSIONS
 	 * cursor starts on it (a brand-new session is not listed yet, so the cursor
-	 * stays on the first row).
+	 * stays on the first row); `d` refuses to delete it, like pi's /resume.
 	 */
 	currentSessionFile?: string;
 }
@@ -206,6 +222,9 @@ const PENDING_TIMEOUT_MS = 1000;
 
 /** Delay before (re)loading the session under the cursor while the user is still moving. */
 const SESSION_LOAD_DEBOUNCE_MS = 40;
+
+/** pi's wording when `d` lands on the session it currently has open. */
+const CURRENT_SESSION_DELETE_STATUS = "Cannot delete the currently active session";
 
 /** Node TREE Enter is restoring to while its menu / custom prompt is open. */
 interface RestoreTarget {
@@ -251,15 +270,19 @@ export class LazyPanel implements Component, Focusable {
 	private loadedSessionFile: string | undefined;
 	/** Session to put the cursor on at the first load (see `LazyPanelOptions.currentSessionFile`); cleared once used. */
 	private locateSessionFile: string | undefined;
+	/** Session pi has open (see `LazyPanelOptions.currentSessionFile`): the one `d` must not delete. */
+	private readonly currentSessionFile: string | undefined;
 	private disposed = false;
 	private readonly ratio: number;
 	private readonly searchBar: SearchBar;
-	/** Shared centered text prompt: labelling a node, the custom summary instructions, renaming a session later. */
+	/** Shared centered text prompt: labelling a node, the custom summary instructions, renaming a session. */
 	private readonly inputDialog: InputDialog;
-	/** Shared centered menu: the "Summarize branch?" choice now, confirmations and pickers later. */
+	/** Shared centered menu: the "Summarize branch?" choice and the delete confirmation. */
 	private readonly selectDialog: SelectDialog;
 	/** Full tree in a big box (`a` in the tree pane) with its own cursor, live search and the filter keys. */
 	private readonly treeDialog: TreeDialog;
+	/** `i` in SESSIONS: the read-only Session Info box. */
+	private readonly infoDialog: SessionInfoDialog;
 	/**
 	 * Fold state from before the dialog's search started: a search shows every
 	 * match, so folds are cleared meanwhile and restored when the query is gone.
@@ -269,6 +292,10 @@ export class LazyPanel implements Component, Focusable {
 	private labelTarget: { file: string; entryId: string } | undefined;
 	/** Node being restored to while `mode === "restore"`. */
 	private restoreTarget: RestoreTarget | undefined;
+	/** Session being renamed while `mode === "rename"`. */
+	private renameTarget: SessionRow | undefined;
+	/** Session the delete confirmation is about while `mode === "confirm"`. */
+	private deleteTarget: SessionRow | undefined;
 	/** True while an Enter action is waiting for pi (keys are ignored, the panel is hidden). */
 	private entering = false;
 	/** Raw key chunks of an unfinished multi-key sequence. */
@@ -295,6 +322,7 @@ export class LazyPanel implements Component, Focusable {
 		this.ratio = o.leftColumnRatio ?? LEFT_COLUMN_RATIO;
 		this.status = o.status;
 		this.locateSessionFile = o.currentSessionFile;
+		this.currentSessionFile = o.currentSessionFile;
 		this.searchBar = new SearchBar({
 			theme: o.theme,
 			onSubmit: (q) => this.submitSearch(q),
@@ -314,6 +342,7 @@ export class LazyPanel implements Component, Focusable {
 			theme: o.theme,
 			onChange: () => this.o.requestRender(),
 		});
+		this.infoDialog = new SessionInfoDialog({ theme: o.theme });
 	}
 
 	/** Focusable: forwarded to the active prompt so the IME cursor lands in the bar. */
@@ -334,23 +363,43 @@ export class LazyPanel implements Component, Focusable {
 	/** Load sessions, then the tree + content for the cursor session. */
 	async load(): Promise<void> {
 		this.setStatus("loading sessions…");
+		// 首次加载：光标落到 pi 当前打开的会话上（新会话还没列出来时就留在第一行）。
+		// 之后 C / A 切范围重新加载时不再定位，光标照旧回到顶部。
+		const keep = this.locateSessionFile;
+		this.locateSessionFile = undefined;
+		if (await this.listSessions(keep)) this.setStatus(undefined);
+		await this.loadSelectedSession();
+	}
+
+	/**
+	 * Re-read the sessions list and put the cursor on `keepFile` (or clamp it),
+	 * recomputing the pane's search matches; the tree + content follow only if
+	 * the session under the cursor changed. Resolves to false when the listing
+	 * failed (reported in the footer, the old rows stay).
+	 *
+	 * 删除 / 改名 / 换排序之后重新拉列表：光标尽量留在同一个会话上，只有光标下的会话
+	 * 真的变了（比如删掉的那个）才重新加载 TREE / CONTENT。
+	 */
+	private async listSessions(keepFile: string | undefined): Promise<boolean> {
 		try {
-			this.sessions = await this.o.data.listSessions(this.state.scope, this.state.sort);
-			// 首次加载：光标落到 pi 当前打开的会话上（新会话还没列出来时就留在第一行）。
-			// 之后 C / A 切范围重新加载时不再定位，光标照旧回到顶部。
-			if (this.locateSessionFile !== undefined) {
-				const idx = findSessionIndex(this.sessions, this.locateSessionFile);
-				if (idx >= 0) this.state.cursor.sessions = idx;
-				this.locateSessionFile = undefined;
-			}
-			this.state.cursor.sessions = Math.min(this.state.cursor.sessions, Math.max(0, this.sessions.length - 1));
-			this.setStatus(undefined);
+			const rows = await this.o.data.listSessions(this.state.scope, this.state.sort);
+			if (this.disposed) return false;
+			this.sessions = rows;
 		} catch (err) {
 			this.setStatus(`failed to list sessions: ${(err as Error).message}`);
+			return false;
 		}
-		// 列表变了（首次加载、C / A 切范围）：SESSIONS 的搜索结果按新列表重算，关键字保留。
+		const idx = findSessionIndex(this.sessions, keepFile);
+		this.state.cursor.sessions = idx >= 0 ? idx : clamp(this.state.cursor.sessions, 0, Math.max(0, this.sessions.length - 1));
+		// 列表变了（首次加载、C / A 切范围、删除 / 改名 / 排序）：SESSIONS 的搜索结果按新列表重算，关键字保留。
 		this.refreshSearch("sessions");
-		await this.loadSelectedSession();
+		this.o.requestRender();
+		return true;
+	}
+
+	/** After the list changed: reload TREE + CONTENT when another session ended up under the cursor. */
+	private async followSessionsCursor(): Promise<void> {
+		if (this.sessions[this.state.cursor.sessions]?.file !== this.loadedSessionFile) await this.loadSelectedSession();
 	}
 
 	/** Reload tree and content for the session under the cursor. */
@@ -538,9 +587,15 @@ export class LazyPanel implements Component, Focusable {
 			return;
 		}
 
-		// 居中选择菜单打开时（Summarize branch?）：j/k/Enter/Esc 都由菜单处理。
+		// 居中选择菜单打开时（Summarize branch?、删除确认）：j/k/Enter/Esc/y/n 都由菜单处理。
 		if (this.selectDialog.isOpen) {
 			this.selectDialog.handleInput(data);
+			return;
+		}
+
+		// 会话信息弹窗打开时只响应 y 复制 / Esc 关闭。
+		if (this.infoDialog.isOpen) {
+			this.infoDialog.handleInput(data);
 			return;
 		}
 
@@ -723,6 +778,18 @@ export class LazyPanel implements Component, Focusable {
 				return;
 			case "tree-restore":
 				this.restoreTreeNode(this.currentTreeNode());
+				return;
+			case "session-delete":
+				this.confirmDeleteSession();
+				return;
+			case "session-rename":
+				this.openRenameInput();
+				return;
+			case "session-sort":
+				void this.cycleSort();
+				return;
+			case "session-info":
+				void this.openSessionInfo();
 				return;
 			default:
 				this.setStatus(`${action}: not implemented yet`);
@@ -1454,6 +1521,196 @@ export class LazyPanel implements Component, Focusable {
 	}
 
 	// -----------------------------------------------------------------------
+	// Session actions: delete (d) / rename (r) / sort (s) / info (i)
+	// -----------------------------------------------------------------------
+
+	/** Session row under the cursor, or undefined with a footer hint. */
+	private currentSessionRow(): SessionRow | undefined {
+		const row = this.sessions[this.state.cursor.sessions];
+		if (!row) this.setStatus("no session selected");
+		return row;
+	}
+
+	/** Title of a session as the pane shows it: its name, else the first-message preview. */
+	private sessionTitle(row: SessionRow): string {
+		return row.name ?? row.preview ?? "(empty session)";
+	}
+
+	/**
+	 * d: ask before deleting the session under the cursor. The session pi has
+	 * open is refused up front, like pi's /resume (no dialog, just the message).
+	 */
+	private confirmDeleteSession(): void {
+		const row = this.currentSessionRow();
+		if (!row) return;
+		if (!this.o.actions?.deleteSession) {
+			this.setStatus("delete: actions unavailable");
+			return;
+		}
+		// 和 pi 内置 /resume 一样：当前打开的会话直接拒绝，不弹确认框。
+		if (findSessionIndex([row], this.currentSessionFile) === 0) {
+			this.setStatus(CURRENT_SESSION_DELETE_STATUS);
+			return;
+		}
+		this.deleteTarget = row;
+		this.state.mode = "confirm";
+		this.selectDialog.open(
+			confirmDialogSpec({
+				title: DELETE_SESSION_TITLE,
+				subject: this.sessionTitle(row),
+				onConfirm: () => void this.deleteSession(),
+				onCancel: () => this.closeConfirm(),
+			}),
+		);
+		this.o.requestRender();
+	}
+
+	private closeConfirm(): void {
+		this.state.mode = this.baseMode();
+		this.selectDialog.close();
+		this.deleteTarget = undefined;
+		this.o.requestRender();
+	}
+
+	/** Yes in the confirmation: remove the file, then re-list with the cursor clamped (TREE / CONTENT follow). */
+	private async deleteSession(): Promise<void> {
+		const row = this.deleteTarget;
+		this.closeConfirm();
+		const remove = this.o.actions?.deleteSession;
+		if (!row || !remove) return;
+		this.setStatus("deleting…");
+		let method: DeleteMethod;
+		try {
+			method = await remove(row.file);
+			if (this.disposed) return;
+		} catch (err) {
+			this.setStatus(`delete failed: ${(err as Error).message}`);
+			return;
+		}
+		this.state.selectedSessionFiles.delete(row.file);
+		// 删掉的行没了，光标夹回范围内；光标下换了会话就重新加载右边。
+		if (await this.listSessions(undefined)) this.setStatus(method === "trash" ? "session moved to trash" : "session deleted");
+		await this.followSessionsCursor();
+	}
+
+	/** r: open the Rename prompt pre-filled with the session's current name. */
+	private openRenameInput(): void {
+		const row = this.currentSessionRow();
+		if (!row) return;
+		if (!this.o.actions?.renameSession) {
+			this.setStatus("rename: actions unavailable");
+			return;
+		}
+		this.renameTarget = row;
+		this.state.mode = "rename";
+		// 弹窗标题右侧显示是给哪个会话改名（首条消息预览，名字本身在输入框里）。
+		this.inputDialog.open({
+			title: RENAME_DIALOG_TITLE,
+			value: row.name ?? "",
+			subject: row.preview || row.id,
+			hints: RENAME_DIALOG_HINTS,
+			onSubmit: (v) => void this.submitRename(v),
+			onCancel: () => this.closeRenameInput(),
+		});
+		this.inputDialog.focused = this._focused;
+		this.o.requestRender();
+	}
+
+	/** Enter in the Rename prompt: persist, then re-list so the row shows the new name (cursor stays on it). */
+	private async submitRename(value: string): Promise<void> {
+		const row = this.renameTarget;
+		this.closeRenameInput();
+		const rename = this.o.actions?.renameSession;
+		if (!row || !rename) return;
+		const name = value.trim();
+		try {
+			await rename(row.file, name);
+			if (this.disposed) return;
+		} catch (err) {
+			this.setStatus(`rename failed: ${(err as Error).message}`);
+			return;
+		}
+		if (await this.listSessions(row.file)) this.setStatus(name ? `renamed: ${name}` : "name removed");
+		// 改名会在会话文件里追加一条 session_info：TREE 在 all 过滤下要能看到它，光标留在原节点。
+		if (row.file === this.loadedSessionFile) {
+			const entryId = this.visibleTree[this.state.cursor.tree]?.entryId;
+			if (entryId) await this.reloadTree(row.file, entryId);
+		} else {
+			await this.followSessionsCursor();
+		}
+	}
+
+	private closeRenameInput(): void {
+		this.state.mode = this.baseMode();
+		this.inputDialog.close();
+		this.inputDialog.focused = false;
+		this.renameTarget = undefined;
+		this.o.requestRender();
+	}
+
+	/** s: the next sort order (recent → created → title → threaded → …); the cursor follows its session. */
+	private async cycleSort(): Promise<void> {
+		const i = SESSION_SORT_MODES.indexOf(this.state.sort);
+		const next = SESSION_SORT_MODES[(i + 1) % SESSION_SORT_MODES.length]!;
+		this.state.sort = next;
+		const keep = this.sessions[this.state.cursor.sessions]?.file;
+		if (await this.listSessions(keep)) this.setStatus(`sort: ${next}`);
+		await this.followSessionsCursor();
+	}
+
+	/** i: load what /session shows for the session under the cursor and open the info box. */
+	private async openSessionInfo(): Promise<void> {
+		const row = this.currentSessionRow();
+		if (!row) return;
+		const load = this.o.data.loadSessionInfo;
+		if (!load) {
+			this.setStatus("session info: unavailable");
+			return;
+		}
+		let info: SessionInfo | undefined;
+		try {
+			info = await load(row.file);
+		} catch (err) {
+			this.setStatus(`session info failed: ${(err as Error).message}`);
+			return;
+		}
+		if (this.disposed) return;
+		if (!info) {
+			this.setStatus(`session info failed: cannot read ${row.file}`);
+			return;
+		}
+		this.state.mode = "info";
+		this.infoDialog.open({
+			info,
+			onCopy: (text) => void this.copySessionInfo(text),
+			onClose: () => this.closeSessionInfo(),
+		});
+		this.o.requestRender();
+	}
+
+	/** y in the info box: the whole text goes to the clipboard, the box stays open. */
+	private async copySessionInfo(text: string): Promise<void> {
+		const copy = this.o.actions?.copyText;
+		if (!copy) {
+			this.setStatus("copy: actions unavailable");
+			return;
+		}
+		try {
+			await copy(text);
+			if (this.disposed) return;
+			this.setStatus("copied session info to clipboard");
+		} catch (err) {
+			this.setStatus(`copy failed: ${(err as Error).message}`);
+		}
+	}
+
+	private closeSessionInfo(): void {
+		this.state.mode = this.baseMode();
+		this.infoDialog.close();
+		this.o.requestRender();
+	}
+
+	// -----------------------------------------------------------------------
 	// Enter: resume a session / restore to a tree node
 	// -----------------------------------------------------------------------
 
@@ -1715,6 +1972,9 @@ export class LazyPanel implements Component, Focusable {
 		if (this.selectDialog.isOpen) {
 			lines = this.selectDialog.overlay(lines, width);
 		}
+		if (this.infoDialog.isOpen) {
+			lines = this.infoDialog.overlay(lines, width);
+		}
 		if (this.state.helpOpen) {
 			lines = overlayHelp(lines, { keymap: this.keymap, focus: this.state.focus, scroll: this.state.helpScroll, theme }, width);
 		}
@@ -1734,9 +1994,11 @@ export class LazyPanel implements Component, Focusable {
 			? this.inputDialog
 			: this.selectDialog.isOpen
 				? this.selectDialog
-				: this.treeDialog.isOpen
-					? this.treeDialog
-					: undefined;
+				: this.infoDialog.isOpen
+					? this.infoDialog
+					: this.treeDialog.isOpen
+						? this.treeDialog
+						: undefined;
 		if (dialog) {
 			return renderFooter({ ...footer, hints: dialog.hints, ...(status ? { status } : {}) }, width)[0]!;
 		}

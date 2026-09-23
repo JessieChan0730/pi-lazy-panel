@@ -37,7 +37,12 @@ export interface SelectDialogSpec {
 	subject?: string;
 	/** Footer hints while this menu is open. */
 	hints: KeyHint[];
-	/** Enter: the index of the highlighted entry. */
+	/**
+	 * Keys (pi-tui key ids, e.g. "y") that pick an entry directly, without
+	 * moving the cursor first — a confirmation's `y` / `n`.
+	 */
+	shortcuts?: Record<string, number>;
+	/** Enter (or a shortcut): the index of the picked entry. */
 	onSelect: (index: number) => void;
 	onCancel: () => void;
 }
@@ -91,8 +96,22 @@ export class SelectDialog {
 			if (spec.items.length) spec.onSelect(this.index);
 			return;
 		}
-		if (matchesKeyId(data, "j") || matchesKeyId(data, "down")) this.move(1);
-		else if (matchesKeyId(data, "k") || matchesKeyId(data, "up")) this.move(-1);
+		if (matchesKeyId(data, "j") || matchesKeyId(data, "down")) {
+			this.move(1);
+			return;
+		}
+		if (matchesKeyId(data, "k") || matchesKeyId(data, "up")) {
+			this.move(-1);
+			return;
+		}
+		// 快捷选择（确认框的 y / n）：直接选中对应的项，不用先移动光标。
+		for (const [key, index] of Object.entries(spec.shortcuts ?? {})) {
+			if (index >= 0 && index < spec.items.length && matchesKeyId(data, key)) {
+				this.index = index;
+				spec.onSelect(index);
+				return;
+			}
+		}
 		// 其他按键一律吞掉，不能漏到下面的面板去。
 	}
 

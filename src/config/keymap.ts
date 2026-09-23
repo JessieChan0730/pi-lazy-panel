@@ -120,7 +120,7 @@ export const ACTION_DESCRIPTIONS: Record<ActionId, string> = {
 	"session-share": "Share as private GitHub Gist",
 	"session-clone": "Clone active branch to a new session",
 	"session-copy-last-reply": "Copy last assistant reply",
-	"session-sort": "Cycle sort: threaded / recent / fuzzy",
+	"session-sort": "Cycle sort: recent / created / title / threaded",
 	"session-new": "New session",
 	"session-info": "Session info",
 	"tree-restore": "Restore conversation to this node (asks about a branch summary)",
@@ -196,7 +196,19 @@ export const HELP_GROUPS: HelpGroup[] = [
 
 /** Actions shown as footer hints per pane, in display order (first few that fit). */
 export const FOOTER_HINTS: Record<PaneId, ActionId[]> = {
-	sessions: ["search", "help", "focus-next", "scope-current", "scope-all", "session-resume", "session-delete", "session-rename", "quit"],
+	sessions: [
+		"search",
+		"help",
+		"focus-next",
+		"scope-current",
+		"scope-all",
+		"session-resume",
+		"session-delete",
+		"session-rename",
+		"session-sort",
+		"session-info",
+		"quit",
+	],
 	tree: ["search", "help", "focus-next", "tree-restore", "tree-fold", "tree-open", "tree-label", "tree-copy", "quit"],
 	content: ["search", "help", "focus-next", "go-top", "go-bottom", "quit"],
 };

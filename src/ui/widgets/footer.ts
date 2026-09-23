@@ -48,6 +48,8 @@ const SHORT: Partial<Record<ActionId, string>> = {
 	"session-resume": "Resume",
 	"session-delete": "Delete",
 	"session-rename": "Rename",
+	"session-sort": "Sort",
+	"session-info": "Info",
 	"tree-restore": "Restore",
 	"tree-open": "Tree",
 	"tree-fold": "Fold",

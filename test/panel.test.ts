@@ -11,13 +11,16 @@ import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { DEFAULT_KEYMAP } from "../src/config/keymap.ts";
 import { mergeKeymap } from "../src/config/config.ts";
 import { SUMMARIZING_STATUS } from "../src/constants.ts";
-import type { ContentBlock, RestoreOptions, SessionRow, TreeFilter, TreeRow } from "../src/types.ts";
+import type { ContentBlock, RestoreOptions, SessionInfo, SessionRow, SessionSortMode, TreeFilter, TreeRow } from "../src/types.ts";
 import { type ActionSource, type DataSource, LazyPanel } from "../src/ui/app.ts";
+import { DELETE_SESSION_TITLE } from "../src/ui/widgets/confirm-dialog.ts";
 import { InputDialog } from "../src/ui/widgets/input-dialog.ts";
 import { LABEL_DIALOG_TITLE } from "../src/ui/widgets/label-dialog.ts";
+import { RENAME_DIALOG_TITLE } from "../src/ui/widgets/rename-dialog.ts";
 import { CUSTOM_PROMPT_TITLE, SUMMARY_MENU, SUMMARY_MENU_TITLE } from "../src/ui/widgets/restore-dialog.ts";
 import { SEARCH_LABEL } from "../src/ui/widgets/search-bar.ts";
 import { SelectDialog } from "../src/ui/widgets/select-dialog.ts";
+import { SESSION_INFO_TITLE, sessionInfoText } from "../src/ui/widgets/session-info-dialog.ts";
 
 /** Styling is irrelevant here; return text unchanged so assertions stay simple. */
 const fakeTheme = {
@@ -1792,5 +1795,446 @@ test("each pane keeps its own query: switching panes shows the other pane's hint
 	h.panel.handleInput("\x1b");
 	assert.equal(h.panel.state.search.sessions, undefined);
 	assert.equal(h.panel.state.search.tree?.query, "south");
+	h.panel.dispose();
+});
+
+// ---------------------------------------------------------------------------
+// SESSIONS: d delete / r rename / s sort / i info
+// ---------------------------------------------------------------------------
+
+/**
+ * Panel over a mutable list of 3 named sessions with a recording ActionSource.
+ * `listSessions` honours the sort it is asked for (threaded lists the rows
+ * backwards) so the cursor-follows-its-session behaviour can be observed.
+ */
+function makeSessionActionPanel(opts: { actions?: Partial<ActionSource> | null; currentSessionFile?: string; info?: boolean } = {}) {
+	const sessions: SessionRow[] = [
+		{ ...row(1, "/a"), name: "alpha", preview: "first words" },
+		{ ...row(2, "/a"), name: "beta", preview: "second words" },
+		{ ...row(3, "/a"), preview: "third words" },
+	];
+	const lists: SessionSortMode[] = [];
+	const treeCalls: string[] = [];
+	const deletes: string[] = [];
+	const renames: Array<{ file: string; name: string }> = [];
+	const copies: string[] = [];
+	const infoCalls: string[] = [];
+	const data: DataSource = {
+		listSessions: async (_scope, sort) => {
+			lists.push(sort);
+			return sort === "threaded" ? [...sessions].reverse() : [...sessions];
+		},
+		loadTree: async (file) => {
+			treeCalls.push(file);
+			return [treeRow(0), treeRow(1, true, { isLeaf: true })];
+		},
+		loadContent: async () => [block(0), block(1)],
+		...(opts.info === false
+			? {}
+			: {
+					loadSessionInfo: async (file: string): Promise<SessionInfo | undefined> => {
+						infoCalls.push(file);
+						const s = sessions.find((r) => r.file === file);
+						if (!s) return undefined;
+						return {
+							...(s.name ? { name: s.name } : {}),
+							model: "claude-opus-4",
+							messages: 12,
+							tokens: 84_213,
+							cost: 1.4211,
+							createdAt: new Date(2026, 8, 20, 22, 18).getTime(),
+							updatedAt: new Date(2026, 8, 20, 22, 21).getTime(),
+							path: file,
+							id: s.id,
+						};
+					},
+				}),
+	};
+	const source: ActionSource = {
+		copyNodeText: async () => true,
+		setNodeLabel: async () => {},
+		resumeSession: async () => "switched",
+		restoreNode: async () => "restored",
+		deleteSession: async (file) => {
+			deletes.push(file);
+			const i = sessions.findIndex((r) => r.file === file);
+			if (i >= 0) sessions.splice(i, 1);
+			return "trash";
+		},
+		renameSession: async (file, name) => {
+			renames.push({ file, name });
+			const s = sessions.find((r) => r.file === file);
+			if (!s) return;
+			if (name) s.name = name;
+			else delete s.name;
+		},
+		copyText: async (text) => void copies.push(text),
+		...(opts.actions ?? {}),
+	};
+	const panel = new LazyPanel({
+		theme: fakeTheme,
+		data,
+		...(opts.actions === null ? {} : { actions: source }),
+		getHeight: () => 24,
+		requestRender: () => {},
+		onClose: () => {},
+		...(opts.currentSessionFile ? { currentSessionFile: opts.currentSessionFile } : {}),
+	});
+	return {
+		panel,
+		sessions,
+		lists,
+		treeCalls,
+		deletes,
+		renames,
+		copies,
+		infoCalls,
+		text: (width = 120) => panel.render(width).map((l) => stripTerminalSequences(l)),
+		footer: () => stripTerminalSequences(panel.render(120).at(-1)!),
+		// 200 列：左栏 50 列，标题右侧放得下 "2/3 · Current · created"
+		header: () => stripTerminalSequences(panel.render(200).find((l) => l.includes("[1] SESSIONS"))!),
+	};
+}
+
+/** The centered dialog whose top border carries `title`: its row plus the lines of the box (up to its own bottom-left corner). */
+function dialogAt(lines: string[], title: string): { top: number; title: string; body: string[] } | undefined {
+	const top = lines.findIndex((l) => l.includes(`┌─ ${title} `));
+	if (top < 0) return undefined;
+	// 弹窗画在面板上面，同一行的其他位置也可能有面板自己的 └：只看弹窗左边框那一列。
+	const col = lines[top]!.indexOf(`┌─ ${title} `);
+	const body: string[] = [];
+	for (let i = top + 1; i < lines.length && lines[i]!.charAt(col) !== "└"; i++) body.push(lines[i]!);
+	return { top, title: lines[top]!, body };
+}
+
+test("d asks Delete session? in a centered Yes / No box starting on No; n / Esc / Enter-on-No cancel without deleting", async () => {
+	const h = makeSessionActionPanel();
+	await h.panel.load();
+	h.panel.handleInput("j");
+	await settle();
+	assert.equal(h.panel.state.cursor.sessions, 1);
+
+	h.panel.handleInput("d");
+	assert.equal(h.panel.state.mode, "confirm");
+	const lines = h.text();
+	const dlg = dialogAt(lines, DELETE_SESSION_TITLE);
+	assert.ok(dlg, "the confirmation should be drawn");
+	assert.ok(dlg.top > 2 && dlg.top < lines.length - 6, `dialog row ${dlg.top} of ${lines.length}`);
+	assert.ok(dlg.title.includes("beta"), dlg.title);
+	assert.equal(dlg.body.length, 2);
+	assert.ok(dlg.body[0]!.includes("  Yes") && !dlg.body[0]!.includes("›"), dlg.body[0]);
+	assert.ok(dlg.body[1]!.includes("› No"), dlg.body[1]);
+	assert.ok(h.footer().includes("CONFIRM") && h.footer().includes("y/n choose") && h.footer().includes("Esc cancel"), h.footer());
+	for (const l of h.panel.render(120)) assert.equal(visibleWidth(l), 120);
+
+	// n cancels; the row is still there and the keys go back to the pane
+	h.panel.handleInput("n");
+	await flush();
+	assert.equal(h.panel.state.mode, "normal");
+	assert.equal(dialogAt(h.text(), DELETE_SESSION_TITLE), undefined);
+	assert.deepEqual(h.deletes, []);
+	assert.equal(h.sessions.length, 3);
+
+	// Esc cancels too
+	h.panel.handleInput("d");
+	h.panel.handleInput("\x1b");
+	assert.equal(h.panel.state.mode, "normal");
+	assert.deepEqual(h.deletes, []);
+
+	// Enter on the default (No) is a cancel: a stray Enter never deletes
+	h.panel.handleInput("d");
+	h.panel.handleInput("\r");
+	await flush();
+	assert.equal(h.panel.state.mode, "normal");
+	assert.deepEqual(h.deletes, []);
+	// other keys inside the box neither move the pane cursor nor leak to the keymap
+	h.panel.handleInput("d");
+	h.panel.handleInput("q");
+	h.panel.handleInput("r");
+	assert.equal(h.panel.state.mode, "confirm");
+	assert.equal(h.panel.state.cursor.sessions, 1);
+	h.panel.handleInput("\x1b");
+	h.panel.dispose();
+});
+
+test("y (or k + Enter) confirms: the file is deleted, the list reloads, the cursor is clamped and TREE follows the new row", async () => {
+	const h = makeSessionActionPanel();
+	await h.panel.load();
+	h.panel.handleInput("G");
+	await settle();
+	assert.equal(h.panel.state.cursor.sessions, 2);
+	assert.deepEqual(h.treeCalls, ["/tmp/s1.jsonl", "/tmp/s3.jsonl"]);
+
+	// y on the last row: deleted, cursor moves up onto beta, TREE / CONTENT reload for it
+	h.panel.handleInput("d");
+	h.panel.handleInput("y");
+	await flush();
+	await flush();
+	assert.deepEqual(h.deletes, ["/tmp/s3.jsonl"]);
+	assert.equal(h.panel.state.mode, "normal");
+	assert.equal(h.panel.state.cursor.sessions, 1);
+	assert.equal(h.sessions.length, 2);
+	assert.ok(h.footer().includes("session moved to trash"), h.footer());
+	assert.ok(h.header().includes("2/2"), h.header());
+	assert.deepEqual(h.treeCalls.at(-1), "/tmp/s2.jsonl");
+	assert.ok(!h.text().some((l) => l.includes("third words")), "the deleted row is gone");
+
+	// k + Enter picks Yes as well; deleting the first row keeps the cursor index and reloads the row that slid under it
+	h.panel.handleInput("g");
+	h.panel.handleInput("g");
+	await settle();
+	const before = h.treeCalls.length;
+	h.panel.handleInput("d");
+	h.panel.handleInput("k");
+	h.panel.handleInput("\r");
+	await flush();
+	await flush();
+	assert.deepEqual(h.deletes, ["/tmp/s3.jsonl", "/tmp/s1.jsonl"]);
+	assert.equal(h.panel.state.cursor.sessions, 0);
+	assert.equal(h.treeCalls.length, before + 1);
+	assert.equal(h.treeCalls.at(-1), "/tmp/s2.jsonl");
+	assert.ok(h.header().includes("1/1"), h.header());
+
+	// an unlink fallback and a failure are worded differently, the failure keeps the row
+	const failing = makeSessionActionPanel({
+		actions: {
+			deleteSession: async (file) => {
+				if (file === "/tmp/s1.jsonl") throw new Error("EACCES: permission denied");
+				return "unlink";
+			},
+		},
+	});
+	await failing.panel.load();
+	failing.panel.handleInput("d");
+	failing.panel.handleInput("y");
+	await flush();
+	assert.ok(failing.footer().includes("delete failed: EACCES"), failing.footer());
+	assert.equal(failing.sessions.length, 3);
+	failing.panel.handleInput("j");
+	await settle();
+	failing.panel.handleInput("d");
+	failing.panel.handleInput("y");
+	await flush();
+	await flush();
+	assert.ok(failing.footer().includes("session deleted"), failing.footer());
+	h.panel.dispose();
+	failing.panel.dispose();
+});
+
+test("d on the session pi has open is refused up front (pi's wording), and a panel without actions says so", async () => {
+	const h = makeSessionActionPanel({ currentSessionFile: "/tmp/s2.jsonl" });
+	await h.panel.load();
+	assert.equal(h.panel.state.cursor.sessions, 1, "opens on the current session");
+	h.panel.handleInput("d");
+	assert.equal(h.panel.state.mode, "normal");
+	assert.equal(dialogAt(h.text(), DELETE_SESSION_TITLE), undefined, "no confirmation for the current session");
+	assert.ok(h.footer().includes("Cannot delete the currently active session"), h.footer());
+	assert.deepEqual(h.deletes, []);
+	// another row still asks
+	h.panel.handleInput("j");
+	await settle();
+	h.panel.handleInput("d");
+	assert.equal(h.panel.state.mode, "confirm");
+	h.panel.handleInput("\x1b");
+	h.panel.dispose();
+
+	const bare = makeSessionActionPanel({ actions: null });
+	await bare.panel.load();
+	for (const [key, what] of [
+		["d", "delete"],
+		["r", "rename"],
+	] as const) {
+		bare.panel.handleInput(key);
+		assert.equal(bare.panel.state.mode, "normal");
+		assert.ok(bare.footer().includes(`${what}: actions unavailable`), bare.footer());
+	}
+	bare.panel.dispose();
+});
+
+test("r opens a centered Rename box pre-filled with the name; Enter saves and the row shows it, empty removes, Esc cancels", async () => {
+	const h = makeSessionActionPanel();
+	await h.panel.load();
+	h.panel.handleInput("j");
+	await settle();
+
+	h.panel.handleInput("r");
+	assert.equal(h.panel.state.mode, "rename");
+	const lines = h.text();
+	const dlg = dialogAt(lines, RENAME_DIALOG_TITLE);
+	assert.ok(dlg, "the Rename dialog should be drawn");
+	assert.ok(dlg.top > 2 && dlg.top < lines.length - 6, `dialog row ${dlg.top} of ${lines.length}`);
+	assert.ok(dlg.title.includes("second words"), dlg.title);
+	assert.ok(dlg.body[0]!.includes("beta"), dlg.body[0]);
+	assert.ok(h.footer().includes("RENAME") && h.footer().includes("Enter save") && h.footer().includes("empty removes"), h.footer());
+
+	// keys go to the input (the cursor starts at the end); Enter persists and the list reloads with the cursor still on the row
+	for (const ch of " two") h.panel.handleInput(ch);
+	assert.equal(h.panel.state.cursor.sessions, 1);
+	h.panel.handleInput("\r");
+	await flush();
+	await flush();
+	assert.equal(h.panel.state.mode, "normal");
+	assert.equal(dialogAt(h.text(), RENAME_DIALOG_TITLE), undefined);
+	assert.deepEqual(h.renames, [{ file: "/tmp/s2.jsonl", name: "beta two" }]);
+	assert.equal(h.panel.state.cursor.sessions, 1);
+	assert.ok(h.text().some((l) => l.includes("› beta two")), "the row shows the new name");
+	assert.ok(h.footer().includes("renamed: beta two"), h.footer());
+	// the tree is re-read (a session_info entry was appended) but not reloaded from scratch
+	assert.deepEqual(h.treeCalls, ["/tmp/s1.jsonl", "/tmp/s2.jsonl", "/tmp/s2.jsonl"]);
+
+	// Esc leaves the name alone
+	h.panel.handleInput("r");
+	h.panel.handleInput("x");
+	h.panel.handleInput("\x1b");
+	assert.equal(h.panel.state.mode, "normal");
+	assert.equal(h.renames.length, 1);
+
+	// clearing the field removes the name: the row falls back to its preview
+	h.panel.handleInput("r");
+	for (let i = 0; i < "beta two".length; i++) h.panel.handleInput("\x7f");
+	h.panel.handleInput("\r");
+	await flush();
+	await flush();
+	assert.deepEqual(h.renames.at(-1), { file: "/tmp/s2.jsonl", name: "" });
+	assert.ok(h.text().some((l) => l.includes("› second words")), "the row shows the preview again");
+	assert.ok(h.footer().includes("name removed"), h.footer());
+
+	// a row without a name starts empty; a failure lands in the footer
+	const failing = makeSessionActionPanel({
+		actions: {
+			renameSession: async () => {
+				throw new Error("session file not found: /tmp/s3.jsonl");
+			},
+		},
+	});
+	await failing.panel.load();
+	failing.panel.handleInput("G");
+	await settle();
+	failing.panel.handleInput("r");
+	assert.ok(!dialogAt(failing.text(), RENAME_DIALOG_TITLE)!.body[0]!.includes("third"), "no name to pre-fill");
+	failing.panel.handleInput("z");
+	failing.panel.handleInput("\r");
+	await flush();
+	assert.ok(failing.footer().includes("rename failed: session file not found"), failing.footer());
+	h.panel.dispose();
+	failing.panel.dispose();
+});
+
+test("s cycles the sort recent → created → title → threaded → recent; the list is re-fetched and the cursor follows its session", async () => {
+	const h = makeSessionActionPanel();
+	await h.panel.load();
+	assert.equal(h.panel.state.sort, "recent");
+	h.panel.handleInput("j");
+	await settle();
+	assert.equal(h.panel.state.cursor.sessions, 1);
+	const treeCalls = h.treeCalls.length;
+
+	h.panel.handleInput("s");
+	await flush();
+	assert.equal(h.panel.state.sort, "created");
+	assert.ok(h.footer().includes("sort: created"), h.footer());
+	assert.ok(h.header().includes("created"), h.header());
+	assert.equal(h.panel.state.cursor.sessions, 1);
+	h.panel.handleInput("s");
+	await flush();
+	assert.equal(h.panel.state.sort, "title");
+
+	// threaded lists the rows backwards: beta is still the middle row, so the cursor stays on it
+	h.panel.handleInput("s");
+	await flush();
+	assert.equal(h.panel.state.sort, "threaded");
+	assert.deepEqual(h.lists, ["recent", "created", "title", "threaded"]);
+	assert.equal(h.panel.state.cursor.sessions, 1);
+	h.panel.handleInput("k");
+	await settle();
+	assert.ok(h.text().some((l) => l.includes("› third words")), "threaded order puts the third session first");
+	h.panel.handleInput("s");
+	await flush();
+	assert.equal(h.panel.state.sort, "recent");
+	// the cursor followed s3 to the bottom; the tree was not reloaded by the re-sorts themselves
+	assert.equal(h.panel.state.cursor.sessions, 2);
+	assert.equal(h.treeCalls.length, treeCalls + 1, "only the k move loaded a tree");
+	h.panel.dispose();
+});
+
+test("i opens the Session Info box (what /session shows); y copies its text, Esc closes; a missing loader says so", async () => {
+	const h = makeSessionActionPanel();
+	await h.panel.load();
+	h.panel.handleInput("i");
+	await flush();
+	assert.equal(h.panel.state.mode, "info");
+	assert.deepEqual(h.infoCalls, ["/tmp/s1.jsonl"]);
+	const lines = h.text();
+	const dlg = dialogAt(lines, SESSION_INFO_TITLE);
+	assert.ok(dlg, "the info box should be drawn");
+	assert.ok(dlg.title.includes("alpha"), dlg.title);
+	const body = dlg.body.join("\n");
+	for (const expected of ["Name      alpha", "Model     claude-opus-4", "Messages  12", "Tokens    84.2k", "Cost      $1.42", "Created   Sep 20 22:18", "Updated   Sep 20 22:21", "Path      /tmp/s1.jsonl", "ID        id-1"]) {
+		assert.ok(body.includes(expected), `${expected}\n${body}`);
+	}
+	assert.ok(h.footer().includes("INFO") && h.footer().includes("y copy") && h.footer().includes("Esc close"), h.footer());
+	for (const l of h.panel.render(120)) assert.equal(visibleWidth(l), 120);
+
+	// y copies the whole text (full path) and keeps the box open; other keys are swallowed
+	h.panel.handleInput("y");
+	await flush();
+	assert.equal(h.copies.length, 1);
+	assert.equal(h.copies[0], sessionInfoText({ name: "alpha", model: "claude-opus-4", messages: 12, tokens: 84_213, cost: 1.4211, createdAt: new Date(2026, 8, 20, 22, 18).getTime(), updatedAt: new Date(2026, 8, 20, 22, 21).getTime(), path: "/tmp/s1.jsonl", id: "id-1" }));
+	assert.ok(h.copies[0]!.startsWith("Name      alpha\nModel     claude-opus-4\n"), h.copies[0]);
+	assert.ok(h.footer().includes("copied session info"), h.footer());
+	h.panel.handleInput("j");
+	h.panel.handleInput("d");
+	assert.equal(h.panel.state.mode, "info");
+	assert.equal(h.panel.state.cursor.sessions, 0);
+	h.panel.handleInput("\x1b");
+	assert.equal(h.panel.state.mode, "normal");
+	assert.equal(dialogAt(h.text(), SESSION_INFO_TITLE), undefined);
+
+	// a session without a name shows (none) and the title bar carries no subject; q closes too
+	h.panel.handleInput("G");
+	await settle();
+	h.panel.handleInput("i");
+	await flush();
+	const noName = dialogAt(h.text(), SESSION_INFO_TITLE)!;
+	assert.ok(noName.body[0]!.includes("(none)"), noName.body[0]);
+	h.panel.handleInput("q");
+	assert.equal(h.panel.state.mode, "normal");
+
+	// no loader injected / nothing readable: footer only
+	const bare = makeSessionActionPanel({ info: false });
+	await bare.panel.load();
+	bare.panel.handleInput("i");
+	await flush();
+	assert.equal(bare.panel.state.mode, "normal");
+	assert.ok(bare.footer().includes("session info: unavailable"), bare.footer());
+	h.panel.dispose();
+	bare.panel.dispose();
+});
+
+test("Session Info wraps a value too wide for the box (the path) onto continuation lines instead of cutting it", async () => {
+	const longPath = "/tmp/sessions/--home-cheng-code-myself-PiLazyPanel--/2026-09-20T14-18-00-000Z_0199abcd-ef01-2345-6789-abcdefabcdef.jsonl";
+	const h = makeSessionActionPanel({
+		actions: {},
+	});
+	// swap the loader for one whose path is far wider than the 60-column dialog
+	h.sessions[0]!.file = longPath;
+	await h.panel.load();
+	h.panel.handleInput("i");
+	await flush();
+	const dlg = dialogAt(h.text(160), SESSION_INFO_TITLE)!;
+	// 只取弹窗自己那一段（左边的面板边框也是 │）：按标题行的 ┌ … ┐ 定位列
+	const col = dlg.title.indexOf("┌");
+	const end = dlg.title.indexOf("┐", col);
+	const body = dlg.body.map((l) => l.slice(col + 1, end));
+	// the whole path appears once the pieces are joined, and no piece carries an ellipsis
+	const joined = body.map((l) => l.trim()).join("");
+	assert.ok(joined.includes(longPath.replace(/\s/g, "")), joined);
+	assert.ok(!body.some((l) => l.includes("…")), body.join("\n"));
+	// continuation lines are indented under the value column (no label)
+	const pathRow = body.findIndex((l) => l.includes("Path"));
+	assert.ok(pathRow >= 0);
+	assert.ok(body[pathRow + 1]!.startsWith(" ".repeat(11)), JSON.stringify(body[pathRow + 1]));
+	assert.ok(body[pathRow + 1]!.includes("ID") === false, "the continuation comes before the ID row");
+	for (const l of h.panel.render(160)) assert.equal(visibleWidth(l), 160);
 	h.panel.dispose();
 });

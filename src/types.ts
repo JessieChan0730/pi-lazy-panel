@@ -4,7 +4,7 @@
  * Keep this file free of runtime code — types only.
  */
 
-import type { KEY_SCOPES, PANE_IDS } from "./constants.ts";
+import type { KEY_SCOPES, PANE_IDS, SESSION_SORT_MODES } from "./constants.ts";
 
 // ---------------------------------------------------------------------------
 // Panes / focus
@@ -16,15 +16,16 @@ export type PaneId = (typeof PANE_IDS)[number];
 /** Which set of sessions the sessions pane lists. */
 export type ListScope = "current-folder" | "all";
 
-/** Sort order of the sessions pane (mirrors pi's /resume picker). */
-export type SessionSortMode = "threaded" | "recent" | "fuzzy";
+/** Sort order of the sessions pane (mirrors pi's /resume picker; `s` cycles them in `SESSION_SORT_MODES` order). */
+export type SessionSortMode = (typeof SESSION_SORT_MODES)[number];
 
 /**
  * Input mode of the panel, shown in the footer (vim-like). `restore` = the
  * summary menu / custom prompt of TREE Enter is open, `tree` = the full tree
- * dialog (`a` in the tree pane) is open.
+ * dialog (`a` in the tree pane) is open, `confirm` / `rename` / `info` = the
+ * delete confirmation, the Rename prompt or the Session Info dialog is open.
  */
-export type PanelMode = "normal" | "search" | "label" | "restore" | "tree" | "visual" | "preview";
+export type PanelMode = "normal" | "search" | "label" | "restore" | "tree" | "confirm" | "rename" | "info" | "visual" | "preview";
 
 /** A `key description` pair shown as a hint in the footer or a prompt bar. */
 export type KeyHint = [key: string, text: string];
@@ -35,6 +36,13 @@ export type KeyHint = [key: string, text: string];
  * chosen node, `unchanged` = pi was already there. Failures throw instead.
  */
 export type EnterOutcome = "switched" | "restored" | "unchanged";
+
+/**
+ * How a session file was removed (SESSIONS `d`, same as pi's /resume):
+ * `trash` = moved to the system trash by the `trash` CLI, `unlink` = deleted
+ * for good because `trash` was unavailable or failed.
+ */
+export type DeleteMethod = "trash" | "unlink";
 
 /**
  * How TREE Enter leaves the branch it abandons — the three choices of pi's
