@@ -6,25 +6,36 @@
  */
 
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { basename, join } from "node:path";
 import { test } from "node:test";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import {
 	cloneSession,
+	type CommandSpec,
 	CURRENT_SESSION_DELETE_ERROR,
+	defaultExportName,
 	deleteSession,
+	exportSession,
+	exportTarget,
 	type ForkContext,
 	forkSession,
+	GH_NOT_INSTALLED,
+	GH_NOT_LOGGED_IN,
+	type ImportContext,
+	importSession,
 	type NewSessionContext,
 	newSession,
 	renameSession,
 	resumeSession,
+	shareSession,
+	shareViewerUrl,
 } from "../src/actions/session-actions.ts";
 import { type RestoreContext, restoreNode } from "../src/actions/tree-actions.ts";
 import { loadForkPoints, loadLastReply } from "../src/data/content.ts";
 import { isEffectiveLeaf } from "../src/data/tree.ts";
+import { expandHome, resolveUserPath, stripQuotes } from "../src/utils/paths.ts";
 
 type AnyMessage = Parameters<SessionManager["appendMessage"]>[0];
 
@@ -543,4 +554,210 @@ test("cloneSession: forks the active leaf with position 'at', switching first fo
 	assert.ok(emptyFile);
 	const bare = fakeCtx(empty); // its own manager, so isCurrentSession is true and we read its (null) leaf
 	await assert.rejects(cloneSession(bare.ctx, emptyFile), /nothing to clone/);
+});
+
+/** Lines of a JSONL file, parsed. */
+function readJsonl(file: string): Array<Record<string, unknown>> {
+	return readFileSync(file, "utf-8")
+		.split("\n")
+		.filter((line) => line.trim())
+		.map((line) => JSON.parse(line) as Record<string, unknown>);
+}
+
+/**
+ * A stand-in program run as `node <script> <mode>`: the tests hand it to the
+ * actions as a CommandSpec, so no shell / .cmd wrapper is needed on Windows.
+ */
+function fakeProgram(dir: string, name: string, source: string, mode = ""): CommandSpec {
+	const script = join(dir, `${name}.cjs`);
+	writeFileSync(script, source);
+	return { command: process.execPath, args: mode ? [script, mode] : [script, "ok"] };
+}
+
+/** Fake `pi --export <file> <out>`: writes the arguments into <out>; mode "fail" exits like pi does on an error. */
+const FAKE_PI = `const [mode, flag, file, out] = process.argv.slice(2);
+if (mode === "fail") { console.error("Error: File not found: " + file); process.exit(1); }
+require("node:fs").writeFileSync(out, "<html>" + JSON.stringify([flag, file]) + "</html>");
+console.log("Exported to: " + out);
+`;
+
+/** Fake gh: mode "logged-out" fails auth, "gist-fail" fails creating the gist; otherwise prints a gist URL. */
+const FAKE_GH = `const [mode, ...args] = process.argv.slice(2);
+const fs = require("node:fs");
+if (args[0] === "auth") process.exit(mode === "logged-out" ? 1 : 0);
+if (args[0] === "gist") {
+	if (mode === "gist-fail") { console.error("HTTP 401: Bad credentials"); process.exit(1); }
+	const file = args[args.length - 1];
+	fs.writeFileSync(process.env.LAZY_PANEL_GH_LOG, JSON.stringify({ args, html: fs.readFileSync(file, "utf-8") }));
+	console.error("- Creating gist session.html");
+	console.log("https://gist.github.com/someone/abc123def");
+	process.exit(0);
+}
+process.exit(2);
+`;
+
+test("paths: quotes stripped, ~ expanded on every platform, relative paths resolved against the cwd", () => {
+	assert.equal(stripQuotes('"C:\\My Files\\a.jsonl"'), "C:\\My Files\\a.jsonl");
+	assert.equal(stripQuotes("'a b'"), "a b");
+	assert.equal(stripQuotes('"unbalanced'), '"unbalanced');
+	assert.equal(expandHome("~"), homedir());
+	assert.equal(expandHome("~/x/y.html"), join(homedir(), "x/y.html"));
+	assert.equal(expandHome("~\\x"), join(homedir(), "x"));
+	assert.equal(expandHome("a~/b"), "a~/b");
+	const cwd = join(tmpdir(), "work");
+	assert.equal(resolveUserPath(cwd, "  out/a.html "), join(cwd, "out", "a.html"));
+	assert.equal(resolveUserPath(cwd, "~/a.jsonl"), join(homedir(), "a.jsonl"));
+	assert.equal(resolveUserPath(cwd, "   "), "");
+});
+
+test("exportTarget: blank = pi's default name in the cwd, folders get the default name inside, existing files are flagged", (t) => {
+	const dir = tempDir(t);
+	const file = join(dir, "2026-09-23T10-00-00-000Z_abc.jsonl");
+	const html = `pi-session-${basename(file, ".jsonl")}.html`;
+	assert.equal(defaultExportName(file, "html"), html);
+	assert.equal(defaultExportName(file, "jsonl", new Date("2026-09-23T10:20:30.456Z")), "session-2026-09-23T10-20-30-456Z.jsonl");
+
+	assert.deepEqual(exportTarget(dir, file, "html", ""), { path: join(dir, html), exists: false });
+	// an existing folder, and a not-yet-existing one typed with a trailing separator
+	mkdirSync(join(dir, "out"));
+	assert.equal(exportTarget(dir, file, "html", "out").path, join(dir, "out", html));
+	assert.equal(exportTarget(dir, file, "html", "new-folder/").path, join(dir, "new-folder", html));
+	// a plain file path is taken as is; an existing one is flagged so the panel asks before overwriting
+	assert.deepEqual(exportTarget(dir, file, "jsonl", "copy.jsonl"), { path: join(dir, "copy.jsonl"), exists: false });
+	writeFileSync(join(dir, "copy.jsonl"), "x");
+	assert.equal(exportTarget(dir, file, "jsonl", '"copy.jsonl"').exists, true);
+});
+
+test("exportSession jsonl: a fresh header plus the active branch re-chained; the open session uses pi's in-memory leaf", async (t) => {
+	const dir = tempDir(t);
+	const s = makeSession(dir);
+	const other = makeSession(mkdtempSync(join(dir, "other-")));
+	const ctx = { sessionManager: SessionManager.open(s.file) };
+
+	// another session: read from its file (u1 → a1 → label)
+	const out = join(dir, "exports", "other.jsonl");
+	assert.equal(await exportSession(ctx, other.file, "jsonl", out), out);
+	const lines = readJsonl(out);
+	assert.equal(lines[0]?.type, "session");
+	assert.equal(lines[0]?.id, SessionManager.open(other.file).getSessionId());
+	assert.deepEqual(
+		lines.slice(1).map((l) => [l.id, l.parentId]),
+		[
+			[other.u1, null],
+			[other.a1, other.u1],
+			[other.labelId, other.a1],
+		],
+	);
+
+	// the open session: pi moved its leaf back to u1 in memory only; the export follows memory, not the file
+	const live = SessionManager.open(s.file);
+	live.branch(s.u1);
+	const liveOut = join(dir, "live.jsonl");
+	await exportSession({ sessionManager: live }, s.file, "jsonl", liveOut);
+	assert.deepEqual(
+		readJsonl(liveOut)
+			.slice(1)
+			.map((l) => l.id),
+		[s.u1],
+	);
+
+	await assert.rejects(exportSession(ctx, other.file, "jsonl", other.file), /session file itself/);
+	await assert.rejects(exportSession(ctx, join(dir, "missing.jsonl"), "jsonl", join(dir, "x.jsonl")), /session file not found/);
+});
+
+test("exportSession html: runs `pi --export <file> <out>` (creating the folder) and reports pi's error", async (t) => {
+	const dir = tempDir(t);
+	const s = makeSession(dir);
+	const ctx = { sessionManager: SessionManager.open(s.file) };
+	const out = join(dir, "nested", "folder", "s.html");
+	await exportSession(ctx, s.file, "html", out, { pi: fakeProgram(dir, "pi", FAKE_PI) });
+	assert.equal(readFileSync(out, "utf-8"), `<html>${JSON.stringify(["--export", s.file])}</html>`);
+
+	await assert.rejects(
+		exportSession(ctx, s.file, "html", join(dir, "y.html"), { pi: fakeProgram(dir, "pi-fail", FAKE_PI, "fail") }),
+		/^Error: File not found: /,
+	);
+	await assert.rejects(
+		exportSession(ctx, s.file, "html", join(dir, "z.html"), { pi: { command: "lazy-panel-no-such-pi", args: [] } }),
+		/cannot run pi --export/,
+	);
+});
+
+test("importSession: copies into the session folder (renaming on clashes) and switches to the copy", async (t) => {
+	const dir = tempDir(t);
+	const s = makeSession(dir);
+	const source = makeSession(mkdtempSync(join(dir, "elsewhere-")));
+	const fake = fakeCtx(SessionManager.open(s.file));
+	const ctx = { ...fake.ctx, cwd: dir } as unknown as ImportContext;
+
+	const dest = join(dir, basename(source.file));
+	assert.equal(await importSession(ctx, source.file), "switched");
+	assert.deepEqual(fake.switches, [{ file: dest, withSession: false }]);
+	assert.equal(readFileSync(dest, "utf-8"), readFileSync(source.file, "utf-8"));
+
+	// importing the same file again: pi's "-1" suffix instead of overwriting the first copy
+	await importSession(ctx, source.file);
+	const renamed = join(dir, `${basename(source.file, ".jsonl")}-1.jsonl`);
+	assert.equal(fake.switches[1]?.file, renamed);
+	assert.ok(existsSync(renamed));
+
+	// a file already in the session folder is switched to in place, not copied
+	const before = readdirSync(dir).length;
+	await importSession(ctx, dest);
+	assert.equal(fake.switches[2]?.file, dest);
+	assert.equal(readdirSync(dir).length, before);
+});
+
+test("importSession: bad input is refused before pi is touched, and a copy is removed when the switch does not happen", async (t) => {
+	const dir = tempDir(t);
+	const s = makeSession(dir);
+	const outside = mkdtempSync(join(dir, "outside-"));
+	const fake = fakeCtx(SessionManager.open(s.file));
+	const ctx = { ...fake.ctx, cwd: outside } as unknown as ImportContext;
+	const filesBefore = readdirSync(dir).sort();
+
+	await assert.rejects(importSession(ctx, "  "), /no file given/);
+	await assert.rejects(importSession(ctx, "missing.jsonl"), /file not found: .*missing\.jsonl/);
+	await assert.rejects(importSession(ctx, outside), /not a file/);
+	writeFileSync(join(outside, "empty.jsonl"), "");
+	await assert.rejects(importSession(ctx, "empty.jsonl"), /empty/);
+	// not a pi session: SessionManager.open refuses it, the copy is cleaned up, pi never switches
+	writeFileSync(join(outside, "notes.jsonl"), "hello\nworld\n");
+	await assert.rejects(importSession(ctx, "notes.jsonl"), /not a valid/);
+	assert.deepEqual(fake.switches, []);
+	assert.deepEqual(readdirSync(dir).sort(), filesBefore);
+
+	// the switch is cancelled (an extension vetoed it): the copy goes away too
+	const source = makeSession(mkdtempSync(join(outside, "src-")));
+	const cancelling = fakeCtx(SessionManager.open(s.file), { cancelSwitch: true });
+	await assert.rejects(importSession({ ...cancelling.ctx, cwd: outside } as unknown as ImportContext, source.file), /cancelled/);
+	assert.equal(existsSync(join(dir, basename(source.file))), false);
+});
+
+test("shareSession: gh auth check, HTML via pi --export, a secret gist, and pi's viewer link", async (t) => {
+	const dir = tempDir(t);
+	const s = makeSession(dir);
+	const log = join(dir, "gh-log.json");
+	process.env.LAZY_PANEL_GH_LOG = log;
+	t.after(() => delete process.env.LAZY_PANEL_GH_LOG);
+	const pi = fakeProgram(dir, "pi", FAKE_PI);
+
+	const result = await shareSession(s.file, { pi, gh: fakeProgram(dir, "gh", FAKE_GH) });
+	assert.deepEqual(result, { url: shareViewerUrl("abc123def"), gistUrl: "https://gist.github.com/someone/abc123def" });
+	assert.equal(result.url, `${process.env.PI_SHARE_VIEWER_URL || "https://pi.dev/session/"}#abc123def`);
+	const call = JSON.parse(readFileSync(log, "utf-8")) as { args: string[]; html: string };
+	assert.deepEqual(call.args.slice(0, 3), ["gist", "create", "--public=false"]);
+	assert.equal(basename(call.args[3] ?? ""), "session.html");
+	assert.match(call.html, /--export/);
+	// the temporary HTML is gone afterwards
+	assert.equal(existsSync(call.args[3] ?? ""), false);
+
+	const message = (expected: string) => (err: Error) => err.message === expected;
+	await assert.rejects(shareSession(s.file, { pi, gh: fakeProgram(dir, "gh-out", FAKE_GH, "logged-out") }), message(GH_NOT_LOGGED_IN));
+	await assert.rejects(shareSession(s.file, { pi, gh: { command: "lazy-panel-no-such-gh", args: [] } }), message(GH_NOT_INSTALLED));
+	await assert.rejects(
+		shareSession(s.file, { pi, gh: fakeProgram(dir, "gh-fail", FAKE_GH, "gist-fail") }),
+		/Failed to create gist: HTTP 401: Bad credentials/,
+	);
+	await assert.rejects(shareSession(join(dir, "missing.jsonl"), { pi }), /session file not found/);
 });

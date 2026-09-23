@@ -1,6 +1,6 @@
 /**
- * Confirm dialog: the Yes / No menu shown before every destructive action
- * (deleting a session now, forking and batch deletes later — CLAUDE.md rule 7).
+ * Confirm dialog: the Yes / No menu shown before every destructive or outbound
+ * action (delete, fork, clone, share, import, overwriting an export — CLAUDE.md rule 7).
  *
  *   ┌─ Delete session? ──────────── FilmRecall ─┐
  *   │   Yes                                      │
@@ -39,6 +39,15 @@ export const CLONE_SESSION_TITLE = "Clone session?";
 
 /** Title of the fork confirmation, shown after a message is picked (`o`). */
 export const FORK_SESSION_TITLE = "Fork session?";
+
+/** Title of the share confirmation (`S`): the session leaves the machine. */
+export const SHARE_SESSION_TITLE = "Upload as secret gist?";
+
+/** Title of the import confirmation (`I`), pi's "Replace current session with …?". */
+export const IMPORT_SESSION_TITLE = "Import and switch to it?";
+
+/** Title of the confirmation before an export overwrites an existing file (`e`). */
+export const OVERWRITE_FILE_TITLE = "Overwrite file?";
 
 export interface ConfirmSpecOptions {
 	/** Title on the top border, e.g. "Delete session?". */

@@ -11,10 +11,29 @@ import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { DEFAULT_KEYMAP } from "../src/config/keymap.ts";
 import { mergeKeymap } from "../src/config/config.ts";
 import { SUMMARIZING_STATUS } from "../src/constants.ts";
-import type { ContentBlock, ForkPoint, RestoreOptions, SessionInfo, SessionRow, SessionSortMode, TreeFilter, TreeRow } from "../src/types.ts";
+import type {
+	ContentBlock,
+	ExportFormat,
+	ForkPoint,
+	RestoreOptions,
+	SessionInfo,
+	SessionRow,
+	SessionSortMode,
+	TreeFilter,
+	TreeRow,
+} from "../src/types.ts";
 import { type ActionSource, type DataSource, LazyPanel } from "../src/ui/app.ts";
-import { CLONE_SESSION_TITLE, DELETE_SESSION_TITLE, FORK_SESSION_TITLE } from "../src/ui/widgets/confirm-dialog.ts";
+import {
+	CLONE_SESSION_TITLE,
+	DELETE_SESSION_TITLE,
+	FORK_SESSION_TITLE,
+	IMPORT_SESSION_TITLE,
+	OVERWRITE_FILE_TITLE,
+	SHARE_SESSION_TITLE,
+} from "../src/ui/widgets/confirm-dialog.ts";
+import { EXPORT_FORMAT_TITLE, EXPORT_PATH_TITLE } from "../src/ui/widgets/export-dialog.ts";
 import { FORK_DIALOG_TITLE } from "../src/ui/widgets/fork-dialog.ts";
+import { IMPORT_DIALOG_TITLE } from "../src/ui/widgets/import-dialog.ts";
 import { InputDialog } from "../src/ui/widgets/input-dialog.ts";
 import { LABEL_DIALOG_TITLE } from "../src/ui/widgets/label-dialog.ts";
 import { NEW_SESSION_DIALOG_TITLE } from "../src/ui/widgets/new-session-dialog.ts";
@@ -1857,6 +1876,9 @@ function makeSessionActionPanel(opts: { actions?: Partial<ActionSource> | null; 
 	const clones: string[] = [];
 	const lastReplies: string[] = [];
 	const forkPointCalls: string[] = [];
+	const exports: Array<{ file: string; format: ExportFormat; path: string }> = [];
+	const imports: string[] = [];
+	const shares: string[] = [];
 	let closed = false;
 	const hidden: boolean[] = [];
 	const forkPoints = opts.forkPoints ?? [
@@ -1933,6 +1955,23 @@ function makeSessionActionPanel(opts: { actions?: Partial<ActionSource> | null; 
 			return true;
 		},
 		copyText: async (text) => void copies.push(text),
+		// 空输入 = 默认路径 /work/pi-session-<n>.<format>；/work/taken.html 假装已经存在。
+		exportTarget: (file, format, input) => {
+			const path = input.trim() || `/work/pi-session-${file.replace(/^.*\/(.*)\.jsonl$/, "$1")}.${format}`;
+			return { path, exists: path === "/work/taken.html" };
+		},
+		exportSession: async (file, format, path) => {
+			exports.push({ file, format, path });
+			return path;
+		},
+		importSession: async (input) => {
+			imports.push(input);
+			return "switched";
+		},
+		shareSession: async (file) => {
+			shares.push(file);
+			return { url: "https://pi.dev/session/#abc", gistUrl: "https://gist.github.com/me/abc" };
+		},
 		...(opts.actions ?? {}),
 	};
 	const panel = new LazyPanel({
@@ -1961,6 +2000,9 @@ function makeSessionActionPanel(opts: { actions?: Partial<ActionSource> | null; 
 		clones,
 		lastReplies,
 		forkPointCalls,
+		exports,
+		imports,
+		shares,
 		closed: () => closed,
 		hidden,
 		text: (width = 120) => panel.render(width).map((l) => stripTerminalSequences(l)),
@@ -2470,5 +2512,239 @@ test("n / o / y / Y report when no actions are wired", async () => {
 	h.panel.handleInput("Y");
 	await flush();
 	assert.ok(h.footer().includes("copy: actions unavailable"), h.footer());
+	assert.equal(h.panel.state.mode, "normal");
+});
+
+// ---------------------------------------------------------------------------
+// SESSIONS: e export / I import / S share
+// ---------------------------------------------------------------------------
+
+/** Clear a prompt pre-filled with `text` (one backspace per character). */
+function clearInput(panel: LazyPanel, text: string): void {
+	for (let i = 0; i < text.length; i++) panel.handleInput("\x7f");
+}
+
+test("e: pick HTML / JSONL, the path prompt is pre-filled with the default, Enter exports and the panel stays open", async () => {
+	const h = makeSessionActionPanel();
+	await h.panel.load();
+
+	h.panel.handleInput("e");
+	assert.equal(h.panel.state.mode, "export");
+	const menu = dialogAt(h.text(), EXPORT_FORMAT_TITLE);
+	assert.ok(menu && menu.title.includes("alpha"), menu?.title);
+	assert.ok(menu.body[0]!.includes("› HTML"), "HTML first, selected");
+	assert.ok(menu.body[1]!.includes("JSONL"), menu.body.join("|"));
+	assert.ok(h.footer().includes("EXPORT"), h.footer());
+
+	// Enter on HTML → the path prompt, pre-filled with pi's default
+	h.panel.handleInput("\r");
+	const prompt = dialogAt(h.text(), EXPORT_PATH_TITLE);
+	assert.ok(prompt, "the path prompt is drawn");
+	assert.ok(prompt.body[0]!.includes("/work/pi-session-s1.html"), prompt.body.join("|"));
+	assert.ok(h.footer().includes("Enter export"), h.footer());
+
+	h.panel.handleInput("\r");
+	await flush();
+	assert.deepEqual(h.exports, [{ file: "/tmp/s1.jsonl", format: "html", path: "/work/pi-session-s1.html" }]);
+	assert.equal(h.panel.state.mode, "normal");
+	assert.equal(h.closed(), false);
+	assert.deepEqual(h.hidden, [], "exporting does not hide the panel");
+	assert.ok(h.footer().includes("exported to /work/pi-session-s1.html"), h.footer());
+});
+
+test("e: JSONL with a typed path; Esc on the prompt returns to the format menu, Esc there cancels", async () => {
+	const h = makeSessionActionPanel();
+	await h.panel.load();
+
+	h.panel.handleInput("e");
+	h.panel.handleInput("j");
+	h.panel.handleInput("\r");
+	const prompt = dialogAt(h.text(), EXPORT_PATH_TITLE);
+	assert.ok(prompt?.body[0]!.includes("/work/pi-session-s1.jsonl"), prompt?.body.join("|"));
+
+	// Esc → back on the menu, cursor on JSONL
+	h.panel.handleInput("\x1b");
+	const menu = dialogAt(h.text(), EXPORT_FORMAT_TITLE);
+	assert.ok(menu && menu.body[1]!.includes("› JSONL"), menu?.body.join("|"));
+	assert.equal(dialogAt(h.text(), EXPORT_PATH_TITLE), undefined);
+
+	// Enter again, replace the path, export
+	h.panel.handleInput("\r");
+	clearInput(h.panel, "/work/pi-session-s1.jsonl");
+	for (const ch of "/out/a.jsonl") h.panel.handleInput(ch);
+	h.panel.handleInput("\r");
+	await flush();
+	assert.deepEqual(h.exports, [{ file: "/tmp/s1.jsonl", format: "jsonl", path: "/out/a.jsonl" }]);
+
+	// Esc on the menu cancels without exporting
+	h.panel.handleInput("e");
+	h.panel.handleInput("\x1b");
+	assert.equal(h.panel.state.mode, "normal");
+	assert.equal(dialogAt(h.text(), EXPORT_FORMAT_TITLE), undefined);
+	assert.equal(h.exports.length, 1);
+});
+
+test("e: an existing file asks Overwrite file? first; No returns to the prompt with the typed path, y overwrites", async () => {
+	const h = makeSessionActionPanel();
+	await h.panel.load();
+
+	h.panel.handleInput("e");
+	h.panel.handleInput("\r");
+	clearInput(h.panel, "/work/pi-session-s1.html");
+	for (const ch of "/work/taken.html") h.panel.handleInput(ch);
+	h.panel.handleInput("\r");
+	const confirm = dialogAt(h.text(), OVERWRITE_FILE_TITLE);
+	assert.ok(confirm && confirm.title.includes("/work/taken.html"), confirm?.title);
+	assert.ok(confirm.body[1]!.includes("› No"), "cursor starts on No");
+	assert.deepEqual(h.exports, []);
+
+	// n → back on the prompt, the typed path kept
+	h.panel.handleInput("n");
+	const prompt = dialogAt(h.text(), EXPORT_PATH_TITLE);
+	assert.ok(prompt?.body[0]!.includes("/work/taken.html"), prompt?.body.join("|"));
+	assert.deepEqual(h.exports, []);
+
+	// Enter → confirmation again, y → overwrite
+	h.panel.handleInput("\r");
+	h.panel.handleInput("y");
+	await flush();
+	assert.deepEqual(h.exports, [{ file: "/tmp/s1.jsonl", format: "html", path: "/work/taken.html" }]);
+	assert.equal(h.panel.state.mode, "normal");
+});
+
+test("e: a failed export is reported in the footer", async () => {
+	const h = makeSessionActionPanel({
+		actions: {
+			exportSession: async () => {
+				throw new Error("File not found: /tmp/s1.jsonl");
+			},
+		},
+	});
+	await h.panel.load();
+	h.panel.handleInput("e");
+	h.panel.handleInput("\r");
+	h.panel.handleInput("\r");
+	await flush();
+	assert.ok(h.footer().includes("export failed: File not found"), h.footer());
+	assert.equal(h.closed(), false);
+});
+
+test("I: type a path, confirm, then import and close; Esc on the confirmation keeps the typed path", async () => {
+	const h = makeSessionActionPanel();
+	await h.panel.load();
+
+	h.panel.handleInput("I");
+	assert.equal(h.panel.state.mode, "import");
+	assert.ok(dialogAt(h.text(), IMPORT_DIALOG_TITLE), "the import prompt is drawn");
+	assert.ok(h.footer().includes("IMPORT") && h.footer().includes("Enter import"), h.footer());
+	for (const ch of "~/backup.jsonl") h.panel.handleInput(ch);
+	h.panel.handleInput("\r");
+	const confirm = dialogAt(h.text(), IMPORT_SESSION_TITLE);
+	assert.ok(confirm && confirm.title.includes("~/backup.jsonl"), confirm?.title);
+	assert.ok(confirm.body[1]!.includes("› No"), "cursor starts on No");
+
+	// Esc → back on the prompt with the path kept
+	h.panel.handleInput("\x1b");
+	const prompt = dialogAt(h.text(), IMPORT_DIALOG_TITLE);
+	assert.ok(prompt?.body[0]!.includes("~/backup.jsonl"), prompt?.body.join("|"));
+	assert.deepEqual(h.imports, []);
+
+	// Enter, y → import, the panel is hidden while pi switches and then closes
+	h.panel.handleInput("\r");
+	h.panel.handleInput("y");
+	await flush();
+	assert.deepEqual(h.imports, ["~/backup.jsonl"]);
+	assert.deepEqual(h.hidden, [true]);
+	assert.equal(h.closed(), true);
+});
+
+test("I: an empty path is reported; a failed import shows the panel again with the reason", async () => {
+	const h = makeSessionActionPanel({
+		actions: {
+			importSession: async (input) => {
+				throw new Error(`file not found: /work/${input}`);
+			},
+		},
+	});
+	await h.panel.load();
+
+	h.panel.handleInput("I");
+	h.panel.handleInput("\r");
+	assert.equal(h.panel.state.mode, "normal");
+	assert.ok(h.footer().includes("import: no file given"), h.footer());
+	assert.equal(dialogAt(h.text(), IMPORT_SESSION_TITLE), undefined);
+
+	h.panel.handleInput("I");
+	for (const ch of "gone.jsonl") h.panel.handleInput(ch);
+	h.panel.handleInput("\r");
+	h.panel.handleInput("y");
+	await flush();
+	assert.deepEqual(h.hidden, [true, false]);
+	assert.equal(h.closed(), false);
+	assert.ok(h.footer().includes("import failed: file not found: /work/gone.jsonl"), h.footer());
+});
+
+test("S: confirm first (cursor on No), then upload, copy the link and show it; the panel stays open", async () => {
+	const h = makeSessionActionPanel();
+	await h.panel.load();
+
+	h.panel.handleInput("S");
+	assert.equal(h.panel.state.mode, "share");
+	const confirm = dialogAt(h.text(), SHARE_SESSION_TITLE);
+	assert.ok(confirm && confirm.title.includes("alpha"), confirm?.title);
+	assert.ok(confirm.body[1]!.includes("› No"), "cursor starts on No");
+	assert.ok(h.footer().includes("SHARE"), h.footer());
+	// Enter on No cancels: nothing leaves the machine
+	h.panel.handleInput("\r");
+	assert.equal(h.panel.state.mode, "normal");
+	assert.deepEqual(h.shares, []);
+
+	h.panel.handleInput("S");
+	h.panel.handleInput("y");
+	await flush();
+	assert.deepEqual(h.shares, ["/tmp/s1.jsonl"]);
+	assert.deepEqual(h.copies, ["https://pi.dev/session/#abc"]);
+	assert.ok(h.footer().includes("share URL copied: https://pi.dev/session/#abc"), h.footer());
+	assert.equal(h.closed(), false);
+	assert.deepEqual(h.hidden, []);
+});
+
+test("S: failures are reported; the link is still shown when the clipboard fails", async () => {
+	const failing = makeSessionActionPanel({
+		actions: {
+			shareSession: async () => {
+				throw new Error("GitHub CLI is not logged in. Run 'gh auth login' first.");
+			},
+		},
+	});
+	await failing.panel.load();
+	failing.panel.handleInput("S");
+	failing.panel.handleInput("y");
+	await flush();
+	assert.ok(failing.footer().includes("share failed: GitHub CLI is not logged in"), failing.footer());
+
+	const noClipboard = makeSessionActionPanel({
+		actions: {
+			copyText: async () => {
+				throw new Error("no clipboard tool");
+			},
+		},
+	});
+	await noClipboard.panel.load();
+	noClipboard.panel.handleInput("S");
+	noClipboard.panel.handleInput("y");
+	await flush();
+	assert.ok(noClipboard.footer().includes("shared: https://pi.dev/session/#abc"), noClipboard.footer());
+});
+
+test("e / I / S report when no actions are wired", async () => {
+	const h = makeSessionActionPanel({ actions: null });
+	await h.panel.load();
+	h.panel.handleInput("e");
+	assert.ok(h.footer().includes("export: actions unavailable"), h.footer());
+	h.panel.handleInput("I");
+	assert.ok(h.footer().includes("import: actions unavailable"), h.footer());
+	h.panel.handleInput("S");
+	assert.ok(h.footer().includes("share: actions unavailable"), h.footer());
 	assert.equal(h.panel.state.mode, "normal");
 });

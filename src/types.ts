@@ -23,9 +23,26 @@ export type SessionSortMode = (typeof SESSION_SORT_MODES)[number];
  * Input mode of the panel, shown in the footer (vim-like). `restore` = the
  * summary menu / custom prompt of TREE Enter is open, `tree` = the full tree
  * dialog (`a` in the tree pane) is open, `confirm` / `rename` / `info` = the
- * delete confirmation, the Rename prompt or the Session Info dialog is open.
+ * delete confirmation, the Rename prompt or the Session Info dialog is open;
+ * `export` / `import` / `share` = the dialogs of SESSIONS `e` / `I` / `S`.
  */
-export type PanelMode = "normal" | "search" | "label" | "restore" | "tree" | "confirm" | "rename" | "info" | "new" | "fork" | "clone" | "visual" | "preview";
+export type PanelMode =
+	| "normal"
+	| "search"
+	| "label"
+	| "restore"
+	| "tree"
+	| "confirm"
+	| "rename"
+	| "info"
+	| "new"
+	| "fork"
+	| "clone"
+	| "export"
+	| "import"
+	| "share"
+	| "visual"
+	| "preview";
 
 /** A `key description` pair shown as a hint in the footer or a prompt bar. */
 export type KeyHint = [key: string, text: string];
@@ -43,6 +60,23 @@ export type EnterOutcome = "switched" | "restored" | "unchanged";
  * for good because `trash` was unavailable or failed.
  */
 export type DeleteMethod = "trash" | "unlink";
+
+/** File format of SESSIONS `e` (pi's /export): the whole tree as HTML, or the active branch as JSONL. */
+export type ExportFormat = "html" | "jsonl";
+
+/** Where an export would be written, resolved from what the user typed (blank = pi's default name in the cwd). */
+export interface ExportTarget {
+	/** Absolute output path. */
+	path: string;
+	/** A file is already there (the panel asks before overwriting it). */
+	exists: boolean;
+}
+
+/** What SESSIONS `S` (pi's /share) produced: the pi.dev viewer link and the gist behind it. */
+export interface ShareResult {
+	url: string;
+	gistUrl: string;
+}
 
 /**
  * How TREE Enter leaves the branch it abandons — the three choices of pi's

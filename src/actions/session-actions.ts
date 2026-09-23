@@ -10,28 +10,30 @@
  *   fork    -> ctx.fork(entryId, { position: "before" })          (done)
  *   clone   -> ctx.fork(leafId, { position: "at" })               (done)
  *   copy-reply -> copyToClipboard(last assistant reply) (`Y`)      (done)
- *   export  -> /export (HTML | JSONL)
- *   import  -> /import (JSONL)
- *   share   -> /share (private GitHub Gist)
+ *   export  -> HTML: `pi --export <file> <out>`; JSONL: header + active branch (done)
+ *   import  -> copy into the session dir + ctx.switchSession       (done)
+ *   share   -> `pi --export` + `gh gist create --public=false`      (done)
  *
- * Destructive / branching actions (delete, fork, clone) must be confirmed by the
- * caller first (see ../ui/widgets/confirm-dialog.ts). These functions do not prompt.
- *
- * TODO: implement the remaining actions (export / import / share).
+ * Destructive / branching / outbound actions (delete, fork, clone, share,
+ * overwriting an export) must be confirmed by the caller first (see
+ * ../ui/widgets/confirm-dialog.ts). These functions do not prompt.
  */
 
-import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { constants, copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { unlink } from "node:fs/promises";
-import { resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { basename, dirname, join, parse, resolve } from "node:path";
 import {
 	copyToClipboard,
+	CURRENT_SESSION_VERSION,
 	type ExtensionAPI,
 	type ExtensionCommandContext,
 	SessionManager,
 } from "@earendil-works/pi-coding-agent";
 import { loadLastReply } from "../data/content.ts";
-import type { DeleteMethod, EnterOutcome, SessionRow } from "../types.ts";
+import type { DeleteMethod, EnterOutcome, ExportFormat, ExportTarget, ShareResult } from "../types.ts";
+import { resolveUserPath, stripQuotes } from "../utils/paths.ts";
 
 /** The slice of the command context `resumeSession` needs (tests pass plain objects). */
 export type ResumeContext = Pick<ExtensionCommandContext, "sessionManager" | "switchSession">;
@@ -249,20 +251,252 @@ export async function copyLastReply(sessionFile: string): Promise<boolean> {
 	return true;
 }
 
+// ---------------------------------------------------------------------------
+// export / import / share
+// ---------------------------------------------------------------------------
+
+/** How to run an external program: the executable plus the arguments that go before ours. */
+export interface CommandSpec {
+	command: string;
+	args: string[];
+}
+
+/** Overrides for the programs export / share spawn (tests pass `node fake.js`). */
+export interface ExternalCommands {
+	/** pi itself, for `pi --export` (default: the running pi, see `runningPi`). */
+	pi?: CommandSpec;
+	/** The GitHub CLI (default `gh`). */
+	gh?: CommandSpec;
+}
+
+/** `pi --export` renders a whole session to HTML; it normally takes about a second. */
+const EXPORT_TIMEOUT_MS = 60_000;
+/** `gh auth status` / `gh gist create` talk to GitHub. */
+const GH_TIMEOUT_MS = 60_000;
+
+/**
+ * The pi that is running this extension, as a command.
+ *
+ * 扩展 API 只有 AgentSession 上的 exportToHtml（只能导出当前会话），包的 exports 也只开放了
+ * 入口，所以 HTML 走 pi 自己公开的 CLI：`pi --export <file> <out>`（和 pi 对任意会话文件导出
+ * 用的是同一个 exportFromFile）。不用 PATH 上的 `pi`：Windows 上那是 pi.cmd，不开 shell 起不来，
+ * 版本也可能和正在运行的不同。npm 安装时 argv[1] 是 cli.js，用同一个 node 跑它；Bun 编译的单文件里
+ * 可执行文件本身就是 pi，argv[1] 是磁盘上不存在的虚拟路径。
+ */
+export function runningPi(): CommandSpec {
+	const script = process.argv[1];
+	if (script && existsSync(script)) {
+		// tsx 这类加载器参数要带上；--inspect 会和父进程抢调试端口，去掉。
+		const execArgs = process.execArgv.filter((arg) => !arg.startsWith("--inspect"));
+		return { command: process.execPath, args: [...execArgs, script] };
+	}
+	return { command: process.execPath, args: [] };
+}
+
+interface RunResult {
+	code: number | null;
+	stdout: string;
+	stderr: string;
+	/** Could not be started (e.g. ENOENT), or was killed after the timeout. */
+	error?: Error;
+}
+
+/** Run a program to completion without a shell or a terminal (stdin closed, output captured). */
+function runCommand(spec: CommandSpec, args: string[], timeoutMs: number): Promise<RunResult> {
+	return new Promise((done) => {
+		let stdout = "";
+		let stderr = "";
+		let settled = false;
+		const finish = (result: RunResult): void => {
+			if (settled) return;
+			settled = true;
+			done(result);
+		};
+		// stdin 必须关掉：子进程继承 pi 的终端会抢走按键。
+		const child = spawn(spec.command, [...spec.args, ...args], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true, timeout: timeoutMs });
+		child.stdout.on("data", (chunk) => (stdout += String(chunk)));
+		child.stderr.on("data", (chunk) => (stderr += String(chunk)));
+		child.on("error", (error) => finish({ code: null, stdout, stderr, error }));
+		child.on("close", (code, signal) => {
+			const error = code === null ? new Error(`timed out or killed (${signal ?? "no exit code"})`) : undefined;
+			finish(error ? { code, stdout, stderr, error } : { code, stdout, stderr });
+		});
+	});
+}
+
+/** First non-empty line of a program's complaint, without colors. */
+function firstLine(text: string): string {
+	// 去掉 chalk 的颜色码（子进程不是终端时一般不会有，保险起见）。
+	const plain = text.replace(/\x1b\[[0-9;]*m/g, "");
+	return plain.split(/\r?\n/).find((line) => line.trim())?.trim() ?? "";
+}
+
+/** pi's default export file name: `pi-session-<file>.html`, or a timestamped `session-….jsonl` (both in the cwd). */
+export function defaultExportName(sessionFile: string, format: ExportFormat, now = new Date()): string {
+	if (format === "html") return `pi-session-${basename(sessionFile, ".jsonl")}.html`;
+	return `session-${now.toISOString().replace(/[:.]/g, "-")}.jsonl`;
+}
+
+/**
+ * Where `e` writes, from what the user typed: blank = pi's default name in the
+ * cwd; a directory (existing, or typed with a trailing separator) gets the
+ * default name inside it; anything else is the file itself. `~` and relative
+ * paths work on every platform (see ../utils/paths.ts).
+ */
+export function exportTarget(cwd: string, sessionFile: string, format: ExportFormat, input: string): ExportTarget {
+	const typed = stripQuotes(input.trim()).trim();
+	let path = resolveUserPath(cwd, input);
+	if (!path) path = join(cwd, defaultExportName(sessionFile, format));
+	else if (/[\\/]$/.test(typed) || isDirectory(path)) path = join(path, defaultExportName(sessionFile, format));
+	return { path, exists: existsSync(path) };
+}
+
+function isDirectory(path: string): boolean {
+	try {
+		return statSync(path).isDirectory();
+	} catch {
+		return false;
+	}
+}
+
+/** The slice export needs: the current session's in-memory manager (its leaf may not be on disk yet). */
+export type ExportContext = Pick<ExtensionCommandContext, "sessionManager">;
+
+/**
+ * Export `sessionFile` to `outputPath` (what `/export` does), for any session, not only the open one.
+ *
+ * - `html`：交给 `pi --export`（整棵树都在里面，默认显示活动分支；和 CLI 一样不带系统提示词 / 工具
+ *   定义，用 pi 的默认主题）。
+ * - `jsonl`：照搬 pi 的 exportSessionToJsonl：新的 header + 活动分支上的条目，parentId 重新串成一条链。
+ *   当前会话用 pi 内存里的 manager（跳转后还没落盘的叶子也算），其他会话读文件。
+ *
+ * 目标文件已存在时直接覆盖，调用方负责先问；拒绝把会话文件自己当成输出（JSONL 只留一条分支，会丢数据）。
+ * Returns the path written.
+ */
 export async function exportSession(
-	_ctx: ExtensionCommandContext,
-	_row: SessionRow,
-	_targetDir: string,
-	_format: "html" | "jsonl",
-): Promise<void> {
-	// TODO
+	ctx: ExportContext,
+	sessionFile: string,
+	format: ExportFormat,
+	outputPath: string,
+	commands: ExternalCommands = {},
+): Promise<string> {
+	if (!existsSync(sessionFile)) throw new Error(`session file not found: ${sessionFile}`);
+	if (resolve(outputPath) === resolve(sessionFile)) throw new Error("refusing to overwrite the session file itself");
+	if (isDirectory(outputPath)) throw new Error(`is a directory: ${outputPath}`);
+	mkdirSync(dirname(outputPath), { recursive: true });
+	if (format === "jsonl") {
+		writeJsonlExport(isCurrentSession(ctx, sessionFile) ? ctx.sessionManager : openSessionFile(sessionFile), outputPath);
+	} else {
+		await exportHtmlFile(sessionFile, outputPath, commands.pi ?? runningPi());
+	}
+	return outputPath;
 }
 
-export async function importSession(_ctx: ExtensionCommandContext, _sourcePath: string): Promise<void> {
-	// TODO
+/** pi's exportSessionToJsonl, line for line: a fresh header, then the active branch re-chained. */
+function writeJsonlExport(manager: Pick<SessionManager, "getSessionId" | "getCwd" | "getBranch">, outputPath: string): void {
+	const header = {
+		type: "session",
+		version: CURRENT_SESSION_VERSION,
+		id: manager.getSessionId(),
+		timestamp: new Date().toISOString(),
+		cwd: manager.getCwd(),
+	};
+	const lines = [JSON.stringify(header)];
+	let parentId: string | null = null;
+	for (const entry of manager.getBranch()) {
+		lines.push(JSON.stringify({ ...entry, parentId }));
+		parentId = entry.id;
+	}
+	writeFileSync(outputPath, `${lines.join("\n")}\n`);
 }
 
-export async function shareSession(_ctx: ExtensionCommandContext, _row: SessionRow): Promise<string | undefined> {
-	// TODO: returns shareable URL
-	return undefined;
+/** `pi --export <file> <out>`; throws with what pi printed when it fails. */
+async function exportHtmlFile(sessionFile: string, outputPath: string, pi: CommandSpec): Promise<void> {
+	const result = await runCommand(pi, ["--export", sessionFile, outputPath], EXPORT_TIMEOUT_MS);
+	if (result.error) throw new Error(`cannot run pi --export: ${result.error.message}`);
+	if (result.code !== 0) {
+		const reason = firstLine(result.stderr).replace(/^Error:\s*/, "");
+		throw new Error(reason || `pi --export exited with code ${result.code}`);
+	}
+	if (!existsSync(outputPath)) throw new Error("pi --export did not write the file");
+}
+
+/** The slice import needs: where sessions live, the cwd relative paths are resolved against, and switchSession. */
+export type ImportContext = Pick<ExtensionCommandContext, "sessionManager" | "switchSession" | "cwd">;
+
+/**
+ * Import a session JSONL and switch to it (what `/import` does).
+ *
+ * 扩展 ctx 上没有 pi 的 `importFromJsonl`，但它做的事很简单，这里照搬：把文件复制进当前会话目录
+ * （重名就加 -1、-2 后缀，文件本来就在会话目录里则不复制），再切过去。切换交给 `resumeSession`：
+ * 先 `SessionManager.open` 校验（不是 pi 会话文件会抛错，必须在 `ctx.switchSession` 之前拦下，
+ * 那里的异常会让 pi 直接退出），会话记的目录不存在时 pi 自己会问要不要在当前目录继续。
+ * 校验失败或切换被取消时删掉刚复制的副本。
+ */
+export async function importSession(ctx: ImportContext, input: string): Promise<EnterOutcome> {
+	const source = resolveUserPath(ctx.cwd, input);
+	if (!source) throw new Error("no file given");
+	if (!existsSync(source)) throw new Error(`file not found: ${source}`);
+	const stat = statSync(source);
+	if (!stat.isFile()) throw new Error(`not a file: ${source}`);
+	// 空文件会被 SessionManager.open 当成新会话初始化，导入它没有意义。
+	if (stat.size === 0) throw new Error(`not a pi session file (empty): ${source}`);
+	const sessionDir = ctx.sessionManager.getSessionDir();
+	mkdirSync(sessionDir, { recursive: true });
+	let destination = join(sessionDir, basename(source));
+	const alreadyStored = resolve(destination) === source;
+	if (!alreadyStored) {
+		const { name, ext } = parse(destination);
+		for (let suffix = 1; existsSync(destination); suffix++) destination = join(sessionDir, `${name}-${suffix}${ext}`);
+		copyFileSync(source, destination, constants.COPYFILE_EXCL);
+	}
+	try {
+		return await resumeSession(ctx, destination);
+	} catch (err) {
+		if (!alreadyStored) rmSync(destination, { force: true });
+		throw err;
+	}
+}
+
+/** pi's wording when `gh` is missing / not logged in. */
+export const GH_NOT_INSTALLED = "GitHub CLI (gh) is not installed. Install it from https://cli.github.com/";
+export const GH_NOT_LOGGED_IN = "GitHub CLI is not logged in. Run 'gh auth login' first.";
+
+const DEFAULT_SHARE_VIEWER_URL = "https://pi.dev/session/";
+
+/** pi's getShareViewerUrl: the pi.dev viewer (or `PI_SHARE_VIEWER_URL`) pointed at a gist. */
+export function shareViewerUrl(gistId: string): string {
+	return `${process.env.PI_SHARE_VIEWER_URL || DEFAULT_SHARE_VIEWER_URL}#${gistId}`;
+}
+
+/**
+ * Upload `sessionFile` as a secret GitHub gist and return the viewer link (what `/share` does).
+ *
+ * 照搬 pi 的 gist 路径：`gh auth status` 检查登录 → 导出 HTML 到临时目录 → `gh gist create
+ * --public=false` → 从输出的 gist 地址取 id 拼 pi.dev 的查看链接；临时目录最后删掉。pi 会先试
+ * Radius（需要 pi 的 modelRuntime，扩展拿不到），这里只走 gist。外发操作，调用方必须先确认。
+ */
+export async function shareSession(sessionFile: string, commands: ExternalCommands = {}): Promise<ShareResult> {
+	if (!existsSync(sessionFile)) throw new Error(`session file not found: ${sessionFile}`);
+	const gh = commands.gh ?? { command: "gh", args: [] };
+	const auth = await runCommand(gh, ["auth", "status"], GH_TIMEOUT_MS);
+	if (auth.error) {
+		throw new Error((auth.error as NodeJS.ErrnoException).code === "ENOENT" ? GH_NOT_INSTALLED : `gh auth status: ${auth.error.message}`);
+	}
+	if (auth.code !== 0) throw new Error(GH_NOT_LOGGED_IN);
+	const tempDir = mkdtempSync(join(tmpdir(), "pi-share-"));
+	try {
+		const htmlFile = join(tempDir, "session.html");
+		await exportHtmlFile(sessionFile, htmlFile, commands.pi ?? runningPi());
+		const result = await runCommand(gh, ["gist", "create", "--public=false", htmlFile], GH_TIMEOUT_MS);
+		if (result.error) throw new Error(`Failed to create gist: ${result.error.message}`);
+		if (result.code !== 0) throw new Error(`Failed to create gist: ${result.stderr.trim() || "Unknown error"}`);
+		// gh 把进度写到 stderr，stdout 最后一行是 gist 地址。
+		const gistUrl = result.stdout.trim().split(/\r?\n/).pop()?.trim() ?? "";
+		const gistId = gistUrl.split("/").pop();
+		if (!gistId) throw new Error("Failed to parse gist ID from gh output");
+		return { url: shareViewerUrl(gistId), gistUrl };
+	} finally {
+		rmSync(tempDir, { recursive: true, force: true });
+	}
 }

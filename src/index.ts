@@ -16,10 +16,14 @@ import {
 	copyLastReply,
 	copyText,
 	deleteSession,
+	exportSession,
+	exportTarget,
 	forkSession,
+	importSession,
 	newSession,
 	renameSession,
 	resumeSession,
+	shareSession,
 } from "./actions/session-actions.ts";
 import { copyNodeText, labelNode, restoreNode } from "./actions/tree-actions.ts";
 import { loadConfig } from "./config/config.ts";
@@ -64,6 +68,11 @@ export default function (pi: ExtensionAPI) {
 				cloneSession: (file) => cloneSession(ctx, file),
 				copyLastReply,
 				copyText,
+				// 导出 / 分享的 HTML 走 pi 自己的 `pi --export`；相对路径和默认文件名都按 pi 的工作目录算。
+				exportTarget: (file, format, input) => exportTarget(ctx.cwd, file, format, input),
+				exportSession: (file, format, outputPath) => exportSession(ctx, file, format, outputPath),
+				importSession: (input) => importSession(ctx, input),
+				shareSession: (file) => shareSession(file),
 			};
 			// overlay 句柄在面板显示后才拿到；Enter 等待 pi 切换时用它暂时隐藏面板。
 			let setHidden: ((hidden: boolean) => void) | undefined;

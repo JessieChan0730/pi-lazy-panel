@@ -68,6 +68,8 @@ import type {
 	ContentBlock,
 	DeleteMethod,
 	EnterOutcome,
+	ExportFormat,
+	ExportTarget,
 	ForkPoint,
 	KeyHint,
 	Keymap,
@@ -80,6 +82,7 @@ import type {
 	SessionInfo,
 	SessionRow,
 	SessionSortMode,
+	ShareResult,
 	TreeFilter,
 	TreeRow,
 } from "../types.ts";
@@ -93,10 +96,15 @@ import {
 	confirmDialogSpec,
 	DELETE_SESSION_TITLE,
 	FORK_SESSION_TITLE,
+	IMPORT_SESSION_TITLE,
+	OVERWRITE_FILE_TITLE,
+	SHARE_SESSION_TITLE,
 } from "./widgets/confirm-dialog.ts";
+import { EXPORT_FORMAT_HINTS, EXPORT_FORMAT_TITLE, EXPORT_FORMATS, EXPORT_PATH_HINTS, EXPORT_PATH_TITLE } from "./widgets/export-dialog.ts";
 import { renderFooter } from "./widgets/footer.ts";
 import { FORK_DIALOG_HINTS, FORK_DIALOG_TITLE } from "./widgets/fork-dialog.ts";
 import { compactKeys, helpLineCount, overlayHelp } from "./widgets/help-overlay.ts";
+import { IMPORT_DIALOG_HINTS, IMPORT_DIALOG_SUBJECT, IMPORT_DIALOG_TITLE } from "./widgets/import-dialog.ts";
 import { InputDialog } from "./widgets/input-dialog.ts";
 import { LABEL_DIALOG_HINTS, LABEL_DIALOG_TITLE } from "./widgets/label-dialog.ts";
 import { NEW_SESSION_DIALOG_HINTS, NEW_SESSION_DIALOG_TITLE } from "./widgets/new-session-dialog.ts";
@@ -203,6 +211,14 @@ export interface ActionSource {
 	copyLastReply?(sessionFile: string): Promise<boolean>;
 	/** y in the Session Info dialog: copy its text to the clipboard. */
 	copyText?(text: string): Promise<void>;
+	/** e in SESSIONS: where an export goes for what the user typed ("" = pi's default path); synchronous, no writing. */
+	exportTarget?(sessionFile: string, format: ExportFormat, input: string): ExportTarget;
+	/** e in SESSIONS (once the path is picked, and confirmed when it exists): write the export, resolving to its path (/export). */
+	exportSession?(sessionFile: string, format: ExportFormat, outputPath: string): Promise<string>;
+	/** I in SESSIONS (after confirmation): copy a session JSONL into the session folder and switch to it (/import). */
+	importSession?(input: string): Promise<EnterOutcome>;
+	/** S in SESSIONS (after confirmation): upload as a secret GitHub gist (/share). */
+	shareSession?(sessionFile: string): Promise<ShareResult>;
 }
 
 export interface LazyPanelOptions {
@@ -318,6 +334,8 @@ export class LazyPanel implements Component, Focusable {
 	private forkTarget: { file: string; subject: string; points: ForkPoint[] } | undefined;
 	/** Session the clone confirmation is about while `mode === "clone"`. */
 	private cloneTarget: SessionRow | undefined;
+	/** Session being exported while `mode === "export"`: its file, title-bar subject, and the format once picked. */
+	private exportJob: { file: string; subject: string; format?: ExportFormat } | undefined;
 	/** True while an Enter action is waiting for pi (keys are ignored, the panel is hidden). */
 	private entering = false;
 	/** Raw key chunks of an unfinished multi-key sequence. */
@@ -824,6 +842,15 @@ export class LazyPanel implements Component, Focusable {
 				return;
 			case "session-copy-last-reply":
 				void this.copyLastReply();
+				return;
+			case "session-export":
+				this.startExport();
+				return;
+			case "session-import":
+				this.openImportInput("");
+				return;
+			case "session-share":
+				this.confirmShareSession();
 				return;
 			default:
 				this.setStatus(`${action}: not implemented yet`);
@@ -1848,6 +1875,233 @@ export class LazyPanel implements Component, Focusable {
 		} catch (err) {
 			this.setStatus(`copy failed: ${(err as Error).message}`);
 		}
+	}
+
+	/** e: pick HTML / JSONL, then the output path, for the session under the cursor (/export). */
+	private startExport(): void {
+		const row = this.currentSessionRow();
+		if (!row) return;
+		if (!this.o.actions?.exportSession || !this.o.actions.exportTarget) {
+			this.setStatus("export: actions unavailable");
+			return;
+		}
+		this.exportJob = { file: row.file, subject: this.sessionTitle(row) };
+		this.openExportMenu(0);
+	}
+
+	/** The format menu with the cursor on `index` (Esc from the path prompt comes back onto the chosen format). */
+	private openExportMenu(index: number): void {
+		const job = this.exportJob;
+		if (!job) return;
+		this.state.mode = "export";
+		this.selectDialog.open({
+			title: EXPORT_FORMAT_TITLE,
+			items: EXPORT_FORMATS.map((f) => f.label),
+			initialIndex: index,
+			subject: job.subject,
+			hints: EXPORT_FORMAT_HINTS,
+			onSelect: (i) => {
+				const format = EXPORT_FORMATS[i]?.format;
+				if (format) this.openExportPath(format);
+			},
+			onCancel: () => this.closeExportDialogs(),
+		});
+		this.o.requestRender();
+	}
+
+	/**
+	 * The output-path prompt, pre-filled with pi's default (or `value`, what the
+	 * user typed before backing out of the overwrite confirmation).
+	 */
+	private openExportPath(format: ExportFormat, value?: string): void {
+		const job = this.exportJob;
+		const resolveTarget = this.o.actions?.exportTarget;
+		if (!job || !resolveTarget) return;
+		job.format = format;
+		this.selectDialog.close();
+		this.state.mode = "export";
+		this.inputDialog.open({
+			title: EXPORT_PATH_TITLE,
+			// 预填 pi 的默认路径（绝对路径），用户一眼能看到会写到哪里；改成目录就在里面用默认文件名。
+			value: value ?? resolveTarget(job.file, format, "").path,
+			subject: job.subject,
+			hints: EXPORT_PATH_HINTS,
+			onSubmit: (v) => this.submitExportPath(v),
+			// Esc：退回格式菜单，光标停在刚选的格式上。
+			onCancel: () => {
+				this.inputDialog.close();
+				this.inputDialog.focused = false;
+				this.openExportMenu(EXPORT_FORMATS.findIndex((f) => f.format === format));
+			},
+		});
+		this.inputDialog.focused = this._focused;
+		this.o.requestRender();
+	}
+
+	/** Enter in the path prompt: export right away, or ask first when a file is already there. */
+	private submitExportPath(value: string): void {
+		const job = this.exportJob;
+		const format = job?.format;
+		const resolveTarget = this.o.actions?.exportTarget;
+		this.inputDialog.close();
+		this.inputDialog.focused = false;
+		if (!job || !format || !resolveTarget) {
+			this.closeExportDialogs();
+			return;
+		}
+		const target = resolveTarget(job.file, format, value);
+		if (!target.exists) {
+			void this.runExport(job.file, format, target.path);
+			return;
+		}
+		// 覆盖已有文件是破坏性操作，先确认（CLAUDE.md 第 7 条）；No / Esc 退回路径输入框，保留刚才输入的内容。
+		this.state.mode = "export";
+		this.selectDialog.open(
+			confirmDialogSpec({
+				title: OVERWRITE_FILE_TITLE,
+				subject: target.path,
+				onConfirm: () => void this.runExport(job.file, format, target.path),
+				onCancel: () => this.openExportPath(format, value),
+			}),
+		);
+		this.o.requestRender();
+	}
+
+	/** Write the export; the panel stays open and the footer says where the file went. */
+	private async runExport(file: string, format: ExportFormat, path: string): Promise<void> {
+		const write = this.o.actions?.exportSession;
+		this.closeExportDialogs();
+		if (!write) return;
+		this.setStatus("exporting…");
+		try {
+			const written = await write(file, format, path);
+			if (this.disposed) return;
+			this.setStatus(`exported to ${written}`);
+		} catch (err) {
+			if (this.disposed) return;
+			this.setStatus(`export failed: ${(err as Error).message}`);
+		}
+	}
+
+	private closeExportDialogs(): void {
+		this.state.mode = this.baseMode();
+		this.selectDialog.close();
+		this.inputDialog.close();
+		this.inputDialog.focused = false;
+		this.exportJob = undefined;
+		this.o.requestRender();
+	}
+
+	/** I: ask for the JSONL to import (`value` = what was typed before backing out of the confirmation). */
+	private openImportInput(value: string): void {
+		if (!this.o.actions?.importSession) {
+			this.setStatus("import: actions unavailable");
+			return;
+		}
+		this.selectDialog.close();
+		this.state.mode = "import";
+		this.inputDialog.open({
+			title: IMPORT_DIALOG_TITLE,
+			value,
+			subject: IMPORT_DIALOG_SUBJECT,
+			hints: IMPORT_DIALOG_HINTS,
+			onSubmit: (v) => this.confirmImport(v),
+			onCancel: () => this.closeImportDialogs(),
+		});
+		this.inputDialog.focused = this._focused;
+		this.o.requestRender();
+	}
+
+	/** Enter in the import prompt: confirm like pi's /import ("Replace current session with …?"). */
+	private confirmImport(value: string): void {
+		this.inputDialog.close();
+		this.inputDialog.focused = false;
+		const path = value.trim();
+		if (!path) {
+			this.closeImportDialogs();
+			this.setStatus("import: no file given");
+			return;
+		}
+		this.state.mode = "import";
+		this.selectDialog.open(
+			confirmDialogSpec({
+				title: IMPORT_SESSION_TITLE,
+				subject: path,
+				onConfirm: () => void this.runImport(path),
+				// Esc / No：退回输入框，保留刚才输入的路径。
+				onCancel: () => this.openImportInput(value),
+			}),
+		);
+		this.o.requestRender();
+	}
+
+	/** Confirmed: copy the file into the session folder and switch to it, closing the panel via `enter()`. */
+	private async runImport(input: string): Promise<void> {
+		const load = this.o.actions?.importSession;
+		this.closeImportDialogs();
+		if (!load) return;
+		await this.enter("import", () => load(input));
+	}
+
+	private closeImportDialogs(): void {
+		this.state.mode = this.baseMode();
+		this.selectDialog.close();
+		this.inputDialog.close();
+		this.inputDialog.focused = false;
+		this.o.requestRender();
+	}
+
+	/** S: confirm (the session leaves the machine), then upload it as a secret gist (/share). */
+	private confirmShareSession(): void {
+		const row = this.currentSessionRow();
+		if (!row) return;
+		if (!this.o.actions?.shareSession) {
+			this.setStatus("share: actions unavailable");
+			return;
+		}
+		this.state.mode = "share";
+		this.selectDialog.open(
+			confirmDialogSpec({
+				title: SHARE_SESSION_TITLE,
+				subject: this.sessionTitle(row),
+				onConfirm: () => void this.runShare(row.file),
+				onCancel: () => this.closeShareConfirm(),
+			}),
+		);
+		this.o.requestRender();
+	}
+
+	/** Upload, then put the viewer link on the clipboard (a long link may not fit the footer) and show it. */
+	private async runShare(file: string): Promise<void> {
+		const share = this.o.actions?.shareSession;
+		this.closeShareConfirm();
+		if (!share) return;
+		this.setStatus("sharing…");
+		let result: ShareResult;
+		try {
+			result = await share(file);
+			if (this.disposed) return;
+		} catch (err) {
+			if (this.disposed) return;
+			this.setStatus(`share failed: ${(err as Error).message}`);
+			return;
+		}
+		const copy = this.o.actions?.copyText;
+		try {
+			if (!copy) throw new Error("no clipboard");
+			await copy(result.url);
+			if (this.disposed) return;
+			this.setStatus(`share URL copied: ${result.url}`);
+		} catch {
+			if (this.disposed) return;
+			this.setStatus(`shared: ${result.url}`);
+		}
+	}
+
+	private closeShareConfirm(): void {
+		this.state.mode = this.baseMode();
+		this.selectDialog.close();
+		this.o.requestRender();
 	}
 
 	/** Rows a centered menu may show at once before it scrolls: leave room for borders + footer. */
