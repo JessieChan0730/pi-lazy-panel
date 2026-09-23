@@ -211,7 +211,7 @@ test("? opens the help overlay for the focused pane and ? / Esc close it", () =>
 	for (const l of h.panel.render(100)) assert.equal(visibleWidth(l), 100);
 });
 
-test("/ shows the 搜索 bar, typing edits it, Enter stores the query, Esc cancels", () => {
+test("/ shows the 搜索 bar, typing searches live, Enter keeps the query, Esc in the bar cancels", () => {
 	const h = makePanel();
 	h.panel.handleInput("/");
 	assert.equal(h.panel.state.mode, "search");
@@ -227,22 +227,26 @@ test("/ shows the 搜索 bar, typing edits it, Enter stores the query, Esc cance
 	h.panel.handleInput("\x7f"); // backspace removes the q
 	h.panel.handleInput("\r");
 	assert.equal(h.panel.state.mode, "normal");
-	assert.equal(h.panel.state.searchQuery, "foo");
-	assert.equal(h.panel.state.searchPane, "sessions");
+	assert.equal(h.panel.state.search.sessions?.query, "foo");
+	// nothing is loaded: the footer keeps the query and says there is nothing to jump to
 	bottom = h.text().at(-1)!;
-	assert.ok(bottom.includes("foo") && bottom.includes("搜索"));
+	assert.ok(bottom.includes("foo") && bottom.includes("搜索") && bottom.includes("no matches"), bottom);
+	h.panel.handleInput("n");
+	assert.ok(h.text().at(-1)!.includes("no matches"), h.text().at(-1));
 
 	// Esc in normal mode clears the active search first, only then quits
 	h.panel.handleInput("\x1b");
-	assert.equal(h.panel.state.searchQuery, "");
+	assert.equal(h.panel.state.search.sessions, undefined);
 	assert.equal(h.closed(), false);
+	h.panel.handleInput("n");
+	assert.ok(h.text().at(-1)!.includes("session-new: not implemented yet"), "n is new session again without a search");
 
-	// cancel path keeps the previous (now empty) query
+	// Esc in the bar drops what was typed
 	h.panel.handleInput("/");
 	h.panel.handleInput("x");
 	h.panel.handleInput("\x1b");
 	assert.equal(h.panel.state.mode, "normal");
-	assert.equal(h.panel.state.searchQuery, "");
+	assert.equal(h.panel.state.search.sessions, undefined);
 	assert.equal(h.text().at(-1)!.includes("搜索"), false);
 });
 
@@ -552,7 +556,7 @@ test("/ opens the search bar in the tree pane (footer lists it), and a opens the
 	assert.ok(footer.includes("a Tree"), footer);
 	assert.ok(footer.includes("/ Search"), footer);
 
-	// / opens the search bar like in the other panes (matching is still TODO); Esc closes it
+	// / opens the search bar like in the other panes (the search itself is covered below); Esc closes it
 	h.panel.handleInput("/");
 	assert.equal(h.panel.state.mode, "search");
 	assert.ok(h.text().at(-1)!.includes("搜索:"), h.text().at(-1));
@@ -1500,3 +1504,293 @@ async function loaded(panel: LazyPanel): Promise<LazyPanel> {
 	await panel.load();
 	return panel;
 }
+
+/** Theme with real escape codes for the search colours and the cursor background, so highlight tests can see them. */
+const ansiTheme = {
+	...(fakeTheme as unknown as Record<string, unknown>),
+	bg: (c: string, s: string) => (c === "searchMatchBg" ? `\x1b[43m${s}\x1b[49m` : c === "selectedBg" ? `\x1b[44m${s}\x1b[49m` : s),
+	underline: (s: string) => `\x1b[4m${s}\x1b[24m`,
+	inverse: (s: string) => `\x1b[7m${s}\x1b[27m`,
+} as unknown as Theme;
+
+/**
+ * Panel for the search tests: 4 sessions with names / models / paths / dates,
+ * the forked tree e0 ─┬─ e1 "north" (side, folded) → e2 "hidden gem", └─ e3 "south" → e4 "gem stone" (leaf),
+ * and content blocks whose text lines contain "needle" twice.
+ */
+function makeSearchPanel(opts: { height?: number; theme?: Theme } = {}) {
+	const day = (d: number) => new Date(2026, 8, d, 12).getTime();
+	const sessions: SessionRow[] = [
+		{ ...row(1, "/home/u/code/FilmRecall"), name: "FilmRecall", preview: "scan film", model: "claude-opus-4", updatedAt: day(10) },
+		{ ...row(2, "/home/u/code/other"), preview: "hello world", model: "gpt-5", updatedAt: day(15) },
+		{ ...row(3, "/home/u/docs"), name: "Recall notes", preview: "notes", model: "claude-sonnet-4", updatedAt: day(20) },
+		{ ...row(4, "/tmp/x"), preview: "film review", model: "claude-opus-4", updatedAt: day(5) },
+	];
+	const contentCalls: Array<string | undefined> = [];
+	const b = (i: number, md: string): ContentBlock => ({ entryId: `e${i}`, role: i % 2 ? "assistant" : "user", timestamp: 0, markdown: md });
+	const data: DataSource = {
+		listSessions: async () => sessions,
+		loadTree: async () => [
+			treeRow(0, true, { text: "root" }),
+			treeRow(1, false, { parentId: "e0", text: "north" }),
+			treeRow(2, false, { parentId: "e1", text: "hidden gem" }),
+			treeRow(3, true, { parentId: "e0", text: "south" }),
+			treeRow(4, true, { parentId: "e3", isLeaf: true, text: "gem stone" }),
+		],
+		loadContent: async (_file, leaf) => {
+			contentCalls.push(leaf);
+			return leaf === "e1" || leaf === "e2"
+				? [b(0, "root"), b(1, "north"), b(2, "hidden gem")]
+				: [b(0, "first message\n\nneedle here"), b(3, "south text"), b(4, "delta needle end")];
+		},
+	};
+	const panel = new LazyPanel({ theme: opts.theme ?? fakeTheme, data, getHeight: () => opts.height ?? 30, requestRender: () => {}, onClose: () => {} });
+	// 160 columns: the left column is 40 wide, wide enough for "2/2 matches" next to "[1] SESSIONS"
+	return {
+		panel,
+		contentCalls,
+		text: (width = 160) => panel.render(width).map((l) => stripTerminalSequences(l)),
+		raw: (width = 160) => panel.render(width),
+	};
+}
+
+test("/ in SESSIONS jumps live to the first match from the cursor, Enter keeps it, n / N wrap, Esc in the bar restores the cursor", async () => {
+	const h = makeSearchPanel();
+	await h.panel.load();
+	const header = () => h.text().find((l) => l.includes("[1] SESSIONS"))!;
+	const footer = () => h.text().at(-1)!;
+	h.panel.handleInput("j");
+	await settle();
+	assert.equal(h.panel.state.cursor.sessions, 1);
+
+	// typing jumps at once: "film" is in FilmRecall (row 0) and "film review" (row 3); the first match at / after row 1 is row 3
+	h.panel.handleInput("/");
+	for (const ch of "film") h.panel.handleInput(ch);
+	assert.deepEqual(h.panel.state.search.sessions?.matches, [0, 3]);
+	assert.equal(h.panel.state.cursor.sessions, 3);
+	assert.ok(header().includes("2/2 matches"), header());
+	// no match: back to where / was pressed, the header says so
+	h.panel.handleInput("z");
+	assert.equal(h.panel.state.cursor.sessions, 1);
+	assert.ok(header().includes("no matches"), header());
+	h.panel.handleInput("\x7f");
+	assert.equal(h.panel.state.cursor.sessions, 3);
+
+	// Enter: the query stays, the footer shows it with the position and the n / N / Esc keys
+	h.panel.handleInput("\r");
+	assert.equal(h.panel.state.mode, "normal");
+	assert.equal(h.panel.state.search.sessions?.query, "film");
+	assert.ok(/搜索: film\s+2\/2\s+n next\s+N prev\s+Esc clear/.test(footer()), footer());
+	// n wraps to the first match, N back to the last; n is "next match" here although the pane binds it to new session
+	h.panel.handleInput("n");
+	assert.equal(h.panel.state.cursor.sessions, 0);
+	assert.ok(header().includes("1/2 matches"), header());
+	h.panel.handleInput("N");
+	assert.equal(h.panel.state.cursor.sessions, 3);
+	h.panel.handleInput("N");
+	assert.equal(h.panel.state.cursor.sessions, 0);
+	// off the matches the header only counts them; n finds the next one after the cursor
+	h.panel.handleInput("j");
+	assert.equal(h.panel.state.cursor.sessions, 1);
+	assert.ok(header().includes("2 matches") && !header().includes("/2"), header());
+	assert.ok(/搜索: film\s+2\s+n next/.test(footer()), footer());
+	h.panel.handleInput("n");
+	assert.equal(h.panel.state.cursor.sessions, 3);
+	await settle();
+
+	// Esc in normal mode ends the search: header and footer go back to normal, n is new session again
+	h.panel.handleInput("\x1b");
+	assert.equal(h.panel.state.search.sessions, undefined);
+	assert.ok(header().includes("4/4 · Current"), header());
+	assert.equal(footer().includes("搜索"), false, footer());
+	h.panel.handleInput("n");
+	assert.ok(footer().includes("session-new: not implemented yet"), footer());
+	assert.equal(h.panel.state.cursor.sessions, 3);
+
+	// Esc in the bar: the query is dropped and the cursor goes back to where / was pressed
+	h.panel.handleInput("/");
+	for (const ch of "hello") h.panel.handleInput(ch);
+	assert.equal(h.panel.state.cursor.sessions, 1);
+	h.panel.handleInput("\x1b");
+	assert.equal(h.panel.state.mode, "normal");
+	assert.equal(h.panel.state.search.sessions, undefined);
+	assert.equal(h.panel.state.cursor.sessions, 3);
+	// an empty query on Enter means no search
+	h.panel.handleInput("/");
+	h.panel.handleInput("\r");
+	assert.equal(h.panel.state.search.sessions, undefined);
+	await settle();
+	h.panel.dispose();
+});
+
+test("SESSIONS search honours name: / model: / path: / after: / before: and paints the hits (current match inverse, cursor background kept)", async () => {
+	const h = makeSearchPanel({ theme: ansiTheme });
+	await h.panel.load();
+	const matches = (q: string) => {
+		h.panel.handleInput("/");
+		for (const ch of q) h.panel.handleInput(ch);
+		const m = [...(h.panel.state.search.sessions?.matches ?? [])];
+		h.panel.handleInput("\x1b");
+		return m;
+	};
+	assert.deepEqual(matches("model:opus"), [0, 3]);
+	assert.deepEqual(matches("name:recall"), [0, 2]);
+	assert.deepEqual(matches("path:docs"), [2]);
+	assert.deepEqual(matches("after:2026-09-12"), [1, 2]);
+	assert.deepEqual(matches("before:2026-09-12 film"), [0, 3]);
+	assert.deepEqual(matches("model:opus recall"), [0]);
+	assert.deepEqual(matches("tag:x film"), [0, 3], "tag: means nothing for sessions");
+	await settle();
+
+	// hits are painted on the matching rows only: "Film" on the cursor row (inverse), "film" on row 3 (underline)
+	h.panel.handleInput("/");
+	for (const ch of "film") h.panel.handleInput(ch);
+	h.panel.handleInput("\r");
+	assert.equal(h.panel.state.cursor.sessions, 0);
+	const raw = h.raw();
+	const current = raw.find((l) => stripTerminalSequences(l).includes("FilmRecall"))!;
+	assert.ok(current.includes("\x1b[7m\x1b[43mFilm\x1b[49m\x1b[27m"), current);
+	assert.ok(current.slice(current.indexOf("Film\x1b[49m")).includes("\x1b[44m"), `the selected background continues after the hit: ${current}`);
+	const other = raw.find((l) => stripTerminalSequences(l).includes("film review"))!;
+	assert.ok(other.includes("\x1b[4m\x1b[43mfilm\x1b[49m\x1b[24m"), other);
+	const miss = raw.find((l) => stripTerminalSequences(l).includes("hello world"))!;
+	assert.equal(miss.includes("\x1b[43m"), false, miss);
+	for (const l of raw) assert.equal(visibleWidth(l), 160);
+	await settle();
+	h.panel.dispose();
+});
+
+test("/ in TREE finds rows inside folded branches, unfolds them on jump and the content pane follows; Esc in the bar restores the folds", async () => {
+	const h = makeSearchPanel();
+	await h.panel.load();
+	const header = () => h.text().find((l) => l.includes("[2] TREE"))!;
+	const folded = () => [...h.panel.state.treeFolded].sort();
+	h.panel.handleInput("2");
+	assert.equal(h.panel.state.cursor.tree, 3, "cursor on the active leaf e4");
+	assert.deepEqual(folded(), ["e1"]);
+
+	// "gem" is in e2 (hidden inside the folded e1) and e4; from e4 the first match is e4 itself
+	h.panel.handleInput("/");
+	for (const ch of "gem") h.panel.handleInput(ch);
+	assert.deepEqual(h.panel.state.search.tree?.matches, [2, 4]);
+	assert.equal(h.panel.state.cursor.tree, 3);
+	assert.deepEqual(folded(), ["e1"]);
+	assert.ok(header().includes("2/2 matches"), header());
+	// "gem hidden" only matches e2: the branch opens, the cursor lands on it and the content pane shows that branch
+	for (const ch of " hidden") h.panel.handleInput(ch);
+	await flush();
+	assert.deepEqual(folded(), []);
+	assert.equal(h.panel.state.cursor.tree, 2);
+	assert.equal(h.panel.state.contentHighlight, "e2");
+	assert.ok(header().includes("1/1 matches"), header());
+	assert.ok(h.text().some((l) => l.includes("› ") && l.includes("user: hidden gem")), h.text().join("\n"));
+	// Esc in the bar: folds and cursor as before /
+	h.panel.handleInput("\x1b");
+	await flush();
+	assert.deepEqual(folded(), ["e1"]);
+	assert.equal(h.panel.state.cursor.tree, 3);
+	assert.equal(h.panel.state.contentHighlight, "e4");
+	// (compared rather than asserted: an assert on the property would narrow it to undefined for the rest of the test)
+	assert.equal(h.panel.state.search.tree === undefined, true, "the search is gone");
+
+	// Enter keeps the search; n wraps from e4 to e2 (unfolding e1), N goes back to e4 (visible row 4 now)
+	h.panel.handleInput("/");
+	for (const ch of "gem") h.panel.handleInput(ch);
+	h.panel.handleInput("\r");
+	assert.equal(h.panel.state.mode, "normal");
+	h.panel.handleInput("n");
+	await flush();
+	assert.deepEqual(folded(), []);
+	assert.equal(h.panel.state.cursor.tree, 2);
+	assert.equal(h.panel.state.contentHighlight, "e2");
+	assert.ok(header().includes("1/2 matches"), header());
+	h.panel.handleInput("N");
+	await flush();
+	assert.equal(h.panel.state.cursor.tree, 4);
+	assert.equal(h.panel.state.contentHighlight, "e4");
+	assert.ok(header().includes("2/2 matches"), header());
+	// / again edits the same query; tag: only looks at labels and nothing here has one
+	h.panel.handleInput("/");
+	for (const ch of " tag:x") h.panel.handleInput(ch);
+	assert.equal(h.panel.state.search.tree?.query, "gem tag:x");
+	assert.ok(header().includes("no matches"), header());
+	assert.equal(h.panel.state.cursor.tree, 4);
+	h.panel.handleInput("\x1b");
+	h.panel.dispose();
+});
+
+test("/ in CONTENT matches the rendered text lines (not the box headers), scrolls the hit to the top, n / N step and wrap", async () => {
+	const h = makeSearchPanel({ height: 12, theme: ansiTheme });
+	await h.panel.load();
+	h.text();
+	const header = () => h.text().find((l) => l.includes("[3] CONTENT"))!;
+	h.panel.handleInput("3");
+	// the pane starts scrolled to the active leaf; search from the top
+	h.panel.handleInput("g");
+	h.panel.handleInput("g");
+	assert.equal(h.panel.state.cursor.content, 0);
+	h.panel.handleInput("/");
+	for (const ch of "needle") h.panel.handleInput(ch);
+	const matches = [...h.panel.state.search.content!.matches];
+	assert.equal(matches.length, 2, `two text lines contain needle: ${matches}`);
+	assert.equal(h.panel.state.cursor.content, matches[0], "the first hit is scrolled to the top");
+	assert.ok(header().includes("1/2 matches"), header());
+	const hit = h.raw().find((l) => stripTerminalSequences(l).includes("needle here"))!;
+	assert.ok(hit.includes("\x1b[7m\x1b[43mneedle\x1b[49m\x1b[27m"), `the current hit is painted: ${hit}`);
+	h.panel.handleInput("\r");
+	assert.equal(h.panel.state.mode, "normal");
+	h.panel.handleInput("n");
+	assert.ok(header().includes("2/2 matches"), header());
+	assert.ok(h.panel.state.cursor.content > matches[0]!, "scrolled towards the second hit (clamped to the last page)");
+	h.panel.handleInput("n");
+	assert.equal(h.panel.state.cursor.content, matches[0], "wrapped to the first hit");
+	h.panel.handleInput("N");
+	assert.ok(header().includes("2/2 matches"), header());
+	h.panel.handleInput("N");
+	assert.ok(header().includes("1/2 matches"), header());
+	// the YOU / ASSISTANT headers and the qualifiers are not searched here
+	h.panel.handleInput("\x1b");
+	assert.equal(h.panel.state.search.content, undefined);
+	h.panel.handleInput("/");
+	for (const ch of "you") h.panel.handleInput(ch);
+	assert.ok(header().includes("no matches"), header());
+	for (const ch of " model:opus") h.panel.handleInput(ch);
+	assert.ok(header().includes("no matches"), header());
+	h.panel.handleInput("\x1b");
+	assert.ok(header().includes("3 messages"), header());
+	for (const l of h.raw()) assert.equal(visibleWidth(l), 160);
+	h.panel.dispose();
+});
+
+test("each pane keeps its own query: switching panes shows the other pane's hints, coming back resumes n / N", async () => {
+	const h = makeSearchPanel();
+	await h.panel.load();
+	const footer = () => h.text().at(-1)!;
+	h.panel.handleInput("/");
+	for (const ch of "film") h.panel.handleInput(ch);
+	h.panel.handleInput("\r");
+	assert.equal(h.panel.state.cursor.sessions, 0);
+	h.panel.handleInput("2");
+	assert.ok(!footer().includes("搜索") && footer().includes("a Tree"), footer());
+	// the sessions header keeps counting while another pane is focused; n here says there is no tree search
+	assert.ok(h.text().find((l) => l.includes("[1] SESSIONS"))!.includes("1/2 matches"));
+	h.panel.handleInput("n");
+	assert.ok(footer().includes("no active search"), footer());
+	h.panel.handleInput("/");
+	for (const ch of "south") h.panel.handleInput(ch);
+	h.panel.handleInput("\r");
+	assert.equal(h.panel.state.search.tree?.query, "south");
+	h.panel.handleInput("1");
+	assert.equal(h.panel.state.search.sessions?.query, "film");
+	assert.ok(footer().includes("搜索: film"), footer());
+	h.panel.handleInput("n");
+	assert.equal(h.panel.state.cursor.sessions, 3);
+	await settle();
+	// the tree of the new session was searched again with the tree pane's query
+	assert.deepEqual(h.panel.state.search.tree?.matches, [3]);
+	// Esc only ends the focused pane's search
+	h.panel.handleInput("\x1b");
+	assert.equal(h.panel.state.search.sessions, undefined);
+	assert.equal(h.panel.state.search.tree?.query, "south");
+	h.panel.dispose();
+});

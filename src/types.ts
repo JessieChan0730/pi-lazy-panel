@@ -142,7 +142,7 @@ export interface SessionInfo {
 
 /**
  * Parsed search query. Supports GitHub-style qualifiers:
- *   name:foo model:opus path:bar tag:scan after:2026-09-01 before:2026-09-20
+ *   name:foo model:opus path:bar tag:scan role:user after:2026-09-01 before:2026-09-20
  * plus free text.
  */
 export interface SearchQuery {
@@ -151,8 +151,47 @@ export interface SearchQuery {
 	model?: string;
 	path?: string;
 	tag?: string;
+	/** Tree rows: the role (`user`, `assistant`, `system`, `tool`) must contain it. */
+	role?: string;
 	after?: Date;
 	before?: Date;
+}
+
+/**
+ * The `/` search active in one pane (lazygit-style: the rows are not filtered,
+ * the cursor jumps between the matches with n / N). Kept per pane, so switching
+ * panes does not lose a query.
+ *
+ * 每个面板各自的搜索状态：列表不过滤，只在匹配之间跳转。
+ */
+export interface PaneSearch {
+	/** Raw query as typed after `/`. */
+	query: string;
+	/**
+	 * Matches, ascending: row indices for the list panes (the sessions list; the
+	 * whole tree, folded rows included) and body-line indices of the rendered
+	 * layout for the content pane.
+	 */
+	matches: number[];
+	/** Position in `matches` of the current match (the content pane's scroll target), -1 when there is none. */
+	current: number;
+}
+
+/**
+ * What a pane paints for the search active in it: which of the rows / lines it
+ * renders match, which one is the current match, the terms to highlight and
+ * the counts for its header ("2/7 matches").
+ */
+export interface SearchView {
+	/** Terms to highlight on matching rows (free-text tokens and qualifier values). */
+	terms: string[];
+	/** Indices, in what the pane renders, of the matching rows (list panes) or body lines (content pane). */
+	matches: ReadonlySet<number>;
+	/** Index of the current match, undefined when the cursor is not on one. */
+	current: number | undefined;
+	/** 1-based position of the current match among the matches, 0 when there is none. */
+	position: number;
+	total: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -209,9 +248,9 @@ export type ActionId =
 	| "tree-filter-all"
 	| "tree-dialog-close";
 // content pane is read-only and only uses the shared navigation actions
-// (move-down / move-up / go-top / go-bottom), see docs/design.md.
-// Tree filters (d/t/u/l/a) and search live in the tree dialog (`tree-open`),
-// not in the small tree pane.
+// (move-down / move-up / go-top / go-bottom) plus the global search, see docs/design.md.
+// Tree filters (d/t/u/l/a) live in the tree dialog (`tree-open`), which also has
+// its own live-filtering search row; `/` in the panes jumps between matches.
 
 /**
  * A single key chord in pi-tui key syntax, e.g. "j", "ctrl+d", "tab".

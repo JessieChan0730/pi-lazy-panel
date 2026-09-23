@@ -8,19 +8,25 @@
  * body lines once (the panel caches it), and `renderContentPane` shows the
  * window starting at `scroll`. One block can be highlighted (the node selected
  * in the tree pane): its header gets a `›` marker and the selected background.
+ * A `/` search matches the rendered text lines (`ContentLayout.searchable`
+ * marks them; box borders and headers are skipped); the hits on the visible
+ * lines are painted over the cached lines at render time, nothing is re-rendered.
  */
 
 import { getMarkdownTheme, type Theme } from "@earendil-works/pi-coding-agent";
 import { Markdown } from "@earendil-works/pi-tui";
-import type { ContentBlock } from "../../types.ts";
+import type { ContentBlock, SearchView } from "../../types.ts";
 import { formatTime } from "../../utils/format.ts";
-import { fit, frame } from "../frame.ts";
+import { fit, frame, metaBudget } from "../frame.ts";
+import { highlightLine, matchStyle, searchMeta } from "../search-highlight.ts";
 
 /** Body lines of the whole conversation plus where each block starts. */
 export interface ContentLayout {
 	lines: string[];
 	/** entryId → index of the block's header line in `lines`. */
 	starts: Map<string, number>;
+	/** Per line: true for rendered message text (what `/` searches), false for box borders, headers and gaps. */
+	searchable: boolean[];
 }
 
 export interface ContentPaneProps {
@@ -31,6 +37,8 @@ export interface ContentPaneProps {
 	scroll: number;
 	/** entryId of the block to highlight (the tree cursor), if any. */
 	highlightEntryId?: string;
+	/** Active `/` search of this pane (indices into the layout lines): hits on the visible lines are painted, the header shows the count. */
+	search?: SearchView;
 	focused: boolean;
 	title?: string;
 	emptyMessage?: string;
@@ -40,11 +48,16 @@ export interface ContentPaneProps {
 /** Layout all blocks into body lines of exactly `inner` width. */
 export function layoutContent(blocks: ContentBlock[], inner: number, theme: Theme, highlightEntryId?: string): ContentLayout {
 	const lines: string[] = [];
+	const searchable: boolean[] = [];
 	const starts = new Map<string, number>();
 	const mdTheme = getMarkdownTheme();
 	// One column of margin on each side of every message box.
 	const boxW = Math.max(10, inner - 2);
 	const textW = boxW - 4; // "│ " + " │"
+	const push = (line: string, text: boolean) => {
+		lines.push(line);
+		searchable.push(text);
+	};
 
 	for (const block of blocks) {
 		const isUser = block.role === "user";
@@ -58,7 +71,7 @@ export function layoutContent(blocks: ContentBlock[], inner: number, theme: Them
 		const fill = Math.max(0, boxW - 3 - head.length);
 		const headerRaw = borderStyle("┌─") + headStyle(head) + borderStyle("─".repeat(fill) + "┐");
 		starts.set(block.entryId, lines.length);
-		lines.push(isHighlight ? theme.bg("selectedBg", fit(theme.bold(theme.fg("accent", "›")) + headerRaw, inner)) : " " + headerRaw);
+		push(isHighlight ? theme.bg("selectedBg", fit(theme.bold(theme.fg("accent", "›")) + headerRaw, inner)) : " " + headerRaw, false);
 
 		const md = new Markdown(block.markdown, 0, 0, mdTheme);
 		let rendered: string[];
@@ -69,12 +82,12 @@ export function layoutContent(blocks: ContentBlock[], inner: number, theme: Them
 		}
 		if (rendered.length === 0) rendered = [""];
 		for (const raw of rendered) {
-			lines.push(" " + borderStyle("│") + " " + fit(raw, textW) + " " + borderStyle("│"));
+			push(" " + borderStyle("│") + " " + fit(raw, textW) + " " + borderStyle("│"), true);
 		}
-		lines.push(" " + borderStyle(`└${"─".repeat(boxW - 2)}┘`));
-		lines.push("");
+		push(" " + borderStyle(`└${"─".repeat(boxW - 2)}┘`), false);
+		push("", false);
 	}
-	return { lines, starts };
+	return { lines, starts, searchable };
 }
 
 /** Largest valid scroll offset for `total` lines in a viewport of `visible` lines. */
@@ -93,12 +106,21 @@ export function renderContentPane(p: ContentPaneProps, width: number, height: nu
 		const all = (p.layout ?? layoutContent(p.blocks, inner, theme, p.highlightEntryId)).lines;
 		const start = Math.min(Math.max(0, p.scroll), maxScroll(all.length, visible));
 		body = all.slice(start, start + visible);
+		// 搜索命中：只给窗口里的命中行叠加高亮，缓存的排版结果本身不动。
+		const search = p.search;
+		if (search && search.total > 0) {
+			body = body.map((line, k) => {
+				const index = start + k;
+				return search.matches.has(index) ? highlightLine(line, search.terms, matchStyle(theme, index === search.current)) : line;
+			});
+		}
 	}
-	const meta = p.blocks.length ? `${p.blocks.length} messages` : "";
+	const title = p.title ?? "CONTENT";
+	const meta = p.search ? searchMeta(p.search.position, p.search.total, metaBudget(width, title)) : p.blocks.length ? `${p.blocks.length} messages` : "";
 	return frame(body, {
 		width,
 		height,
-		title: p.title ?? "CONTENT",
+		title,
 		meta,
 		border: (s) => theme.fg(p.focused ? "borderAccent" : "border", s),
 		titleStyle: (s) => (p.focused ? theme.bold(theme.fg("accent", s)) : theme.fg("muted", s)),

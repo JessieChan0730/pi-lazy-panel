@@ -20,14 +20,17 @@
  * the panel hides the folded descendants and passes the outline prefixes; the
  * full tree with pi-style guide lines lives in the tree dialog (`a`,
  * ../widgets/tree-dialog.ts). The cursor is highlighted, nodes off the active
- * branch are dimmed.
+ * branch are dimmed. While a `/` search is active in the pane the matching
+ * rows get their hits painted (see ../search-highlight.ts) and the header
+ * counts them; folded matches are unfolded by the panel when jumped to.
  */
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import type { TreeFilter, TreeRow } from "../../types.ts";
+import type { SearchView, TreeFilter, TreeRow } from "../../types.ts";
 import { formatTime } from "../../utils/format.ts";
 import { fit, frame, metaBudget } from "../frame.ts";
+import { highlightLine, matchStyle, type RowHighlight, searchMeta } from "../search-highlight.ts";
 import { type OutlinePrefix, treeOutline } from "../tree-outline.ts";
 import { scrollOffset } from "./sessions-pane.ts";
 
@@ -40,6 +43,8 @@ export interface TreePaneProps {
 	focused: boolean;
 	/** Active tree filter (set in the tree dialog); shown in the header when it is not the default. */
 	filter?: TreeFilter;
+	/** Active `/` search of this pane (indices into `rows`): matching rows are highlighted, the header shows the count. */
+	search?: SearchView;
 	/** Shown when no session is selected / loading. */
 	emptyMessage?: string;
 	/** Frame title; the panel passes "[2] TREE" so the jump key is visible. */
@@ -62,12 +67,15 @@ export function renderTreePane(p: TreePaneProps, width: number, height: number):
 		const first = scrollOffset(p.cursor, p.rows.length, visible);
 		for (let i = first; i < Math.min(p.rows.length, first + visible); i++) {
 			const row = p.rows[i]!;
-			body.push(renderTreeRow(row, styleOutline(outline.get(row.entryId) ?? NO_PREFIX, theme), inner, i === p.cursor, theme));
+			const search = p.search;
+			const highlight = search?.matches.has(i) ? { terms: search.terms, current: i === search.current } : undefined;
+			body.push(renderTreeRow(row, styleOutline(outline.get(row.entryId) ?? NO_PREFIX, theme), inner, i === p.cursor, theme, highlight));
 		}
 	}
 
 	const title = p.title ?? "TREE";
-	const meta = treeMeta(p.rows.length, p.cursor, p.filter ?? "default", metaBudget(width, title));
+	const budget = metaBudget(width, title);
+	const meta = p.search ? searchMeta(p.search.position, p.search.total, budget) : treeMeta(p.rows.length, p.cursor, p.filter ?? "default", budget);
 	return frame(body, {
 		width,
 		height,
@@ -101,9 +109,10 @@ function styleOutline(prefix: OutlinePrefix, theme: Theme): string {
  * styled) outline or guide-line prefix, `• ` on the active path, `[label]`,
  * time, `role: ` (omitted for system rows whose text already is a
  * `[system]`-style tag) and the text truncated to what is left. Shared with
- * the tree dialog.
+ * the tree dialog. With `highlight` (a row matching the pane's search) the
+ * terms are painted on top of the finished line.
  */
-export function renderTreeRow(row: TreeRow, prefix: string, inner: number, isCursor: boolean, theme: Theme): string {
+export function renderTreeRow(row: TreeRow, prefix: string, inner: number, isCursor: boolean, theme: Theme, highlight?: RowHighlight): string {
 	const marker = isCursor ? "› " : "  ";
 	// 和 pi 一样，活动路径上的节点在文字前加 `• `。
 	const path = row.onActiveBranch ? "• " : "";
@@ -132,5 +141,7 @@ export function renderTreeRow(row: TreeRow, prefix: string, inner: number, isCur
 		theme.fg("dim", time) +
 		branchStyle(roleStyle(role)) +
 		textStyle(text);
-	return isCursor ? theme.bg("selectedBg", fit(line, inner)) : fit(line, inner);
+	const out = isCursor ? theme.bg("selectedBg", fit(line, inner)) : fit(line, inner);
+	// 搜索命中：整行画完后再按列把关键词加上高亮，前后的颜色和光标背景都保留。
+	return highlight ? highlightLine(out, highlight.terms, matchStyle(theme, highlight.current)) : out;
 }

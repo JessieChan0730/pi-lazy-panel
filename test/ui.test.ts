@@ -22,6 +22,7 @@ import type { TreeRow } from "../src/types.ts";
 import { fit, FRAME_DIVIDER, frame, metaBudget, overlayCentered, sideBySide } from "../src/ui/frame.ts";
 import { scrollOffset, sessionsMeta } from "../src/ui/panes/sessions-pane.ts";
 import { renderTreePane, treeMeta } from "../src/ui/panes/tree-pane.ts";
+import { highlightLine, searchMeta } from "../src/ui/search-highlight.ts";
 import { treePrefixes } from "../src/ui/tree-lines.ts";
 import { ELLIPSIS, MARK_FOLDED, MARK_LEAF, MARK_OPEN, MAX_DEPTH, treeOutline } from "../src/ui/tree-outline.ts";
 import { TREE_SEARCH_HINTS, TreeDialog } from "../src/ui/widgets/tree-dialog.ts";
@@ -437,4 +438,39 @@ test("frame draws FRAME_DIVIDER body lines as ├──┤", () => {
 	assert.equal(out[2], "├────┤");
 	assert.equal(out[1], "│a   │");
 	for (const l of out) assert.equal(visibleWidth(l), 6);
+});
+
+test("highlightLine paints the terms by column, keeps the width and the styles around the hit (trailing resets included)", () => {
+	const style = (s: string) => `\x1b[43m${s}\x1b[49m`;
+	// plain text
+	assert.equal(highlightLine("say hello world", ["hello"], style), "say \x1b[43mhello\x1b[49m world");
+	// inside a coloured, background-filled cursor row the colours continue after the hit and the closing resets survive
+	const row = "\x1b[44m\x1b[31mhello world\x1b[39m\x1b[49m";
+	const out = highlightLine(row, ["wor"], style);
+	assert.equal(stripTerminalSequences(out), "hello world");
+	assert.ok(out.startsWith("\x1b[44m\x1b[31mhello "), out);
+	assert.ok(out.includes("\x1b[43mwor\x1b[49m"), out);
+	assert.ok(out.endsWith("\x1b[39m\x1b[49m"), out);
+	assert.ok(out.slice(out.indexOf("wor\x1b[49m") + 8).startsWith("\x1b[44m\x1b[31mld"), `the part after the hit re-establishes the row's codes: ${out}`);
+	// wide characters: columns are counted, not code units
+	const cjk = highlightLine("中文 测试 end", ["测试"], style);
+	assert.equal(cjk, "中文 \x1b[43m测试\x1b[49m end");
+	assert.equal(visibleWidth(cjk), visibleWidth("中文 测试 end"));
+	// a hit spanning existing escape codes keeps them and styles only the text runs
+	const mixed = highlightLine("ab\x1b[1mcd\x1b[22mef", ["bcde"], style);
+	assert.equal(stripTerminalSequences(mixed), "abcdef");
+	assert.ok(mixed.includes("\x1b[43mb\x1b[49m\x1b[1m\x1b[43mcd\x1b[49m\x1b[22m\x1b[43me\x1b[49m"), mixed);
+	// several terms, case-insensitive; nothing to paint returns the line as-is
+	assert.equal(highlightLine("Foo bar", ["foo", "AR"], style), "\x1b[43mFoo\x1b[49m b\x1b[43mar\x1b[49m");
+	assert.equal(highlightLine("abc", ["zzz"], style), "abc");
+	assert.equal(highlightLine("abc", [], style), "abc");
+});
+
+test("searchMeta: position / count, count alone off the matches, no matches; shortened to the budget", () => {
+	assert.equal(searchMeta(2, 7, 40), "2/7 matches");
+	assert.equal(searchMeta(2, 7, 5), "2/7");
+	assert.equal(searchMeta(0, 7, 40), "7 matches");
+	assert.equal(searchMeta(0, 7, 3), "7");
+	assert.equal(searchMeta(0, 0, 40), "no matches");
+	assert.equal(searchMeta(0, 0, 4), "0/0");
 });

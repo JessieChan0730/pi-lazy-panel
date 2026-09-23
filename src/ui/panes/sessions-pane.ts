@@ -6,14 +6,17 @@
  *   › FilmRecall                       09-20 22:18
  *     opus-4 · ~/code/myself/FilmRecall · 128 msgs
  *
- * Static for now: the cursor row is highlighted, but key handling is a later task.
+ * The cursor row is highlighted. While a `/` search is active in the pane the
+ * matching rows get their hits painted (see ../search-highlight.ts) and the
+ * header counts them ("2/7 matches"); the list itself is never filtered.
  */
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import type { ListScope, SessionRow, SessionSortMode } from "../../types.ts";
+import type { ListScope, SearchView, SessionRow, SessionSortMode } from "../../types.ts";
 import { formatShortDate, shortenPath } from "../../utils/format.ts";
 import { fit, frame, metaBudget } from "../frame.ts";
+import { highlightLine, matchStyle, searchMeta } from "../search-highlight.ts";
 
 export interface SessionsPaneProps {
 	rows: SessionRow[];
@@ -22,6 +25,8 @@ export interface SessionsPaneProps {
 	scope: ListScope;
 	sort: SessionSortMode;
 	selected: Set<string>;
+	/** Active `/` search of this pane: matching rows are highlighted, the header shows the count. */
+	search?: SearchView;
 	/** Frame title; the panel passes "[1] SESSIONS" so the jump key is visible. */
 	title?: string;
 	theme: Theme;
@@ -42,12 +47,21 @@ export function renderSessionsPane(p: SessionsPaneProps, width: number, height: 
 		for (let i = first; i < Math.min(p.rows.length, first + visibleRows); i++) {
 			const row = p.rows[i]!;
 			const isCursor = i === p.cursor;
-			body.push(...renderRow(row, inner, isCursor, p));
+			const lines = renderRow(row, inner, isCursor, p);
+			// 搜索命中的行：两行里出现的关键词都加高亮，光标所在的当前匹配再加强调。
+			const search = p.search;
+			if (search?.matches.has(i)) {
+				const style = matchStyle(theme, i === search.current);
+				body.push(...lines.map((l) => highlightLine(l, search.terms, style)));
+			} else {
+				body.push(...lines);
+			}
 		}
 	}
 
 	const title = p.title ?? "SESSIONS";
-	const meta = sessionsMeta(p.rows.length, p.cursor, p.scope, p.sort, metaBudget(width, title));
+	const budget = metaBudget(width, title);
+	const meta = p.search ? searchMeta(p.search.position, p.search.total, budget) : sessionsMeta(p.rows.length, p.cursor, p.scope, p.sort, budget);
 	return frame(body, {
 		width,
 		height,

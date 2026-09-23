@@ -21,12 +21,18 @@
  *   - 按键 → resolveKeys(bindings, focus, pending) → ActionId → dispatch()
  *   - 支持多键序列（"gg"）：前缀匹配时把按键放进 pending 缓冲，等待下一键
  *   - h / l 前后切换焦点，1 / 2 / 3 直接跳到对应面板（面板标题显示 "[1] SESSIONS"）
- *   - C 切到 Current folder，A 切到 All（各自只做单向切换），? 帮助，/ 搜索栏
+ *   - C 切到 Current folder，A 切到 All（各自只做单向切换），? 帮助
+ *   - / 搜索（lazygit 风格，只作用于当前聚焦的面板，每个面板各记各的关键字）：底部出现搜索栏，输入时实时跳到
+ *     原位置之后的第一个匹配，Enter 保留关键字退出输入栏，Esc 清掉关键字并回到原位置；之后 n / N 在匹配之间
+ *     往下 / 往上跳并回绕（搜索生效期间 n / N 优先于面板自己的同键绑定），normal 模式下 Esc 清掉当前面板的搜索。
+ *     列表不过滤只跳转：SESSIONS 按 名称 / 预览（模型 / 路径只通过 model: / path:，after: / before: 限定时间），
+ *     TREE 按 label / 正文（tag: / role: 限定；目标藏在折叠段里时展开它的祖先，右侧跟着高亮），CONTENT 按渲染后的
+ *     正文行（只有自由文本，跳转把该行滚到面板顶部）。命中的文字高亮、当前匹配加强调，标题右侧显示 2/7 matches
  *   - j/k、gg/G：SESSIONS / TREE 移动光标，CONTENT 按行滚动；SESSIONS 里 J/K 滚动右侧内容
  *   - SESSIONS 光标变化 → 重新加载 TREE + CONTENT；TREE 光标变化 → CONTENT 高亮并滚到对应消息
  *   - TREE：y 复制节点全文（走注入的 ActionSource），T 居中弹出 Label 输入框（类似 lazygit 的 commit 弹窗），回车保存 / Esc 取消 / 空值清除；
  *     z 折叠 / 展开光标所在的分支段（旁支默认折叠、活动分支展开，段内按 z 折叠所在段并跳到段头）；
- *     a 打开完整树对话框（顶部搜索框、中间完整树、底部提示；和小面板共用折叠状态）。小面板不做 / 搜索和 d/t/u/l/a 过滤，按 / 只在 footer 提示去对话框
+ *     a 打开完整树对话框（顶部搜索框、中间完整树、底部提示；和小面板共用折叠状态）。小面板不做 d/t/u/l/a 过滤
  *   - 树对话框里的按键按 tree-dialog scope 解析（对话框自己的键 → tree 面板的键 → global）：j/k/gg/G 移动、y / T / Enter 和面板一样但作用于
  *     对话框光标、z 折叠、d/t/u/l/a 过滤（重新加载树，面板同步）、/ 聚焦顶部搜索框实时过滤（Esc 退出搜索框但关键字和结果保留、再按 / 接着改，
  *     Enter 在搜索框里没有含义；搜索期间折叠全部打开，删光关键字或关对话框后恢复）、列表上 q / Esc 关闭并让面板光标跳到对话框选中的行
@@ -40,10 +46,11 @@
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, Focusable } from "@earendil-works/pi-tui";
+import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import { type Binding, compileKeymap, labelsFor, labelsForFocus, matchesKeyId, resolveKeys } from "../config/keys.ts";
 import { DEFAULT_KEYMAP, FOCUS_ACTIONS, isDisabledIn, PANE_TITLES, TREE_DIALOG_FOOTER, TREE_DIALOG_HINT_TEXT } from "../config/keymap.ts";
 import { LEFT_COLUMN_RATIO, PANE_IDS, SUMMARIZING_STATUS, TREE_DIALOG_SCOPE } from "../constants.ts";
-import { matchTreeRow, parseSearchQuery } from "../data/search.ts";
+import { highlightTerms, matchesTokens, matchSessionRow, matchTreeRow, parseSearchQuery, searchTokens } from "../data/search.ts";
 import { findSessionIndex } from "../data/sessions.ts";
 import {
 	applyTreeFold,
@@ -62,7 +69,9 @@ import type {
 	ListScope,
 	PaneId,
 	PanelMode,
+	PaneSearch,
 	RestoreOptions,
+	SearchView,
 	SessionRow,
 	SessionSortMode,
 	TreeFilter,
@@ -99,10 +108,11 @@ export interface PanelState {
 	contentHighlight: string | undefined;
 	/** Sessions selected with <space> for batch operations. */
 	selectedSessionFiles: Set<string>;
-	/** Last submitted search query ("" = no active search). */
-	searchQuery: string;
-	/** Pane the active search applies to. */
-	searchPane: PaneId | undefined;
+	/**
+	 * Active `/` search per pane (absent = none). Kept per pane, so switching
+	 * panes keeps each pane's query; only the focused pane's search is acted on.
+	 */
+	search: Partial<Record<PaneId, PaneSearch>>;
 	scope: ListScope;
 	sort: SessionSortMode;
 	/** Tree filter, chosen with d/t/u/l/a in the tree dialog; the pane lists the same filtered tree. */
@@ -125,8 +135,7 @@ export function createInitialState(overrides: Partial<PanelState> = {}): PanelSt
 		cursor: { sessions: 0, tree: 0, content: 0 },
 		contentHighlight: undefined,
 		selectedSessionFiles: new Set(),
-		searchQuery: "",
-		searchPane: undefined,
+		search: {},
 		scope: "current-folder",
 		sort: "recent",
 		treeFilter: "default",
@@ -212,6 +221,19 @@ interface TreeTarget {
 	row: TreeRow;
 }
 
+/**
+ * Where the focused pane was when `/` opened the search bar: the live search
+ * looks for the first match from here, Esc in the bar comes back here.
+ */
+interface SearchOrigin {
+	pane: PaneId;
+	/** Cursor row of the sessions list, row index in the whole tree, or first visible content line. */
+	index: number;
+	/** Tree pane: the row itself and the folds as they were (jumping to a match unfolds branches). */
+	entryId?: string;
+	folded?: Set<string>;
+}
+
 export class LazyPanel implements Component, Focusable {
 	readonly state: PanelState;
 	readonly keymap: Keymap;
@@ -261,6 +283,10 @@ export class LazyPanel implements Component, Focusable {
 	private layoutCache: { blocks: ContentBlock[]; inner: number; highlight: string | undefined; layout: ContentLayout } | undefined;
 	/** Viewport of the content pane as of the last render, used to clamp scrolling. */
 	private contentView = { inner: 60, visible: 10 };
+	/** Matching body lines of the content pane, per layout and query (the layout changes with the width, so the matches follow it). */
+	private contentSearchCache: { layout: ContentLayout; query: string; matches: number[] } | undefined;
+	/** Set while the search bar is open (`mode === "search"`). */
+	private searchOrigin: SearchOrigin | undefined;
 
 	constructor(private readonly o: LazyPanelOptions) {
 		this.state = createInitialState(o.initialState);
@@ -273,7 +299,8 @@ export class LazyPanel implements Component, Focusable {
 			theme: o.theme,
 			onSubmit: (q) => this.submitSearch(q),
 			onCancel: () => this.cancelSearch(),
-			onChange: () => this.o.requestRender(),
+			// 每敲一个键就实时搜索（Enter / Esc 的回调先于这里触发，那时已经退出搜索模式）。
+			onChange: () => this.onSearchInput(),
 		});
 		this.inputDialog = new InputDialog({
 			theme: o.theme,
@@ -321,6 +348,8 @@ export class LazyPanel implements Component, Focusable {
 		} catch (err) {
 			this.setStatus(`failed to list sessions: ${(err as Error).message}`);
 		}
+		// 列表变了（首次加载、C / A 切范围）：SESSIONS 的搜索结果按新列表重算，关键字保留。
+		this.refreshSearch("sessions");
 		await this.loadSelectedSession();
 	}
 
@@ -395,6 +424,8 @@ export class LazyPanel implements Component, Focusable {
 		this.tree = rows;
 		this.state.treeFolded = folded;
 		this.refreshTreeView();
+		// 树换了（换会话、打标签、换过滤）：TREE 的搜索结果按新树重算。
+		this.refreshSearch("tree");
 	}
 
 	/** 折叠状态变了 / 树重新加载后：重新算可见行和大纲前缀（光标索引指向可见行）。 */
@@ -525,18 +556,28 @@ export class LazyPanel implements Component, Focusable {
 			return;
 		}
 
-		// Esc 优先：清掉半截序列或当前搜索结果。
+		// Esc 优先：清掉半截序列或当前面板的搜索结果。
 		if (matchesKeyId(data, "escape")) {
 			if (this.pending.length) {
 				this.clearPending();
 				return;
 			}
-			if (this.state.searchQuery) {
-				this.clearSearch();
+			if (this.state.search[this.state.focus]) {
+				this.clearSearch(this.state.focus);
 				return;
 			}
 			this.close();
 			return;
+		}
+
+		// 搜索生效期间 n / N（global 的 search-next / search-prev）优先于面板自己的同键绑定
+		// （SESSIONS 里 n 本来是 new session），和 lazygit 搜索模式里的 n / N 一致。
+		if (this.pending.length === 0 && this.state.search[this.state.focus]) {
+			const g = resolveKeys(this.bindings, "global", [data]);
+			if (g.kind === "action" && (g.action === "search-next" || g.action === "search-prev")) {
+				this.dispatch(g.action);
+				return;
+			}
 		}
 
 		const pressed = [...this.pending, data];
@@ -642,9 +683,10 @@ export class LazyPanel implements Component, Focusable {
 				this.openSearch();
 				return;
 			case "search-next":
+				this.stepSearch(1);
+				return;
 			case "search-prev":
-				// 匹配/跳转在后续任务实现；这里先提示当前状态。
-				this.setStatus(this.state.searchQuery ? `search: "${this.state.searchQuery}" (matching comes in a later task)` : "no active search — press / first");
+				this.stepSearch(-1);
 				return;
 			case "move-down":
 				this.moveCursor(1);
@@ -704,18 +746,27 @@ export class LazyPanel implements Component, Focusable {
 	/** gg/G and absolute moves; the index is clamped to the focused list. */
 	private moveCursorTo(index: number): void {
 		const pane = this.state.focus;
-		if (pane === "content") {
-			this.setContentScroll(index);
-			return;
-		}
-		const rows = pane === "sessions" ? this.sessions : this.visibleTree;
-		const next = clamp(index, 0, rows.length - 1);
-		if (next === this.state.cursor[pane]) return;
-		this.state.cursor[pane] = next;
+		if (pane === "content") this.setContentScroll(index);
+		else if (pane === "sessions") this.setSessionsCursor(index);
+		else this.setTreeCursor(index);
+	}
+
+	/** Move the sessions cursor (clamped) and reload TREE + CONTENT for the session it lands on. */
+	private setSessionsCursor(index: number): void {
+		const next = clamp(index, 0, Math.max(0, this.sessions.length - 1));
+		if (next === this.state.cursor.sessions) return;
+		this.state.cursor.sessions = next;
 		this.o.requestRender();
-		// 联动：会话变了要重新加载 tree/content；树节点变了右侧跟着高亮。
-		if (pane === "sessions") void this.scheduleSessionLoad();
-		else void this.syncContentToTree();
+		void this.scheduleSessionLoad();
+	}
+
+	/** Move the tree cursor (clamped, an index into the visible rows) and make the content pane follow. */
+	private setTreeCursor(index: number): void {
+		const next = clamp(index, 0, Math.max(0, this.visibleTree.length - 1));
+		if (next === this.state.cursor.tree) return;
+		this.state.cursor.tree = next;
+		this.o.requestRender();
+		void this.syncContentToTree();
 	}
 
 	private scrollContent(delta: number): void {
@@ -755,35 +806,260 @@ export class LazyPanel implements Component, Focusable {
 	}
 
 	// -----------------------------------------------------------------------
-	// Search mode
+	// Search (/, n, N): lazygit-style, per pane, jump instead of filter
 	// -----------------------------------------------------------------------
 
+	/** `/`: open the bar pre-filled with the pane's query (cursor at the end) and remember where the pane is. */
 	private openSearch(): void {
+		const pane = this.state.focus;
+		this.searchOrigin = this.snapshotOrigin(pane);
 		this.state.mode = "search";
-		this.searchBar.reset(this.state.searchQuery);
+		this.searchBar.reset(this.state.search[pane]?.query ?? "", true);
 		this.searchBar.focused = this._focused;
 		this.o.requestRender();
 	}
 
+	/** The focused pane's position as of `/`: the live search starts looking here and Esc comes back here. */
+	private snapshotOrigin(pane: PaneId): SearchOrigin {
+		if (pane === "tree") {
+			const row = this.visibleTree[this.state.cursor.tree];
+			// 树的匹配记的是整棵树的行号，所以原位置也换算成整棵树的行号；折叠状态一并记下。
+			const index = row ? this.tree.findIndex((r) => r.entryId === row.entryId) : 0;
+			return { pane, index: Math.max(0, index), ...(row ? { entryId: row.entryId } : {}), folded: new Set(this.state.treeFolded) };
+		}
+		return { pane, index: this.state.cursor[pane] };
+	}
+
+	/** Every keystroke in the bar: search live (Enter / Esc have already left search mode when their keystroke lands here). */
+	private onSearchInput(): void {
+		if (this.state.mode === "search" && this.searchOrigin) this.applyLiveSearch(this.searchBar.getValue().trim());
+		this.o.requestRender();
+	}
+
+	/**
+	 * Search `query` in the pane the bar was opened for and jump to the first
+	 * match at or after the origin (wrapping to the first one). Every change
+	 * starts over from the origin, like vim's incsearch: an empty query, or one
+	 * without matches, puts the pane back where it was.
+	 */
+	private applyLiveSearch(query: string): void {
+		const origin = this.searchOrigin;
+		if (!origin) return;
+		const pane = origin.pane;
+		if (this.state.search[pane]?.query === query) return;
+		if (!query) {
+			delete this.state.search[pane];
+			this.restoreOrigin(origin);
+			return;
+		}
+		const matches = this.findMatches(pane, query);
+		const search: PaneSearch = { query, matches, current: -1 };
+		this.state.search[pane] = search;
+		// 折叠先回到搜索前的样子，再为新的目标展开（上一次按键跳到的匹配可能展开了别的段）。
+		if (pane === "tree" && origin.folded) this.state.treeFolded = new Set(origin.folded);
+		const from = matches.findIndex((m) => m >= origin.index);
+		const first = from >= 0 ? from : matches.length ? 0 : -1;
+		if (first < 0) {
+			this.restoreOrigin(origin);
+			return;
+		}
+		search.current = first;
+		this.jumpToMatch(pane, matches[first]!);
+	}
+
+	/** Enter in the bar: keep the query (the live search already jumped) and hand the keys back to the pane. */
 	private submitSearch(query: string): void {
 		const q = query.trim();
+		// 一般情况下实时搜索已经跑过；直接回车（比如打开后没改预填的关键字）时补一次。
+		if (this.searchOrigin && this.state.search[this.searchOrigin.pane]?.query !== q) this.applyLiveSearch(q);
 		this.state.mode = "normal";
 		this.searchBar.focused = false;
-		this.state.searchQuery = q;
-		this.state.searchPane = q ? this.state.focus : undefined;
+		this.searchOrigin = undefined;
 		this.o.requestRender();
 	}
 
+	/** Esc in the bar: drop the query and put the pane back where `/` found it. */
 	private cancelSearch(): void {
+		const origin = this.searchOrigin;
 		this.state.mode = "normal";
 		this.searchBar.focused = false;
+		this.searchOrigin = undefined;
+		if (origin) {
+			delete this.state.search[origin.pane];
+			this.restoreOrigin(origin);
+		}
 		this.o.requestRender();
 	}
 
-	private clearSearch(): void {
-		this.state.searchQuery = "";
-		this.state.searchPane = undefined;
+	/** Esc in normal mode: end the pane's search, the cursor stays where it is. */
+	private clearSearch(pane: PaneId): void {
+		delete this.state.search[pane];
 		this.o.requestRender();
+	}
+
+	/** Put the pane back to where it was when `/` was pressed (folds included for the tree). */
+	private restoreOrigin(origin: SearchOrigin): void {
+		switch (origin.pane) {
+			case "sessions":
+				this.setSessionsCursor(origin.index);
+				return;
+			case "tree": {
+				if (origin.folded) this.state.treeFolded = new Set(origin.folded);
+				this.refreshTreeView();
+				const idx = origin.entryId ? this.visibleTree.findIndex((r) => r.entryId === origin.entryId) : -1;
+				this.placeTreeCursor(idx >= 0 ? idx : this.state.cursor.tree);
+				return;
+			}
+			case "content":
+				this.setContentScroll(origin.index);
+				return;
+		}
+	}
+
+	/** Put the tree cursor on visible row `index` and sync the content pane even if the index did not change (the rows under it may have). */
+	private placeTreeCursor(index: number): void {
+		this.state.cursor.tree = clamp(index, 0, Math.max(0, this.visibleTree.length - 1));
+		this.o.requestRender();
+		void this.syncContentToTree();
+	}
+
+	/** Matches of `query` in `pane`: row indices of the sessions list / the whole tree, or body lines of the content layout. */
+	private findMatches(pane: PaneId, query: string): number[] {
+		if (pane === "content") return this.contentMatches(query);
+		const parsed = parseSearchQuery(query);
+		if (pane === "sessions") return indicesWhere(this.sessions, (r) => matchSessionRow(r, parsed));
+		return indicesWhere(this.tree, (r) => matchTreeRow(r, parsed));
+	}
+
+	/**
+	 * Body lines of the current content layout matching `query` (free text only:
+	 * every token on the line, qualifiers mean nothing here). Cached per layout,
+	 * so a resize (which re-wraps the lines) recomputes them.
+	 */
+	private contentMatches(query: string): number[] {
+		const layout = this.contentLayout();
+		const c = this.contentSearchCache;
+		if (c && c.layout === layout && c.query === query) return c.matches;
+		const tokens = searchTokens(parseSearchQuery(query));
+		const matches = tokens.length
+			? indicesWhere(layout.lines, (line, i) => layout.searchable[i] === true && matchesTokens(stripTerminalSequences(line), tokens))
+			: [];
+		this.contentSearchCache = { layout, query, matches };
+		return matches;
+	}
+
+	/** Recompute a list pane's matches after its rows changed; the query stays. */
+	private refreshSearch(pane: "sessions" | "tree"): void {
+		const search = this.state.search[pane];
+		if (!search) return;
+		search.matches = this.findMatches(pane, search.query);
+		search.current = search.matches.length ? clamp(search.current, 0, search.matches.length - 1) : -1;
+	}
+
+	/** Up-to-date matches of a pane's search (the content pane's follow the layout). */
+	private matchesOf(pane: PaneId, search: PaneSearch): number[] {
+		if (pane === "content") {
+			search.matches = this.contentMatches(search.query);
+			search.current = search.matches.length ? clamp(search.current, 0, search.matches.length - 1) : -1;
+		}
+		return search.matches;
+	}
+
+	/** Row index in the whole tree of the pane's cursor row, -1 with no rows. */
+	private treeCursorIndex(): number {
+		const row = this.visibleTree[this.state.cursor.tree];
+		return row ? this.tree.findIndex((r) => r.entryId === row.entryId) : -1;
+	}
+
+	/**
+	 * n / N: the next / previous match of the focused pane's search, wrapping
+	 * around. The list panes count from the cursor (vim's n / N), the content
+	 * pane from the match it last jumped to (its scroll position cannot always
+	 * reach the match, so it is no cursor).
+	 */
+	private stepSearch(delta: 1 | -1): void {
+		const pane = this.state.focus;
+		const search = this.state.search[pane];
+		if (!search) {
+			this.setStatus("no active search — press / first");
+			return;
+		}
+		const matches = this.matchesOf(pane, search);
+		if (matches.length === 0) {
+			this.setStatus("no matches");
+			return;
+		}
+		let next: number;
+		if (pane === "content") {
+			next = search.current < 0 ? (delta > 0 ? 0 : matches.length - 1) : (search.current + delta + matches.length) % matches.length;
+		} else {
+			const pos = pane === "sessions" ? this.state.cursor.sessions : this.treeCursorIndex();
+			const i = delta > 0 ? matches.findIndex((m) => m > pos) : findLastIndex(matches, (m) => m < pos);
+			next = i >= 0 ? i : delta > 0 ? 0 : matches.length - 1;
+		}
+		search.current = next;
+		this.jumpToMatch(pane, matches[next]!);
+	}
+
+	/** Move the pane to match `index`: the sessions cursor, a tree row (unfolding what hides it), or the content line scrolled to the top. */
+	private jumpToMatch(pane: PaneId, index: number): void {
+		switch (pane) {
+			case "sessions":
+				this.setSessionsCursor(index);
+				return;
+			case "tree": {
+				const row = this.tree[index];
+				if (!row) return;
+				// 目标藏在折叠段里：展开它的祖先，右侧内容跟着高亮。
+				for (const id of foldedAncestors(this.tree, row.entryId, this.state.treeFolded)) this.state.treeFolded.delete(id);
+				this.refreshTreeView();
+				this.placeTreeCursor(this.visibleTree.findIndex((r) => r.entryId === row.entryId));
+				return;
+			}
+			case "content":
+				this.setContentScroll(index);
+				return;
+		}
+	}
+
+	/**
+	 * What a pane paints for its search: the matches as indices into what it
+	 * renders (the tree pane lists the folded tree, so its matches are mapped
+	 * onto the visible rows), the current match and the header counts. For the
+	 * list panes the current match is the one the cursor is on, if any.
+	 */
+	private searchView(pane: PaneId): SearchView | undefined {
+		const search = this.state.search[pane];
+		if (!search) return undefined;
+		const terms = highlightTerms(parseSearchQuery(search.query));
+		const matches = this.matchesOf(pane, search);
+		const total = matches.length;
+		if (pane === "sessions") {
+			const pos = matches.indexOf(this.state.cursor.sessions);
+			return { terms, matches: new Set(matches), current: pos >= 0 ? this.state.cursor.sessions : undefined, position: pos + 1, total };
+		}
+		if (pane === "tree") {
+			const matched = new Set(matches.map((i) => this.tree[i]?.entryId));
+			const visible = new Set<number>();
+			this.visibleTree.forEach((r, i) => {
+				if (matched.has(r.entryId)) visible.add(i);
+			});
+			const pos = matches.indexOf(this.treeCursorIndex());
+			return { terms, matches: visible, current: pos >= 0 ? this.state.cursor.tree : undefined, position: pos + 1, total };
+		}
+		const current = search.current >= 0 ? matches[search.current] : undefined;
+		return { terms, matches: new Set(matches), current, position: search.current + 1, total };
+	}
+
+	/** Footer hints while a search is active: the keys of `search-next` / `search-prev` (global) and Esc. */
+	private searchHints(): KeyHint[] {
+		const out: KeyHint[] = [];
+		const next = labelsFor(this.keymap, "global", "search-next")[0];
+		const prev = labelsFor(this.keymap, "global", "search-prev")[0];
+		if (next) out.push([next, "next"]);
+		if (prev) out.push([prev, "prev"]);
+		out.push(["Esc", "clear"]);
+		return out;
 	}
 
 	// -----------------------------------------------------------------------
@@ -1373,6 +1649,8 @@ export class LazyPanel implements Component, Focusable {
 		const treeH = bodyH - sessionsH;
 		const { theme } = this.o;
 		const selectedSession = this.sessions[this.state.cursor.sessions];
+		const sessionsSearch = this.searchView("sessions");
+		const treeSearch = this.searchView("tree");
 
 		const left = [
 			...renderSessionsPane(
@@ -1385,6 +1663,7 @@ export class LazyPanel implements Component, Focusable {
 					selected: this.state.selectedSessionFiles,
 					title: this.paneTitle("sessions"),
 					theme,
+					...(sessionsSearch ? { search: sessionsSearch } : {}),
 				},
 				leftW,
 				sessionsH,
@@ -1399,22 +1678,27 @@ export class LazyPanel implements Component, Focusable {
 					emptyMessage: this.emptyMessage(selectedSession),
 					title: this.paneTitle("tree"),
 					theme,
+					...(treeSearch ? { search: treeSearch } : {}),
 				},
 				leftW,
 				treeH,
 			),
 		];
 
+		// 先排版（缓存按宽度失效），CONTENT 的搜索结果跟着这份排版算。
+		const layout = this.contentLayoutFor(rightW - 2, bodyH - 2);
+		const contentSearch = this.searchView("content");
 		const right = renderContentPane(
 			{
 				blocks: this.content,
-				layout: this.contentLayoutFor(rightW - 2, bodyH - 2),
+				layout,
 				scroll: this.state.cursor.content,
 				focused: this.state.focus === "content",
 				emptyMessage: this.emptyMessage(selectedSession),
 				title: this.paneTitle("content"),
 				theme,
 				...(this.state.contentHighlight ? { highlightEntryId: this.state.contentHighlight } : {}),
+				...(contentSearch ? { search: contentSearch } : {}),
 			},
 			rightW,
 			bodyH,
@@ -1437,7 +1721,7 @@ export class LazyPanel implements Component, Focusable {
 		return [...lines, this.renderBottom(width)].map((l) => fit(l, width));
 	}
 
-	/** Footer row: search bar while typing, the open dialog's keys, search status after Enter, otherwise hints. */
+	/** Footer row: search bar while typing, the open dialog's keys, the search status of the focused pane, otherwise hints. */
 	private renderBottom(width: number): string {
 		if (this.state.mode === "search") {
 			return this.searchBar.render(width)[0] ?? "";
@@ -1456,8 +1740,14 @@ export class LazyPanel implements Component, Focusable {
 		if (dialog) {
 			return renderFooter({ ...footer, hints: dialog.hints, ...(status ? { status } : {}) }, width)[0]!;
 		}
-		if (this.state.searchQuery) {
-			return renderSearchStatus({ query: this.state.searchQuery, current: 0, total: 0, theme: this.o.theme }, width);
+		// 当前面板有搜索生效：显示关键字、位置 / 数量和 n / N / Esc 提示（别的面板的搜索不显示）。
+		const search = this.state.search[this.state.focus];
+		const view = search ? this.searchView(this.state.focus) : undefined;
+		if (search && view) {
+			return renderSearchStatus(
+				{ query: search.query, position: view.position, total: view.total, hints: this.searchHints(), theme: this.o.theme, ...(status ? { status } : {}) },
+				width,
+			);
 		}
 		return renderFooter({ ...footer, ...(status ? { status } : {}) }, width)[0]!;
 	}
@@ -1478,6 +1768,15 @@ export class LazyPanel implements Component, Focusable {
 function findLastIndex<T>(arr: T[], pred: (t: T) => boolean): number {
 	for (let i = arr.length - 1; i >= 0; i--) if (pred(arr[i]!)) return i;
 	return -1;
+}
+
+/** Indices of the elements `pred` accepts, ascending. */
+function indicesWhere<T>(arr: T[], pred: (t: T, i: number) => boolean): number[] {
+	const out: number[] = [];
+	arr.forEach((t, i) => {
+		if (pred(t, i)) out.push(i);
+	});
+	return out;
 }
 
 function clamp(n: number, min: number, max: number): number {
