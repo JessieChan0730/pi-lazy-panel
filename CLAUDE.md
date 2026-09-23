@@ -23,7 +23,7 @@
 也就是随着第一个面板，用户选择聚焦不同的resume,下面的第二个面板的tree也要不停变化显示不同的可还原的节点
 
 暂定的指定（后续可能会适配）：
-/compact，/settings，/changelog
+/compact，/settings，~~/changelog~~（已完成：全局快捷键 `@`）
 
 确定不会用到的指令：
 /login，/logout，/model，/thinking，/scoped-models
@@ -78,6 +78,7 @@ src/
 │       ├── export-dialog.ts  # e 导出：格式菜单（HTML / JSONL）+ 输出路径输入框的标题 / 选项 / 提示
 │       ├── import-dialog.ts  # I 导入：InputDialog 的预设（标题 / 说明 / 提示，输入 JSONL 路径）
 │       ├── help-overlay.ts   # ? 快捷键帮助：居中弹窗，内容来自最终 keymap
+│       ├── changelog-dialog.ts     # @ 查看 pi 的 changelog：几乎占满终端的弹窗，pi-tui Markdown 按宽度缓存，j/k/方向键/ctrl+d/u/g/G 滚动，Esc / q 关闭（再按 @ 由 app.ts 关闭）
 │       └── session-info-dialog.ts  # i 会话信息弹窗：一行一个字段（Name / Model / Messages / Tokens / Cost / Created / Updated / Path / ID），y 把 sessionInfoText 交给面板复制，Esc / q 关闭
 ├── actions/                  # 副作用层：每个函数包装一个 pi 命令/API，不弹窗，由调用方先确认
 │   ├── session-actions.ts    # resume / delete（先 trash 再 unlink，当前会话拒绝）/ rename / new / fork / clone / copy-reply / copyText；export（HTML 调正在运行的 pi 的 `pi --export`，JSONL 照搬 pi 的活动分支导出）/ import（复制进会话目录再 switchSession）/ share（`gh gist create --public=false`）。外部命令用 CommandSpec 注入，测试传 node 假脚本
@@ -87,9 +88,10 @@ src/
 │   ├── tree.ts               # getTree -> TreeRow[]（parentId 指向最近的"也是行"的祖先，含 isLeaf 标记；kind 分 message/tool/system/meta，和 pi /tree 一致）；applyTreeFilter（default 只藏 meta、no-tools 再藏工具结果，删行后重新挂父节点走 tree-fold.ts 的 filterTreeRows）；isEffectiveLeaf
 │   ├── tree-fold.ts          # 纯函数：filterTreeRows（删行并把幸存的行挂到最近保留的祖先上，过滤和搜索共用）；折叠（z）：foldableIds（段头 = 父节点有多个子节点且自己有后代；单根不可折叠）、defaultFolded（旁支默认折叠）、applyTreeFold（隐藏折叠段的后代）、foldTarget（z 作用的段头：自己或最近的可折叠祖先）；对话框用的 nearestListedIndex（行被藏掉时光标落到最近还列出来的祖先）、foldedAncestors（关对话框时要展开的段）
 │   ├── content.ts            # getBranch -> ContentBlock[]；loadSessionInfo；resolveContentLeaf
+│   ├── changelog.ts          # 读正在运行的 pi 安装目录（getPackageDir）的 CHANGELOG.md，照搬 pi 的 parseChangelog 按 ## [x.y.z] 切分；保持文件顺序（最新在上）
 │   └── search.ts             # 纯函数：parseSearchQuery 解析 name:/model:/path:/tag:/role:/after:/before: + 自由文本；普通词只搜 名称 / 标题 / label，其他字段都要限定词：matchTreeRow（TREE 面板和树对话框：每个词都要出现在 label + 正文里，tag: 只看 label，role: 只看角色，after:/before: 看时间）；matchSessionRow（SESSIONS：普通词只看 名称 + 首条消息预览，模型 / 路径只通过 model: / path: 匹配，path: 也认 ~/… 写法，after:/before: 看更新时间）；matchesTokens（CONTENT 行）；highlightTerms / findMatchRanges 给高亮用
 ├── config/
-│   ├── keymap.ts             # 默认键位 + 动作描述 + footer 提示顺序（纯数据），含 tree-dialog scope（d/t/u/l/a 过滤、q 关闭）；DISABLED_ACTIONS 列出在某个 scope 里关掉的外层动作（对话框里的切面板 / C A / n N / quit / help / tree-open）；TREE_DIALOG_FOOTER 是对话框提示的顺序
+│   ├── keymap.ts             # 默认键位 + 动作描述 + footer 提示顺序（纯数据），含 tree-dialog scope（d/t/u/l/a 过滤、q 关闭）；DISABLED_ACTIONS 列出在某个 scope 里关掉的外层动作（对话框里的切面板 / C A / n N / quit / help / tree-open / changelog）；TREE_DIALOG_FOOTER 是对话框提示的顺序
 │   ├── keys.ts               # 纯函数：chord 解析（ctrl+d / G / gg）、按键匹配、按 scope 解析 ActionId；scopeChain 定义查找顺序（对话框 → tree → global，面板 → global）
 │   ├── config.ts             # 唯一知道 ~/.pi/agent/lazy-panel.json 的模块，深合并用户配置（null 解绑）
 │   └── pi-settings.ts        # 唯一读 pi 自己 settings.json 的模块（SettingsManager.create 只读），目前取 branchSummary.skipPrompt 和 treeFilterMode（TREE 的初始过滤）
@@ -100,10 +102,11 @@ src/
 test/
 ├── smoke.test.ts             # 键位表、搜索解析的冒烟测试
 ├── keymap.test.ts            # chord 解析、多键序列、scope 链（tree-dialog → tree → global）、用户配置合并
-├── panel.test.ts             # LazyPanel 行为：焦点切换、C/A、? 帮助、/ 搜索（三个面板的实时跳转 / Enter / Esc / n N 回绕 / 标题计数 / 折叠展开 / 高亮 / 切面板保留关键字）、自定义键位、y/T/Enter（含摘要菜单）、树对话框（移动、搜索、过滤、z 折叠、y/T/Enter、关闭后面板光标跟随）、SESSIONS 的 d 确认删除 / r 改名 / s 排序 / i 信息弹窗 / n o y Y / e I S、InputDialog / SelectDialog
+├── panel.test.ts             # LazyPanel 行为：焦点切换、C/A、? 帮助、/ 搜索（三个面板的实时跳转 / Enter / Esc / n N 回绕 / 标题计数 / 折叠展开 / 高亮 / 切面板保留关键字）、自定义键位、y/T/Enter（含摘要菜单）、树对话框（移动、搜索、过滤、z 折叠、y/T/Enter、关闭后面板光标跟随）、SESSIONS 的 space 多选 / 批量删除 / d 确认删除 / r 改名 / s 排序 / i 信息弹窗 / n o y Y / e I S、@ changelog 弹窗、InputDialog / SelectDialog
 ├── tree-actions.test.ts      # 临时会话文件上验证 loadNodeText / labelNode 的分流、loadTree 的 isLeaf 标记
 ├── session-actions.test.ts   # 临时会话文件上验证 isEffectiveLeaf / resumeSession / restoreNode 的分流与摘要选项透传、deleteSession（当前会话拒绝、trash → unlink 回退）、renameSession 的分流、new / fork / clone、export（默认路径 / JSONL 链 / 假 pi）/ import（复制 / 重名 / 清理副本）/ share（假 gh）、utils/paths
 ├── pi-settings.test.ts       # 临时目录上验证 branchSummary.skipPrompt 的全局 / 项目两级读取、treeFilterMode 映射
+├── changelog.test.ts         # parseChangelog 的切分 / 跳过无版本段、文件缺失
 ├── search.test.ts            # parseSearchQuery 的限定词解析、matchTreeRow / matchSessionRow / matchesTokens 的匹配规则、findMatchRanges
 └── ui.test.ts                # 格式化、frame 几何、树过滤 / 折叠、TreeDialog 搜索行、highlightLine / searchMeta
 

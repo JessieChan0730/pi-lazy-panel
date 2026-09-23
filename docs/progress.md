@@ -365,11 +365,30 @@
 - 验证：本机用真实会话 + 全局 pi 的 `cli.js` 跑了一遍 HTML / JSONL 导出（HTML 写进新建的子目录，JSONL 用 `SessionManager.open` 能重新打开、id 一致）。分享没有真的上传（会把内容发出去），只用假 `gh` 测了流程。
 - 测试：`test/session-actions.test.ts` 加 7 个（`utils/paths` 的引号 / `~` / 相对路径、`exportTarget` 的默认名 / 目录 / 已存在、JSONL 导出的 header 与链、当前会话按内存叶子导出、拒绝覆盖会话文件、HTML 调 pi 的参数与报错、导入的复制 / 重名 / 原地切换、导入的各种拒绝与取消后清理副本、分享的成功 / 未登录 / 未安装 / gist 失败）；`test/panel.test.ts` 加 9 个（e 的两级弹窗往返 / JSONL / 覆盖确认 / 失败，I 的确认往返 / 空路径 / 失败重新显示，S 的确认 / 复制链接 / 失败 / 剪贴板失败，三个键在没有 actions 时的提示）。`npm run check` 通过，`npm test` 129 个里 128 个通过；唯一失败的是**原有的** `deleteSession: a trash command that removes the file counts as trash`，在 Windows 上改动前就失败（见 issues.md），和本次无关。
 
+### SESSIONS 的 space 多选 + 批量删除、全局 @ 查看 changelog（2026-09-24）
+
+- ~~`space` 多选：切换光标行的选中态（行首画标记），标题显示 `3 selected`；Esc（没有搜索时）先清空选中再退出。~~
+- ~~`d` 在有选中时改为批量删除：确认框标题带数量，跳过 pi 当前打开的会话，逐个调 `deleteSession`，失败的留在列表里（仍保持选中）并把第一条错误写进 footer。~~
+- ~~选中多个时，`r`（rename）/ `o`（fork）/ `y`（clone）等只能作用于单个会话的动作提示 `cannot … multiple sessions`。~~
+- ~~`@`（global）：和 pi 的 `/changelog` 一样读 pi 安装目录的 `CHANGELOG.md`，用 pi-tui `Markdown` 渲染在居中大弹窗里，`j` / `k` / 方向键滚动、`g` / `G` 顶部 / 底部，`Esc` / `q` / `@` 关闭。~~
+- ~~键位、`ACTION_DESCRIPTIONS`、footer、`docs/keybindings.md` 同步；测试补上。~~
+
+实现说明（2026-09-24）：
+
+- 多选（`app.ts`）：`toggleSelect` 往 `PanelState.selectedSessionFiles` 里加 / 删光标行；`listSessions` 每次重新拉列表时把已不在列表里的文件从选中里去掉。面板行首改成两列标记：第一列光标 `›`、第二列选中 `•`（光标停在选中行上时显示 `›•`，之前光标会盖住选中标记）；标题右侧先放 `3 selected`，剩下的空间再放位置 / 搜索计数（`sessions-pane.ts` 的 `selectedMeta`）。Esc 的顺序：半截按键 → 当前面板的搜索 → SESSIONS 的选中 → 退出面板。
+- 批量删除：`confirmDeleteSession` 有选中时走 `confirmDeleteSelected`：按列表顺序取选中的行，跳过 pi 当前打开的会话（顺手从选中里去掉），全被跳过时直接报 pi 的那句话；确认框标题 `Delete N sessions?`，右侧列出会话标题（有跳过时前面加 `current session skipped`）。确认后逐个 `deleteSession`，成功的从选中里去掉，失败的留在列表和选中里，footer `N sessions deleted` 或 `deleted 2, 1 failed — <会话>: <原因>`。
+- 单会话动作的拒绝：`refuseMultiSelect` 在选中 ≥ 2 个时让 r / o / y / e / S 报 `<动作>: cannot act on multiple sessions (Esc clears the selection)`；Enter / i / Y 仍作用于光标行（只读或只是打开）。
+- changelog：先查了 pi 0.85.1 的 `handleChangelogCommand`：`getChangelogPath()`（包目录下的 `CHANGELOG.md`）→ `parseChangelog`（按带版本号的 `## ` 标题切段）→ 倒序拼接 → `Markdown` 渲染在聊天区。`parseChangelog` 没从包里导出，`getPackageDir` 导出了（运行时指向正在运行的 pi），所以新增 `data/changelog.ts` 照搬切分规则（顺手认 `
+`）。和 pi 的差异：pi 倒序是因为聊天区看的是底部（最新的在最下面），弹窗从顶部开始看，保持文件顺序、最新的在最上面；pi 的 `normalizeChangelogLinks`（把相对链接改成 GitHub 地址）没照搬，终端里点不了链接意义不大。
+- 弹窗 `ui/widgets/changelog-dialog.ts`（`ChangelogDialog`）：和树对话框一样占满终端只留 2 列 / 1 行边距，pi-tui `Markdown` 按宽度缓存渲染结果，j / k / ↑ / ↓ 一行，ctrl+d / ctrl+u / PageDown / PageUp 半页，g / G 顶部 / 底部（弹窗里不做 `gg` 多键序列），标题右侧 `1-38/2140`，Esc / q 关闭，再按 `@`（按最终 keymap 判断）由面板关闭；其他键吞掉。`DataSource` 新增可选的 `loadChangelog`，`PanelMode` 加 `changelog`；树对话框里 `@` 被 `DISABLED_ACTIONS` 关掉。
+- 键位：global 新增 `changelog`（默认 `@`），`ACTION_DESCRIPTIONS` / footer（三个面板的提示都在 `quit` 前加了 `@ Changelog`）/ `docs/keybindings.md` 同步。
+- 测试：`test/panel.test.ts` 加 4 个（space 标记 / 标题 / Esc 两级，批量删除含跳过当前会话与失败保留，选中多个时 r o y e S 拒绝，@ 弹窗的滚动 / 跳转 / 三种关闭 / 按键不漏到面板）；新增 `test/changelog.test.ts`（切分、跳过无版本段、文件缺失）。`npm run check` 通过，`npm test` 135 个里 134 个通过，唯一失败的仍是 Windows 上原有的 `deleteSession: a trash command …`（见 issues.md）。
+
 ### 下一步可以做的任务（2026-09-23 记录，方便换机器后接着做）
 
 当前状态：SESSIONS 面板的 Enter / d / r / s / i / n / o / y / Y 都做完了，TREE 面板和树对话框的功能也齐了，三个面板的 `/` 搜索齐了。`npm run check` + `npm test`（113 个）全过。剩下的按建议顺序：
 
-1. **`space` 多选 + 批量删除**（`session-toggle-select` 已绑好键，`PanelState.selectedSessionFiles` 这个集合在删除时已经在维护了，但没有任何地方往里加）。做法：space 切换光标行的选中态、行首画标记、标题显示 `3 selected`；`d` 在有选中时改成批量确认（确认框标题带数量），逐个调 `deleteSession`、失败的留在列表里并把第一条错误写进 footer；按 design.md 的要求，选中多个时 `r`（rename）和 `o`（fork）要提示"不能对多个对象操作"。范围最小、没有新的 pi API。
+1. ~~**`space` 多选 + 批量删除**~~（2026-09-24 完成，见上面"SESSIONS 的 space 多选 + 批量删除、全局 @ 查看 changelog"）（`session-toggle-select` 已绑好键，`PanelState.selectedSessionFiles` 这个集合在删除时已经在维护了，但没有任何地方往里加）。做法：space 切换光标行的选中态、行首画标记、标题显示 `3 selected`；`d` 在有选中时改成批量确认（确认框标题带数量），逐个调 `deleteSession`、失败的留在列表里并把第一条错误写进 footer；按 design.md 的要求，选中多个时 `r`（rename）和 `o`（fork）要提示"不能对多个对象操作"。范围最小、没有新的 pi API。
 2. ~~**`e` 导出 / `I` 导入**~~（2026-09-24 完成，见上面"SESSIONS 的导出 / 导入 / 分享"）（`session-export` / `session-import` 已绑好键，`actions/session-actions.ts` 里 `exportSession` / `importSession` 还是 TODO 空壳）。pi 侧的 API 已经查到：导出是 `AgentSession.exportToHtml(outputPath?, { themeName? })` 和 `exportToJsonl(outputPath?)`（都在 `dist/core/agent-session.d.ts`，只对**当前打开的会话**有效，所以其他会话要么先切过去，要么自己按 session-format.md 拼 JSONL——动手前先查 pi 有没有对任意文件导出的路子）；导入是 `AgentSessionRuntime.importFromJsonl(inputPath, cwdOverride?)`，扩展 ctx 上**没有**暴露它（`ExtensionCommandContextActions` 里只有 waitForIdle / newSession / fork / navigateTree / switchSession / reload），所以导入可能做不了，先查清楚，做不了就记到 issues.md。UI 上两个都需要一个"输入路径"的输入框（`InputDialog` 直接能用），导出还要选 HTML / JSONL（`SelectDialog`）。
 3. ~~**`S` 分享为私有 Gist**~~（2026-09-24 完成，同上）（`session-share` 已绑好键，`shareSession` 是空壳）。风险最高：要走网络、要 GitHub 凭据、是外发操作，一定要确认框并在 footer 显示生成的链接。建议放最后，动手前先查 pi 自己的 `/share` 怎么实现的（大概在 `interactive-mode.js` 里搜 `gist`）。
 
