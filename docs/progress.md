@@ -475,3 +475,9 @@
 ### 新功能
 
 1. 加个选项，能够让用户主动切换语言
+
+### UI 优化
+
+实现说明（2026-09-24）：
+
+- **footer 右下角显示插件版本号**：`index.ts` 新增 `extensionVersion()`，用 `import.meta.url` + `fileURLToPath` 解析出本插件 `package.json`（跨平台，读不到就返回空串、不显示），打开面板时读一次经 `LazyPanelOptions.version` 注入。`footer.ts` 的 `renderFooter` 加 `version?` prop：muted 弱化的 `v0.1.0` 靠右对齐，先按其宽度 + 2 列留白扣掉预算再排按键提示，`left` 和版本号之间用空格撑开、整体 `fit` 到宽度（放不下时优先保留左侧提示）。只在常规 / 弹窗 footer 显示，搜索状态行不占。version 为空时输出和改动前逐字节一致（既有 footer 测试不受影响）。`npm run check` + `npm test` 通过（`deleteSession trash` 那条与本改动无关，在本机 clean tree 上也失败）。
