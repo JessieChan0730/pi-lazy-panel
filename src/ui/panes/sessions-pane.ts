@@ -35,12 +35,13 @@ export interface SessionsPaneProps {
 	theme: Theme;
 }
 
-const ROW_HEIGHT = 2;
+/** Each session takes two lines; the tree / mouse hit-test share this constant. */
+export const SESSIONS_ROW_HEIGHT = 2;
 
 export function renderSessionsPane(p: SessionsPaneProps, width: number, height: number): string[] {
 	const { theme } = p;
 	const inner = width - 2;
-	const visibleRows = Math.max(1, Math.floor((height - 2) / ROW_HEIGHT));
+	const visibleRows = Math.max(1, Math.floor((height - 2) / SESSIONS_ROW_HEIGHT));
 	const body: string[] = [];
 
 	if (p.rows.length === 0) {

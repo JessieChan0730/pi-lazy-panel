@@ -7,6 +7,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Theme } from "@earendil-works/pi-coding-agent";
+import type { TuiMouseEvent, TuiMouseEventType } from "@earendil-works/pi-tui";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { DEFAULT_KEYMAP } from "../src/config/keymap.ts";
 import { mergeKeymap } from "../src/config/config.ts";
@@ -2999,4 +3000,133 @@ test("@ opens pi's changelog in a big box: j/k/arrows scroll, G / g jump, Esc / 
 		assert.equal(dialogAt(text(), "What's New"), undefined);
 	}
 	panel.dispose();
+});
+
+// -------------------------------------------------------------------------
+// Mouse: wheel scrolls, click focuses + selects, double-click enters / folds
+// -------------------------------------------------------------------------
+
+/** Synthetic normalized mouse event. The overlay is top-left, so x/y equal the screen cell. */
+function mouseEvent(type: TuiMouseEventType, x: number, y: number, extra: Partial<TuiMouseEvent> = {}): TuiMouseEvent {
+	return {
+		type,
+		button: type === "wheel" ? "none" : "left",
+		x,
+		y,
+		screenX: x,
+		screenY: y,
+		width: 100,
+		height: 20,
+		shift: false,
+		alt: false,
+		ctrl: false,
+		...extra,
+	};
+}
+
+test("click focuses the pane under the pointer and selects the list row; press / move are ignored", async () => {
+	const h = makeLoadedPanel(); // height 20 → sessions rows at y=1,3,5; tree body from y=10
+	await h.panel.load();
+	await settle();
+	assert.equal(h.panel.state.focus, "sessions");
+
+	// clicking the right column focuses content (no row to select there)
+	h.panel.handleMouse(mouseEvent("click", 50, 5));
+	assert.equal(h.panel.state.focus, "content");
+
+	// clicking a sessions row focuses sessions and moves the cursor onto it
+	const r = h.panel.handleMouse(mouseEvent("click", 2, 5)); // y=5 → 3rd visible row
+	assert.deepEqual(r, { handled: true });
+	assert.equal(h.panel.state.focus, "sessions");
+	assert.equal(h.panel.state.cursor.sessions, 2);
+	await settle();
+
+	// clicking a tree row focuses tree and moves the tree cursor
+	h.panel.handleMouse(mouseEvent("click", 2, 10)); // first tree body row
+	assert.equal(h.panel.state.focus, "tree");
+	assert.equal(h.panel.state.cursor.tree, 0);
+
+	// non-click / non-wheel events are not consumed (terminal keeps text selection)
+	assert.equal(h.panel.handleMouse(mouseEvent("move", 2, 5)), undefined);
+	assert.equal(h.panel.handleMouse(mouseEvent("press", 2, 5)), undefined);
+	h.panel.dispose();
+});
+
+test("clicking a border / blank cell still focuses that pane but keeps the cursor", async () => {
+	const h = makeLoadedPanel();
+	await h.panel.load();
+	await settle();
+	h.panel.handleMouse(mouseEvent("click", 2, 5)); // move to row 2 first
+	assert.equal(h.panel.state.cursor.sessions, 2);
+	h.panel.handleMouse(mouseEvent("click", 50, 5)); // leave to content
+	// click the sessions top border (y=0): focus returns, cursor unchanged
+	h.panel.handleMouse(mouseEvent("click", 2, 0));
+	assert.equal(h.panel.state.focus, "sessions");
+	assert.equal(h.panel.state.cursor.sessions, 2);
+	h.panel.dispose();
+});
+
+test("wheel scrolls the pane under the pointer without stealing focus", async () => {
+	const h = makeLoadedPanel();
+	await h.panel.load();
+	await settle();
+	assert.equal(h.panel.state.focus, "sessions");
+
+	// wheel down over the sessions pane moves its cursor by the delta
+	h.panel.handleMouse(mouseEvent("wheel", 2, 3, { wheelDelta: 2 }));
+	assert.equal(h.panel.state.cursor.sessions, 2);
+	await settle();
+
+	// wheel up clamps at the top
+	h.panel.handleMouse(mouseEvent("wheel", 2, 3, { wheelDelta: -5 }));
+	assert.equal(h.panel.state.cursor.sessions, 0);
+	await settle();
+
+	// wheel over the tree pane moves the tree cursor, focus stays on sessions
+	const before = h.panel.state.cursor.tree;
+	h.panel.handleMouse(mouseEvent("wheel", 2, 12, { wheelDelta: -1 }));
+	assert.equal(h.panel.state.focus, "sessions", "wheel never changes focus");
+	assert.notEqual(h.panel.state.cursor.tree, before + 99); // moved (up), not stuck
+	h.panel.dispose();
+});
+
+test("double-clicking a session resumes it (panel hidden, then closed)", async () => {
+	const h = makeSessionActionPanel(); // height 24 → sessions rows at y=1,3,5
+	await h.panel.load();
+	await settle();
+	h.panel.handleMouse(mouseEvent("click", 2, 3, { clickCount: 1, height: 24 }));
+	assert.equal(h.panel.state.cursor.sessions, 1);
+	h.panel.handleMouse(mouseEvent("click", 2, 3, { clickCount: 2, height: 24 }));
+	await settle();
+	assert.ok(h.hidden.includes(true), "panel hidden while pi switches session");
+	assert.ok(h.closed(), "a successful resume closes the panel");
+});
+
+test("double-clicking a tree node toggles its fold", async () => {
+	const h = makeForkedPanel(); // e1 side branch starts folded; visible rows: e0, e1, e3, e4
+	await h.panel.load();
+	await flush();
+	assert.deepEqual([...h.panel.state.treeFolded], ["e1"]);
+	// tree body starts at y=10 (height 20): row 1 (e1, the folded head) is y=11
+	h.panel.handleMouse(mouseEvent("click", 2, 11, { clickCount: 1, width: 160 }));
+	assert.equal(h.panel.state.focus, "tree");
+	assert.equal(h.panel.state.cursor.tree, 1);
+	h.panel.handleMouse(mouseEvent("click", 2, 11, { clickCount: 2, width: 160 }));
+	assert.deepEqual([...h.panel.state.treeFolded], [], "double-click unfolds the side branch");
+	h.panel.dispose();
+});
+
+test("mouse is swallowed (no-op) while an overlay is open", async () => {
+	const h = makeLoadedPanel();
+	await h.panel.load();
+	await settle();
+	h.panel.handleInput("?"); // help overlay
+	assert.equal(h.panel.state.helpOpen, true);
+	const click = h.panel.handleMouse(mouseEvent("click", 2, 5));
+	assert.deepEqual(click, { handled: true }, "click consumed but does nothing");
+	assert.equal(h.panel.state.helpOpen, true, "overlay stays open");
+	assert.equal(h.panel.state.cursor.sessions, 0, "list behind the overlay did not move");
+	// press still falls through so the terminal keeps its own handling
+	assert.equal(h.panel.handleMouse(mouseEvent("press", 2, 5)), undefined);
+	h.panel.dispose();
 });

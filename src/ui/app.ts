@@ -49,7 +49,7 @@
  */
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import type { Component, Focusable } from "@earendil-works/pi-tui";
+import type { Component, Focusable, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import { type Binding, compileKeymap, labelsFor, labelsForFocus, matchesKeyId, resolveKeys } from "../config/keys.ts";
 import { DEFAULT_KEYMAP, FOCUS_ACTIONS, isDisabledIn, paneTitleText, TREE_DIALOG_FOOTER, treeDialogHintText } from "../config/keymap.ts";
@@ -89,6 +89,7 @@ import type {
 	TreeRow,
 } from "../types.ts";
 import { fit, sideBySide } from "./frame.ts";
+import { hitTest, type MouseTarget, panelGeometry } from "./mouse.ts";
 import { type ContentLayout, layoutContent, maxScroll, renderContentPane } from "./panes/content-pane.ts";
 import { renderSessionsPane } from "./panes/sessions-pane.ts";
 import { renderTreePane } from "./panes/tree-pane.ts";
@@ -772,6 +773,82 @@ export class LazyPanel implements Component, Focusable {
 		this.state.helpOpen = true;
 		this.state.helpScroll = 0;
 		this.o.requestRender();
+	}
+
+	// -----------------------------------------------------------------------
+	// Mouse (light adaptation; the keyboard stays primary)
+	// -----------------------------------------------------------------------
+
+	/**
+	 * 鼠标只做三件事：滚轮 / 三指滚动指针下的面板；单击切焦点并选中列表项；
+	 * 双击 SESSIONS 进入会话、双击 TREE 折叠 / 展开分支。press / drag / move 不处理，
+	 * 交回终端做文本选择。注意：只有 pi 跑在 fullscreen TUI 模式下才会收到鼠标事件，
+	 * regular（默认）模式由终端自己处理滚动 / 选择，见 docs/issues.md。
+	 */
+	handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+		if (this.disposed || this.entering) return undefined;
+		// 搜索输入 / 各类弹窗打开时：吞掉面板区域的滚轮和点击，避免误动下面的列表，但不做交互。
+		if (this.state.mode !== "normal" || this.anyDialogOpen()) {
+			return event.type === "wheel" || event.type === "click" ? { handled: true } : undefined;
+		}
+		if (event.type === "wheel") return this.handleWheel(event);
+		if (event.type === "click") return this.handleClick(event);
+		return undefined;
+	}
+
+	/** Any centered / full-screen overlay is up (its own input owns the keyboard). */
+	private anyDialogOpen(): boolean {
+		return (
+			this.state.helpOpen ||
+			this.inputDialog.isOpen ||
+			this.selectDialog.isOpen ||
+			this.infoDialog.isOpen ||
+			this.changelogDialog.isOpen ||
+			this.treeDialog.isOpen
+		);
+	}
+
+	/** Map an event to the pane / row under the pointer, using the same geometry as render(). */
+	private hitTarget(event: TuiMouseEvent): MouseTarget | undefined {
+		return hitTest({
+			width: event.width,
+			height: Math.max(8, this.o.getHeight()),
+			ratio: this.ratio,
+			x: event.x,
+			y: event.y,
+			sessionsCursor: this.state.cursor.sessions,
+			sessionsTotal: this.sessions.length,
+			treeCursor: this.state.cursor.tree,
+			treeTotal: this.visibleTree.length,
+		});
+	}
+
+	/** Wheel: scroll the pane under the pointer without changing focus (click owns focus). */
+	private handleWheel(event: TuiMouseEvent): TuiMouseEventResult {
+		const delta = event.wheelDelta ?? 0;
+		if (delta === 0) return { handled: true };
+		const target = this.hitTarget(event);
+		if (target?.pane === "sessions") this.setSessionsCursor(this.state.cursor.sessions + delta);
+		else if (target?.pane === "tree") this.setTreeCursor(this.state.cursor.tree + delta);
+		else if (target?.pane === "content") this.scrollContent(delta);
+		return { handled: true };
+	}
+
+	/** Click: focus the pane under the pointer + select the row; double-click enters (sessions) / folds (tree). */
+	private handleClick(event: TuiMouseEvent): TuiMouseEventResult {
+		const target = this.hitTarget(event);
+		if (!target) return { handled: true };
+		const double = (event.clickCount ?? 1) >= 2;
+		// 点在面板任意位置都切焦点到对应面板（含边框 / 空白处）。
+		this.setFocus(target.pane);
+		if (target.pane === "sessions") {
+			if (target.row !== undefined) this.setSessionsCursor(target.row);
+			if (double) void this.resumeSession(); // 双击进入会话（等价于 Enter / resume）
+		} else if (target.pane === "tree") {
+			if (target.row !== undefined) this.setTreeCursor(target.row);
+			if (double) this.toggleTreeFold(); // 双击折叠 / 展开分支
+		}
+		return { handled: true };
 	}
 
 	/**
@@ -2613,12 +2690,7 @@ export class LazyPanel implements Component, Focusable {
 
 	render(width: number): string[] {
 		const height = Math.max(8, this.o.getHeight());
-		const footerH = 1;
-		const bodyH = height - footerH;
-		const leftW = Math.max(24, Math.min(width - 30, Math.floor(width * this.ratio)));
-		const rightW = width - leftW;
-		const sessionsH = Math.max(4, Math.floor(bodyH / 2));
-		const treeH = bodyH - sessionsH;
+		const { leftW, rightW, bodyH, sessionsH, treeH } = panelGeometry(width, height, this.ratio);
 		const { theme } = this.o;
 		const selectedSession = this.sessions[this.state.cursor.sessions];
 		const sessionsSearch = this.searchView("sessions");
