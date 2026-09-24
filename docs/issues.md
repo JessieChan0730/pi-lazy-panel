@@ -43,3 +43,9 @@
 - 现象：`test/session-actions.test.ts` 的 `deleteSession: a trash command that removes the file counts as trash` 在 Windows 上失败（期望 `trash`，实际 `unlink`），改动前的代码上同样失败，其他平台应当正常。
 - 原因：测试用一个 `trash.cmd` 包装脚本假扮 trash，但 Node 在 Windows 上不再允许不开 shell 直接 `spawnSync` 一个 `.cmd`（CVE-2024-27980 之后会报 EINVAL），于是回退到了 unlink。功能本身不受影响：Windows 上通常也没有 `trash` 命令，本来就是 unlink。
 - 备选方案（暂不处理）：`DeleteOptions.trashCommand` 改成和导出 / 分享一样的 `{ command, args }`（`session-actions.ts` 的 `CommandSpec`），测试传 `node 假脚本.cjs`，就不需要 .cmd 了。
+
+### 鼠标事件只在 fullscreen TUI 模式下生效（2026-09-24）
+
+- 现象：插件的 `handleMouse`（滚轮滚动、单击切焦点 / 选中、双击进入 / 折叠）只有在 pi 以 `--tui-mode fullscreen` 运行时才会被调用；regular（默认）模式下鼠标完全没反应，滚动 / 选择还是终端自己的行为。
+- 原因：pi 的 regular 模式用 `TuiMainScreen`，它根本不开启终端的鼠标追踪（不发 `\x1b[?1000h` 等序列），也没有 `handleMouse`，把鼠标选择交给终端模拟器；只有 fullscreen 模式的 `TuiAltScreen` 才开鼠标追踪并把事件派发给（含 overlay 的）组件（`node_modules/@earendil-works/pi-tui/dist/tui-alt-screen.js`）。插件是 `ctx.ui.custom` 的全屏 overlay，收到事件与否完全取决于 pi 用的是哪个 TUI，扩展侧改不了。
+- 备选方案（暂不处理）：等 pi 在扩展 API 上提供“临时切到 fullscreen”或“为 overlay 打开鼠标”的开关；在那之前，需要鼠标的用户用 `pi --tui-mode fullscreen`（或设置里把 TUI 模式设为 fullscreen）。`handleMouse` 的逻辑本身与模式无关，单测直接调用它验证，不依赖 pi 的模式。

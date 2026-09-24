@@ -446,9 +446,16 @@
 
 项目目前无法响应鼠标事件，但核心还是键盘操作，所以鼠标只做如下的适配：
 
-1. 鼠标，触控板能够通过滚轮或者三指上下滚动列表
-2. 点击列表中的item能够选中，双击对话能够进入，双击tree能够展开/收起
-3. 点击列表和列表之外的空余的地方，焦点需要切换到对应的面板上
+1. ~~鼠标，触控板能够通过滚轮或者三指上下滚动列表~~
+2. ~~点击列表中的item能够选中，双击对话能够进入，双击tree能够展开/收起~~
+3. ~~点击列表和列表之外的空余的地方，焦点需要切换到对应的面板上~~
+
+实现说明（2026-09-24）：
+
+- 先查了 pi-tui / pi 的鼠标机制：`Component` 有可选的 `handleMouse(event)`，event 是规范化的单元格坐标（`type` 含 `wheel` / `click`，click 带 `clickCount`，`wheelDelta` 负数为上滚），overlay 的事件坐标由 `dispatchMouseToOverlay` 换算成组件本地坐标。**关键限制**：只有 pi 的 fullscreen 模式（`TuiAltScreen`）才开终端鼠标追踪并派发事件；regular（默认）模式用 `TuiMainScreen`，根本不收鼠标，滚动 / 选择交给终端。所以本功能只在 `pi --tui-mode fullscreen` 下生效，记在 issues.md，扩展侧改不了。
+- 新增纯函数模块 `ui/mouse.ts`：`panelGeometry(width, height, ratio)` 把面板的列 / 行切分抽出来（左栏 `leftW`、body 高度、SESSIONS / TREE 各自高度），`render()` 也改用它，保证“画出来的位置”和“点击命中的位置”永远一致；`hitTest(...)` 把单元格 (x, y) 映射到面板 + 列表行号（SESSIONS 每行 2 line、TREE 每行 1 line，窗口用和面板一样的 `scrollOffset` 重算；边框 / 底部不足一行的空白 / 页脚都返回“无行”）。`sessions-pane.ts` 的 `ROW_HEIGHT` 导出成 `SESSIONS_ROW_HEIGHT` 共用。
+- `LazyPanel.handleMouse`：`disposed` / `entering` 时忽略；搜索输入或任意弹窗打开时吞掉滚轮 / 点击（返回 `{ handled: true }` 但不动列表），press / move / drag 一律返回 `undefined` 交回终端做文本选择。滚轮 → 滚动指针所在面板（列表移光标、CONTENT 按行滚），不改焦点；单击 → 切焦点到指针所在面板，落在列表项上再把该面板光标移过去；双击 SESSIONS → `resumeSession`（等价 Enter），双击 TREE → `toggleTreeFold`（等价 z）。都复用已有的 `setSessionsCursor` / `setTreeCursor` / `scrollContent` / `setFocus` / `resumeSession` / `toggleTreeFold`，面板逻辑不重复。
+- 测试：`test/ui.test.ts` 加了 `panelGeometry` 的切分和 `hitTest` 的映射（SESSIONS 两行一项 / 滚动窗口 / 边框与空白、TREE 一行一项 / 超出末行、CONTENT 右栏、页脚与越界）；`test/panel.test.ts` 加了单击切焦点 + 选中 / 边框只切焦点不移光标 / 滚轮滚动指针面板且不夺焦点 / 双击会话 resume（隐藏后关闭）/ 双击树节点折叠 / 弹窗打开时鼠标被吞。`npm run check` 通过，`npm test` 146 个全过。
 
 ### bug 反馈
 
