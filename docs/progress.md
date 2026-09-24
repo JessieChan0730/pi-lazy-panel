@@ -452,10 +452,11 @@
 
 实现说明（2026-09-24）：
 
-- 先查了 pi-tui / pi 的鼠标机制：`Component` 有可选的 `handleMouse(event)`，event 是规范化的单元格坐标（`type` 含 `wheel` / `click`，click 带 `clickCount`，`wheelDelta` 负数为上滚），overlay 的事件坐标由 `dispatchMouseToOverlay` 换算成组件本地坐标。**关键限制**：只有 pi 的 fullscreen 模式（`TuiAltScreen`）才开终端鼠标追踪并派发事件；regular（默认）模式用 `TuiMainScreen`，根本不收鼠标，滚动 / 选择交给终端。所以本功能只在 `pi --tui-mode fullscreen` 下生效，记在 issues.md，扩展侧改不了。
-- 新增纯函数模块 `ui/mouse.ts`：`panelGeometry(width, height, ratio)` 把面板的列 / 行切分抽出来（左栏 `leftW`、body 高度、SESSIONS / TREE 各自高度），`render()` 也改用它，保证“画出来的位置”和“点击命中的位置”永远一致；`hitTest(...)` 把单元格 (x, y) 映射到面板 + 列表行号（SESSIONS 每行 2 line、TREE 每行 1 line，窗口用和面板一样的 `scrollOffset` 重算；边框 / 底部不足一行的空白 / 页脚都返回“无行”）。`sessions-pane.ts` 的 `ROW_HEIGHT` 导出成 `SESSIONS_ROW_HEIGHT` 共用。
+- 先查了 pi-tui / pi 的鼠标机制：`Component` 有可选的 `handleMouse(event)`，event 是规范化的单元格坐标（`type` 含 `wheel` / `click`，click 带 `clickCount`，`wheelDelta` 负数为上滚），overlay 的事件坐标由 `dispatchMouseToOverlay` 换算成组件本地坐标。**关键**：pi 只有 fullscreen 模式（`TuiAltScreen`）才开终端鼠标追踪并派发事件；regular（默认）模式用 `TuiMainScreen`，根本不收鼠标（第一版就栽在这，测试机默认 regular 所以"完全没反应"）。
+- 分流两种模式（`index.ts`）：fullscreen 继续靠 pi 把事件派到 overlay 的 `handleMouse`；regular 模式插件自己开鼠标——`tui.terminal.write("\x1b[?1000h\x1b[?1006h")` 打开 SGR 上报，`tui.addInputListener` 截获原始 stdin，`ui/mouse-input.ts` 的 `parseSgrMouseChunk`（快速触控板滚动会把多条 wheel 合并进一次读入，这里拆开逐条）+ `MouseTracker`（按下 / 释放同格算一次 click，同格 400ms 内再点算双击；只认左键；滚轮 bit6）解析成 `TuiMouseEvent` 喂给 `panel.handleMouse`，鼠标序列一律 `consume` 掉不漏给按键；面板关闭时写 `\x1b[?1000l\x1b[?1006l` 恢复终端自己的滚动 / 选择。按 `tui.mode` 判断，`TuiMainScreen.mode === "regular"`。
+- 新增纯函数模块 `ui/mouse.ts`：`panelGeometry(width, height, ratio)` 把面板的列 / 行切分抽出来（左栏 `leftW`、body 高度、SESSIONS / TREE 各自高度），`render()` 也改用它，保证"画出来的位置"和"点击命中的位置"永远一致；`hitTest(...)` 把单元格 (x, y) 映射到面板 + 列表行号（SESSIONS 每行 2 line、TREE 每行 1 line，窗口用和面板一样的 `scrollOffset` 重算；边框 / 底部不足一行的空白 / 页脚都返回"无行"）。`sessions-pane.ts` 的 `ROW_HEIGHT` 导出成 `SESSIONS_ROW_HEIGHT` 共用。
 - `LazyPanel.handleMouse`：`disposed` / `entering` 时忽略；搜索输入或任意弹窗打开时吞掉滚轮 / 点击（返回 `{ handled: true }` 但不动列表），press / move / drag 一律返回 `undefined` 交回终端做文本选择。滚轮 → 滚动指针所在面板（列表移光标、CONTENT 按行滚），不改焦点；单击 → 切焦点到指针所在面板，落在列表项上再把该面板光标移过去；双击 SESSIONS → `resumeSession`（等价 Enter），双击 TREE → `toggleTreeFold`（等价 z）。都复用已有的 `setSessionsCursor` / `setTreeCursor` / `scrollContent` / `setFocus` / `resumeSession` / `toggleTreeFold`，面板逻辑不重复。
-- 测试：`test/ui.test.ts` 加了 `panelGeometry` 的切分和 `hitTest` 的映射（SESSIONS 两行一项 / 滚动窗口 / 边框与空白、TREE 一行一项 / 超出末行、CONTENT 右栏、页脚与越界）；`test/panel.test.ts` 加了单击切焦点 + 选中 / 边框只切焦点不移光标 / 滚轮滚动指针面板且不夺焦点 / 双击会话 resume（隐藏后关闭）/ 双击树节点折叠 / 弹窗打开时鼠标被吞。`npm run check` 通过，`npm test` 146 个全过。
+- 测试：`test/ui.test.ts` 加了 `panelGeometry` 的切分和 `hitTest` 的映射；`test/panel.test.ts` 加了单击切焦点 + 选中 / 边框只切焦点不移光标 / 滚轮滚动指针面板且不夺焦点 / 双击会话 resume（隐藏后关闭）/ 双击树节点折叠 / 弹窗打开时鼠标被吞；新增 `test/mouse-input.test.ts` 覆盖 SGR 解析（单条 / 批量 / 混合拒绝）与 `MouseTracker`（滚轮方向、同格点击、拖拽丢弃、双击计数、中右键忽略、修饰键）。`npm run check` 通过，`npm test` 154 个全过。残留说明记在 issues.md。
 
 ### bug 反馈
 

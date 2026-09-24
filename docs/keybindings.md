@@ -184,11 +184,11 @@ Only scrolling and searching; copying a message is done from the tree pane (`y`)
 | ~~`gg` / `G`~~  | ~~Top / bottom~~      |
 | ~~`/`~~         | ~~Search the rendered message text (words only, no qualifiers); the matching line is scrolled to the top, `n` / `N` step through the hits~~ |
 
-## 鼠标（仅 fullscreen TUI 模式）
+## 鼠标
 
-核心仍是键盘，鼠标只做轻量适配。只有 pi 跑在 fullscreen TUI 模式（`--tui-mode fullscreen`）
-时才会收到鼠标事件；regular（默认）模式下滚动 / 选择由终端自己处理，插件收不到，见
-`docs/issues.md`。
+核心仍是键盘，鼠标只做轻量适配。regular（默认）和 fullscreen 两种 TUI 模式都支持：fullscreen
+由 pi 把事件派给面板，regular 模式插件自己打开 SGR 鼠标上报（需要终端支持 SGR，现代终端基本都行；
+面板打开期间终端自己的选中 / 滚动被接管，关闭后恢复）。见 `docs/issues.md`。
 
 | 操作                | 行为                                                       |
 | ------------------- | ---------------------------------------------------------- |
