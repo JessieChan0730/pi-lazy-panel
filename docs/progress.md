@@ -462,9 +462,15 @@
 
 ### bug 反馈
 
-1. 打开/关闭按键提示对话框（？）之后，再切换面板，对话框会闪一下
-2. 在新对话上使用插件还算正常，但是如果选中了一个对话，然后在选中的对话中，再次打开插件，这个时候滚动会发现，整个插件面板都会整体向下移动，这很丑，有没有办法解决
-3. 英文状态下，按键提示框面板（？）中英文会进行省略，这里最好不要省略，毕竟是很重要的信息，可以选择换行展示。
+1. 打开/关闭按键提示对话框（？）之后，再切换面板，对话框会闪一下（2026-09-24：`clearOnShrink` 没能消掉这个残影，影响不大，已搁置到 `docs/issues.md`，等用户再提到时再修）
+2. ~~在新对话上使用插件还算正常，但是如果选中了一个对话，然后在选中的对话中，再次打开插件，这个时候滚动会发现，整个插件面板都会整体向下移动，这很丑，有没有办法解决~~（2026-09-24 完成，见下面的实现说明）
+3. ~~英文状态下，按键提示框面板（？）中英文会进行省略，这里最好不要省略，毕竟是很重要的信息，可以选择换行展示。~~（2026-09-24 完成）
+
+实现说明（2026-09-24）：
+
+- **第 2 项（面板整体下漂）+ 第 1 项（残影闪，未解决）**：两者同源。面板用 `ctx.ui.custom(..., { overlay: true })` 挂全屏 overlay，pi 文档明说 overlay "renders on top without clearing the screen"，而 pi 的 `terminal.clearOnShrink` 默认 `false`（`settings.md`："Clear empty rows when content shrinks (can cause flicker)"）。在 `src/index.ts` 的 `ctx.ui.custom` 工厂里加 `if (typeof tui.setClearOnShrink === "function") tui.setClearOnShrink(true)`（存在性判断兼容老版本 pi）。用户在真实 pi 里验证：**第 2 项（有内容的当前会话里滚动时面板整体下漂）已解决**；**第 1 项（关掉 `?` 帮助框后切面板闪一下残影）依旧**——残影更像是 pi overlay 合成的时序问题，`clearOnShrink` 只清腾空的行、清不掉那一帧。影响不大，先搁置（`docs/issues.md`），备选思路（关弹窗时 `requestRender(true)` 强制整屏重绘等）留待再提时试。`setClearOnShrink(true)` 保留，因为它修好了第 2 项。
+- **第 3 项（帮助框英文换行）**：`help-overlay.ts` 原来每个绑定拼成一行交给 `frame()` → `fit()` → `truncateToWidth(..., "…")`，宽度还封顶 64 列，英文描述（如 tree 的 `z` "Fold / unfold the branch under the cursor (inside a branch: fold it and jump to its head)"）就被 `…` 截掉；中文短看不出来。改法：新增 `wrapText`（按可见宽度折行，英文按空格断词、单词超宽再按列硬断）和 `helpLayout`（把逻辑行展开成实际渲染行，binding 描述折到续行、续行 keys 列留空），`renderHelpBox` / `helpBoxSize` / `helpLineCount` 三处都基于 `helpLayout` 的行数，滚动和盒子高度不会对不上。`helpLineCount` 加了 `termW` 参数（`helpBoxWidth(termW)` 决定盒宽 → 描述列宽 → 折行数），`app.ts` 在 `render` 里存 `lastWidth`、`handleHelpInput` 用它 clamp 滚动。`helpBoxSize` 的签名从 `(termW, termH, lineCount)` 改成 `(termW, termH, keymap, focus)`。用户已在真实 pi 里确认第 3 项 OK。
+- 测试：`test/panel.test.ts` 加了 "help wraps long descriptions onto continuation rows"（tree 帮助里 `z` 的长描述首尾都完整出现、不带 `…`、每行仍是精确宽度）；既有帮助测试（合并行、各面板标题、宽度不变）原样通过。`npm run check` + `npm test`（145 个）+ `npm run i18n:check` 全过。
 
 ### 新功能
 

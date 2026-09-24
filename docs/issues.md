@@ -2,6 +2,13 @@
 
 搁置中的问题，解决后用 `~~` 划掉并写明处理方式。
 
+### `?` 帮助框关闭后切面板会闪一下残影（2026-09-24，搁置）
+
+- 现象（用户反馈的 bug 1）：打开再关掉 `?` 帮助框后，紧接着切面板，帮助框会闪一下残影。同批反馈里的"有内容的当前会话里滚动时面板整体下漂"（bug 2）是同一根因下的另一个表现，已解决（见下条处理）；这个残影没解决。
+- 根因：面板是 `ctx.ui.custom(..., { overlay: true })` 全屏 overlay，pi 文档明说 overlay "renders on top without clearing the screen"（实验特性）。残影更像是 pi overlay 合成 / 双缓冲的一帧时序问题。
+- 已试：`src/index.ts` 工厂里 `tui.setClearOnShrink(true)`（带存在性判断兼容老版本）——**修好了 bug 2 的整体下漂**，但 `clearOnShrink` 只清"内容变短时腾空的行"，清不掉关弹窗那一帧的残影，bug 1 依旧。这个开关保留（bug 2 靠它）。
+- 影响不大，用户要求先搁置，等再提到时再修。备选思路（都要在真实 pi 里试）：关弹窗时 `tui.requestRender(true)` 强制整屏重绘；或 `handle.setHidden(true)` → `setHidden(false)` 抖一下逼 pi 重画；或改用非 overlay 的全屏 custom UI（但之前判断会 overflow，见 `index.ts` 注释）。
+
 ### 窄终端下 SESSIONS 标题右侧 meta 显示不全（2026-09-21）
 
 - 现象：非全屏（如在 herdr 里）使用时，Current 模式只显示 `1/16 · Current`，看不到排序 `· recent`；All 模式因为标签短，能完整显示 `1/16 · All · recent`。
