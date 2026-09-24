@@ -421,7 +421,7 @@
 - **第 3 项（多选 UI）**：`sessions-pane.ts` 的 `renderRow` 去掉第二列的选中图标（原来是 `✓`），选中**只靠标题着 accent 色**区分（`titleStyle`；光标行整行反白时标题也着 accent），长列表里一眼能扫出选了哪些。第二列保留一个空格做对齐，line2 缩进不变。`docs/keybindings.md` / `docs/design.md` 的 Space 说明同步。
 - **第 4 项（changelog 加载提示）**：实测慢在 pi-tui `Markdown.render` 渲染整份 changelog（约 5700 行、550KB，同步阻塞），文件读取只要 ~3ms。所以 `changelog-dialog.ts` 加了 loading 态：`openLoading()` 先画空框 + 中间一行居中的 `◰ Loading changelog…`（复用 `SPINNER_FRAMES`），`setContent(md)` 再填内容；`app.ts` 的 `openChangelog` 先 `openLoading()` + 起一个 120ms 的 spinner 定时器（`startChangelogSpinner`，`unref` 防止拖住测试进程）+ `requestRender`，`await load()` 后**再 `await setTimeout(0)` 让加载帧先画出来**（否则两次 requestRender 可能被合并，加载提示看不见），最后 `setContent` + 停 spinner。渲染结果按 `(width, markdown)` 缓存且跨 `close()` 保留，`app.changelogMd` 也缓存了 markdown，所以**第二次 `@` 直接 `setContent` 秒开、不再显示加载**。同步的那次重渲染本身没法转动画（单线程），但提示会在它之前出现。加载中 Esc/q 可取消（`isLoading` 守卫让异步续着的 `setContent` 不会把已关的弹窗重新打开）。`closeChangelog` / `dispose` 都会停 spinner。
 - **第 5 项（footer 精简）**：`keymap.ts` 的 `FOOTER_HINTS` 砍到每个面板只留核心键——sessions：`/ 搜索 · Tab 切面板 · C/A 范围 · Enter · d · r · n · ? · q`；tree：`/ · Tab · Enter · z · a · ? · q`；content：`/ · Tab · gg · G · ? · q`。长尾（排序 / 信息 / 压缩 / fork / clone / 复制回复 / 导出 / 导入 / 分享 / changelog）只进 `?`。footer 本来就按宽度截断，这里是把"半高频"的一串直接从常驻提示里拿掉。
-- 测试：`test/panel.test.ts` 的多选测试断言 `•` → `✓`（`›✓beta` / ` ✓alpha`），changelog 测试改为先断言"加载中弹窗（`Loading changelog` + 还没内容）"、`await flush()` 后再断言内容和 `j/k scroll` 提示；帮助 / footer 的既有测试都是按存在性断言，重排后照常通过。`npm run check` 通过，`npm test` 139 个全过。
+- 测试：`test/panel.test.ts` 的多选测试断言 `•` → `✓`（`›✓beta` / `✓alpha`），changelog 测试改为先断言"加载中弹窗（`Loading changelog` + 还没内容）"、`await flush()` 后再断言内容和 `j/k scroll` 提示；帮助 / footer 的既有测试都是按存在性断言，重排后照常通过。`npm run check` 通过，`npm test` 139 个全过。
 
 ### i18n
 
@@ -449,3 +449,13 @@
 1. 鼠标，触控板能够通过滚轮或者三指上下滚动列表
 2. 点击列表中的item能够选中，双击对话能够进入，双击tree能够展开/收起
 3. 点击列表和列表之外的空余的地方，焦点需要切换到对应的面板上
+
+### bug 反馈
+
+1. 打开/关闭按键提示对话框（？）之后，再切换面板，对话框会闪一下
+2. 在新对话上使用插件还算正常，但是如果选中了一个对话，然后在选中的对话中，再次打开插件，这个时候滚动会发现，整个插件面板都会整体向下移动，这很丑，有没有办法解决
+3. 英文状态下，按键提示框面板（？）中英文会进行省略，这里最好不要省略，毕竟是很重要的信息，可以选择换行展示。
+
+### 新功能
+
+1. 加个选项，能够让用户主动切换语言
