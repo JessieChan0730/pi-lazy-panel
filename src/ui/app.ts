@@ -376,6 +376,8 @@ export class LazyPanel implements Component, Focusable {
 	private layoutCache: { blocks: ContentBlock[]; inner: number; highlight: string | undefined; layout: ContentLayout } | undefined;
 	/** Viewport of the content pane as of the last render, used to clamp scrolling. */
 	private contentView = { inner: 60, visible: 10 };
+	/** Terminal width from the last render, used to size the help overlay when clamping its scroll. */
+	private lastWidth = 80;
 	/** Matching body lines of the content pane, per layout and query (the layout changes with the width, so the matches follow it). */
 	private contentSearchCache: { layout: ContentLayout; query: string; matches: number[] } | undefined;
 	/** Set while the search bar is open (`mode === "search"`). */
@@ -750,7 +752,7 @@ export class LazyPanel implements Component, Focusable {
 	}
 
 	private handleHelpInput(data: string): void {
-		const total = helpLineCount(this.keymap, this.state.focus);
+		const total = helpLineCount(this.keymap, this.state.focus, this.lastWidth);
 		// 关闭：Esc、q，或用户绑定给 help 的那个键（默认 ?）。
 		const closes = matchesKeyId(data, "escape") || matchesKeyId(data, "q") || this.isAction(data, "global", "help");
 		if (closes) {
@@ -2726,6 +2728,7 @@ export class LazyPanel implements Component, Focusable {
 	// -----------------------------------------------------------------------
 
 	render(width: number): string[] {
+		this.lastWidth = width;
 		const height = Math.max(8, this.o.getHeight());
 		const { leftW, rightW, bodyH, sessionsH, treeH } = panelGeometry(width, height, this.ratio);
 		const { theme } = this.o;

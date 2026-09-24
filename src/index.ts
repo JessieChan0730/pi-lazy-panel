@@ -92,6 +92,10 @@ export default function (pi: ExtensionAPI) {
 
 			await ctx.ui.custom<void>(
 				(tui, theme, _keybindings, done) => {
+					// overlay 模式默认不清理"腾空"的行（pi 的 terminal.clearOnShrink 默认 false）：关掉 ? 帮助框后
+					// 会留残影（切面板时闪一下），在有内容的当前会话里滚动时整块面板还会整体往下漂。全屏面板下打开
+					// 这个开关，让缩小后的区域被清掉。老版本 pi 可能没有这个方法，先做一次存在性判断。
+					if (typeof tui.setClearOnShrink === "function") tui.setClearOnShrink(true);
 					const panel = new LazyPanel({
 						theme,
 						data,

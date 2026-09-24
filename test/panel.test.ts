@@ -262,6 +262,26 @@ test("? opens the help overlay for the focused pane and ? / Esc close it", () =>
 	for (const l of h.panel.render(100)) assert.equal(visibleWidth(l), 100);
 });
 
+test("help wraps long descriptions onto continuation rows instead of truncating them", () => {
+	const h = makePanel({ height: 40 });
+	h.panel.handleInput("l"); // focus the tree pane
+	h.panel.handleInput("?");
+	const lines = h.text(100);
+	const body = lines.join("\n");
+	// tree-fold 的描述很长（"Fold / unfold the branch under the cursor (inside a branch: fold it and jump to its head)"）：
+	// 之前会被 … 截断，现在按描述列折到续行，首尾都应完整出现。
+	assert.ok(body.includes("Fold / unfold the branch under the cursor"), `head of the long description shows: ${body}`);
+	assert.ok(body.includes("jump to its head"), `tail of the long description is not truncated: ${body}`);
+	// 续行不应再出现省略号截断的那一句（整句都在，就不会有 "…head)" 之类）。
+	assert.equal(
+		lines.some((l) => l.includes("cursor") && l.includes("…")),
+		false,
+		"the long description line is not truncated with …",
+	);
+	// 折行后每一行仍然是精确宽度。
+	for (const l of h.panel.render(100)) assert.equal(visibleWidth(l), 100);
+});
+
 test("/ shows the 搜索 bar, typing searches live, Enter keeps the query, Esc in the bar cancels", () => {
 	const h = makePanel();
 	h.panel.handleInput("/");

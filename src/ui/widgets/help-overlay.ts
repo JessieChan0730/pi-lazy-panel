@@ -16,6 +16,7 @@
  *   └─ ? / Esc close ─ j/k scroll ───────────────┘
  *
  * 帮助内容直接来自最终合并后的 keymap，所以用户自定义的键位会如实显示。
+ * 描述过长时按描述列宽度折行（续行的 keys 列留空），不再用 … 截断——键位说明是重要信息。
  */
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
@@ -94,11 +95,85 @@ export function compactKeys(labels: string[]): string {
 	return labels.join("/");
 }
 
-/** Size of the box for a given terminal size. */
-export function helpBoxSize(termW: number, termH: number, lineCount: number): { width: number; height: number } {
-	const width = Math.max(30, Math.min(termW - 4, 64));
+/** A concrete rendered row of the help body, after wrapping long descriptions. */
+type HelpRenderRow = { kind: "header"; text: string } | { kind: "blank" } | { kind: "binding"; keys: string; text: string };
+
+/**
+ * Word-wrap `text` into lines of at most `width` visible columns. Words that do
+ * not fit on a line of their own are hard-broken by columns.
+ *
+ * 帮助描述按可见宽度折行：英文按空格断词，单词超宽再按列硬断；中文描述通常够短、不折行。
+ */
+function wrapText(text: string, width: number): string[] {
+	if (width <= 0) return [text];
+	const out: string[] = [];
+	let cur = "";
+	for (const word of text.split(/\s+/).filter(Boolean)) {
+		const candidate = cur ? `${cur} ${word}` : word;
+		if (visibleWidth(candidate) <= width) {
+			cur = candidate;
+			continue;
+		}
+		if (cur) {
+			out.push(cur);
+			cur = "";
+		}
+		// 单词自身就超过一行：按可见列硬断成多段。
+		let rest = word;
+		while (visibleWidth(rest) > width) {
+			let take = "";
+			for (const ch of [...rest]) {
+				if (visibleWidth(take + ch) > width) break;
+				take += ch;
+			}
+			out.push(take);
+			rest = rest.slice(take.length);
+		}
+		cur = rest;
+	}
+	if (cur) out.push(cur);
+	return out.length ? out : [""];
+}
+
+/**
+ * Expand the logical help lines into concrete rendered rows for a box whose
+ * inner width is `inner`: a binding's description is wrapped onto continuation
+ * rows (with a blank key column) instead of being truncated. `keyColW` is the
+ * shared width of the key column.
+ *
+ * keyColW / inner 都是终端宽度的确定函数，所以行数在 helpBoxSize、renderHelpBox、
+ * helpLineCount 三处算出来一致，滚动和高度不会对不上。
+ */
+function helpLayout(keymap: Keymap, focus: KeyScope, inner: number): { rows: HelpRenderRow[]; keyColW: number } {
+	const lines = buildHelpLines(keymap, focus);
+	const keyColW = Math.min(16, Math.max(8, ...lines.map((l) => (l.kind === "binding" ? visibleWidth(l.keys) : 0))) + 1);
+	// 描述列可用宽度 = 内宽 - 前导空格 - keys 列 - keys 后的一个空格。
+	const descW = Math.max(1, inner - keyColW - 2);
+	const rows: HelpRenderRow[] = [];
+	for (const line of lines) {
+		if (line.kind === "blank") {
+			rows.push({ kind: "blank" });
+		} else if (line.kind === "header") {
+			rows.push({ kind: "header", text: line.text });
+		} else {
+			// 首行带 keys，续行 keys 列留空、描述接着往下排。
+			wrapText(line.text, descW).forEach((seg, i) => rows.push({ kind: "binding", keys: i === 0 ? line.keys : "", text: seg }));
+		}
+	}
+	return { rows, keyColW };
+}
+
+/** Width of the help box for a `termW`-column terminal. */
+export function helpBoxWidth(termW: number): number {
+	return Math.max(30, Math.min(termW - 4, 64));
+}
+
+/** Size of the box for a given terminal size (height grows with the wrapped row count). */
+export function helpBoxSize(termW: number, termH: number, keymap: Keymap, focus: KeyScope): { width: number; height: number } {
+	const width = helpBoxWidth(termW);
+	const rowCount = helpLayout(keymap, focus, width - 2).rows.length;
 	// +2 for borders
-	const height = Math.max(6, Math.min(termH - 2, lineCount + 2));
+	const height = Math.max(6, Math.min(termH - 2, rowCount + 2));
 	return { width, height };
 }
 
@@ -106,25 +181,25 @@ export function helpBoxSize(termW: number, termH: number, lineCount: number): { 
 export function renderHelpBox(p: HelpOverlayProps, width: number, height: number): string[] {
 	const { theme } = p;
 	const inner = width - 2;
-	const lines = buildHelpLines(p.keymap, p.focus);
+	const { rows, keyColW } = helpLayout(p.keymap, p.focus, inner);
 	const visible = Math.max(1, height - 2);
-	const maxScroll = Math.max(0, lines.length - visible);
+	const maxScroll = Math.max(0, rows.length - visible);
 	const start = Math.min(Math.max(0, p.scroll), maxScroll);
-	const keyColW = Math.min(16, Math.max(8, ...lines.map((l) => (l.kind === "binding" ? visibleWidth(l.keys) : 0))) + 1);
 
 	const body: string[] = [];
-	for (const line of lines.slice(start, start + visible)) {
-		if (line.kind === "blank") {
+	for (const row of rows.slice(start, start + visible)) {
+		if (row.kind === "blank") {
 			body.push("");
-		} else if (line.kind === "header") {
-			body.push(" " + theme.bold(theme.fg("accent", line.text)));
+		} else if (row.kind === "header") {
+			body.push(" " + theme.bold(theme.fg("accent", row.text)));
 		} else {
-			const keys = fit(theme.fg("warning", line.keys), keyColW);
-			body.push(` ${keys} ${theme.fg("text", line.text)}`);
+			// 续行的 keys 为空，只占位对齐；描述由 helpLayout 折过行，这里不再截断。
+			const keys = fit(row.keys ? theme.fg("warning", row.keys) : "", keyColW);
+			body.push(` ${keys} ${theme.fg("text", row.text)}`);
 		}
 	}
 
-	const more = maxScroll > 0 ? ` ${start + 1}-${Math.min(lines.length, start + visible)}/${lines.length}` : "";
+	const more = maxScroll > 0 ? ` ${start + 1}-${Math.min(rows.length, start + visible)}/${rows.length}` : "";
 	return frame(body, {
 		width,
 		height,
@@ -138,12 +213,11 @@ export function renderHelpBox(p: HelpOverlayProps, width: number, height: number
 
 /** Composite the help box centered over already-rendered panel `lines`. */
 export function overlayHelp(lines: string[], p: HelpOverlayProps, termW: number): string[] {
-	const count = buildHelpLines(p.keymap, p.focus).length;
-	const { width, height } = helpBoxSize(termW, lines.length, count);
+	const { width, height } = helpBoxSize(termW, lines.length, p.keymap, p.focus);
 	return overlayCentered(lines, renderHelpBox(p, width, height), width, termW);
 }
 
-/** Number of body lines, used by the panel to clamp help scrolling. */
-export function helpLineCount(keymap: Keymap, focus: KeyScope): number {
-	return buildHelpLines(keymap, focus).length;
+/** Number of rendered help rows (wrapping included), used by the panel to clamp help scrolling. */
+export function helpLineCount(keymap: Keymap, focus: KeyScope, termW: number): number {
+	return helpLayout(keymap, focus, helpBoxWidth(termW) - 2).rows.length;
 }
