@@ -427,10 +427,20 @@
 
 项目需要支持多语言模式，目前需要支持得中文和英文，请使用 i18n 框架来处理。
 
-1. 使用 t 函数包裹当前所有UI上的文案, 一些日志打印不用管, 语言显示要统一，不要中文界面里面还有一些英文文案
-2. package.json 添加扫描命令，将文案扫描到对应的json文件中，并且进行翻译，翻译要比较优雅
-3. 默认跟随系统语言即 可，如果是没有提供国际化的语言，请使用英文
-4. 项目目录符合国际化工程的规范就行了
+1. ~~使用 t 函数包裹当前所有UI上的文案, 一些日志打印不用管, 语言显示要统一，不要中文界面里面还有一些英文文案~~
+2. ~~package.json 添加扫描命令，将文案扫描到对应的json文件中，并且进行翻译，翻译要比较优雅~~
+3. ~~默认跟随系统语言即 可，如果是没有提供国际化的语言，请使用英文~~
+4. ~~项目目录符合国际化工程的规范就行了~~
+
+实现说明（2026-09-24）：
+
+- 框架：用 `i18next`（新增到 `dependencies`，不进 peerDependencies——那三个 pi 包的约束不变）。新增唯一知道 i18next 的模块 `src/i18n/index.ts`：`initI18n(lng?)` 同步初始化（`initImmediate:false` + inline resources，`escapeValue:false` 因为终端不是 HTML），`detectLocale()` 按 `LC_ALL > LC_MESSAGES > LANG > LANGUAGE` + `Intl` 兜底判断，`normalizeLocale` 只认 `zh*` → 中文，其余回退英文（`fallbackLng: en`）；导出的 `t()` 未初始化时惰性按系统语言初始化，任何调用点都能拿到文案。语言在一次会话内固定。
+- 目录规范：翻译放 `src/i18n/locales/{en,zh}.json`（英文是基准语言 / source of truth），用 `fs` 读（不走 JSON import，省掉 NodeNext + verbatimModuleSyntax 的坑，也让运行时和扫描脚本读同一份格式）。`files` 里的 `src` 已经覆盖，随包发布。
+- 文案改造：约定**不在模块顶层用 `t()` 计算 `export const`**（会在 import 期求值，可能早于 `initI18n`），需要文案的地方一律写成函数、渲染时才 `t()`。因此 `config/keymap.ts` 的 `ACTION_DESCRIPTIONS` / `HELP_GROUPS` / `SCOPE_TITLES` / `PANE_TITLES` / `TREE_DIALOG_HINT_TEXT` 改成 `actionDescription()` / `helpGroupText()` / `scopeTitle()` / `paneTitleText()` / `treeDialogHintText()`；各 widget 预设的标题 / 提示（label/rename/new/import/fork/restore/export/confirm/session-info/changelog/tree-dialog、`search-bar` 的 `searchLabel()`）都由 const 改成函数；`footer` 的 SHORT / mode 名、三个面板的空态 / 计数 / 角色前缀（`user:`→`t("role.user")`）/ `YOU`·`ASSISTANT`、`sessions-pane` 的 scope / sort 标签、`search-highlight` 的 `searchMeta`、`app.ts` 里全部 `setStatus(...)`（含插值 `{{error}}` / 复数 `count`）都走 `t()`。`index.ts` 在注册命令前 `initI18n()`，命令描述和 `ctx.ui.notify` 的 "TUI only" 也本地化。搜索标签从写死的 `搜索:` 改成随语言（en `Search:` / zh `搜索:`）。
+- 未本地化的部分（有意保留）：`actions/` 层抛出的技术性 Error 文本（如 `session file not found`、pi 原样措辞的 `Cannot delete the currently active session` / `GitHub CLI (gh) is not installed…`）——它们要么是诊断信息、要么刻意对齐 pi；面板把它们包在已翻译的 `xxx failed: {{error}}` 前缀里显示。会话里的 `role:` 搜索限定词、tree 的 kind 判断等数据层逻辑仍用英文标识符。
+- 扫描命令：`npm run i18n:scan`（写）/ `npm run i18n:check`（只读，CI 用）→ `scripts/i18n-scan.mjs`。扫描 `src` 里所有静态 `t("…")` 的 key，和两份 json 对齐：报告①代码用到但 en 缺失②en 有 zh 缺（需翻译）③没被用到的孤儿（动态 `t(\`ns.${x}\`)` 记下前缀 `ns`、跳过该命名空间避免误报）；写模式把缺失 key 以空串补进两份并按字母排序（译文由人 / AI 补），`--check` 有问题时退出码非 0。翻译本身这次由 AI 一次性补齐，无需联网 / API。
+- 测试：新增 `test/i18n.test.ts`（detectLocale / normalizeLocale / 初始化 / 插值 / 复数 / 缺失回退）。既有测试统一在文件顶部 `initI18n("en")`，断言仍按英文界面；用到的标题 / 提示常量改为在测试里调用对应函数取值（所见即所测），写死的 `搜索:` 断言改成 `Search:`（并用带冒号的 `Search:` 和 footer 里不带冒号的 `Search` 提示区分）。`npm run check` + `npm test`（140 个）+ `npm run i18n:check` 全过。
+- 已知小问题：会话信息弹窗的标签列改成按可见宽度对齐（中文标签宽度不一），值仍换行不截断；`role.*` 只翻译显示前缀，不影响 `role:` 搜索。
 
 ### 鼠标事件
 
