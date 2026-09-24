@@ -1,6 +1,6 @@
 # pi-lazy-panel
 
-A lazygit-style TUI for [pi](https://pi.dev) sessions. One command, `/lazy-history`, opens a
+A lazygit-style TUI for [pi](https://pi.dev) sessions. One command, `/lazy-panel`, opens a
 three-pane panel: sessions on the left, the selected session's tree below it, and the
 conversation content on the right. Everything is driven by vim-like keys.
 
@@ -37,7 +37,7 @@ pi -e ./src/index.ts        # or: npm run dev
 
 ```
 src/
-  index.ts                  extension entry — registers /lazy-history
+  index.ts                  extension entry — registers /lazy-panel
   constants.ts              ids, command name, layout constants
   types.ts                  shared types (rows, keymap, search query, config)
   config/

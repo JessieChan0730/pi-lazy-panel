@@ -53,7 +53,7 @@ npm run i18n:check     # 同上但只读不写，有不一致时退出码非 0�
 
 ```
 src/
-├── index.ts                  # 入口：registerCommand("/lazy-history")，用 ctx.ui.custom 打开全屏面板
+├── index.ts                  # 入口：registerCommand("/lazy-panel")，用 ctx.ui.custom 打开全屏面板
 ├── types.ts                  # 共享类型（只放类型，禁止运行时代码）
 ├── constants.ts              # 常量：扩展 id、命令名、布局比例、面板 id、排序循环顺序（SESSION_SORT_MODES）、键位 scope（KEY_SCOPES = global + 面板 + tree-dialog）
 ├── ui/                       # 渲染层：pi-tui Component。不做 I/O，不调用 pi 会话 API
@@ -144,7 +144,7 @@ AGENTS.md                     # 仅指向本文件，规则统一在这里维护
 6. `@earendil-works/pi-coding-agent`、`@earendil-works/pi-tui` 和 `typebox` 需保留在 `peerDependencies` 中，版本号设为 `*`；严禁将其打包（bundle）或作为本地依赖（vendor）包含在内。
 7. 执行破坏性操作（如删除、fork）时，必须先通过 `ui/widgets/confirm-dialog.ts` 进行确认。
 8. 对话内容渲染必须使用 `@earendil-works/pi-tui` 提供的 `Markdown` 组件；禁止引入其他 Markdown 库。
-9. `/lazy-history` 仅适用于 TUI 模式；请务必在 `src/index.ts` 中保留 `ctx.mode !== "tui"` 的条件判断。
+9. `/lazy-panel` 仅适用于 TUI 模式；请务必在 `src/index.ts` 中保留 `ctx.mode !== "tui"` 的条件判断。
 10. 模块之间尽量低耦合
 11. 更新 design, progress, keybindings 这些文档，提交消息固定为 `chore(doc): update doc by $progress` 后面 $变量 根据实际修改的文档来定
 12. 新增功能一定要考虑跨平台，不要使用某些特定平台的特性，比如路径使用`~/` 这个在 windows下是会报错的。

@@ -1,7 +1,7 @@
 {
 	"name": "pi-lazy-panel",
 	"version": "0.1.0",
-	"description": "A lazygit-style TUI for browsing, resuming and managing pi sessions (/lazy-history)",
+	"description": "A lazygit-style TUI for browsing, resuming and managing pi sessions (/lazy-panel)",
 	"type": "module",
 	"private": true,
 	"keywords": [

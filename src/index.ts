@@ -1,7 +1,7 @@
 /**
  * pi-lazy-panel — entry point.
  *
- * Registers the `/lazy-history` command. When invoked, it opens the full-screen
+ * Registers the `/lazy-panel` command. When invoked, it opens the full-screen
  * lazygit-style panel (see ./ui/app.ts). Everything else lives in sub-modules:
  *
  *   config/   keymap + user configuration

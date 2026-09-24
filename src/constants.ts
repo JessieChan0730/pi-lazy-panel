@@ -5,8 +5,8 @@
 /** Extension identifier used for status/widget keys and log prefixes. */
 export const EXTENSION_ID = "lazy-panel";
 
-/** Slash command that opens the panel: `/lazy-history`. */
-export const COMMAND_NAME = "lazy-history";
+/** Slash command that opens the panel: `/lazy-panel`. */
+export const COMMAND_NAME = "lazy-panel";
 
 /** Name of the optional user config file inside the pi agent directory. */
 export const CONFIG_FILE_NAME = "lazy-panel.json";
