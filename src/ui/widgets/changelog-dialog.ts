@@ -18,13 +18,17 @@
  */
 
 import { getMarkdownTheme, type Theme } from "@earendil-works/pi-coding-agent";
-import { Markdown } from "@earendil-works/pi-tui";
+import { Markdown, visibleWidth } from "@earendil-works/pi-tui";
+import { SPINNER_FRAMES } from "../../constants.ts";
 import { matchesKeyId } from "../../config/keys.ts";
 import type { KeyHint } from "../../types.ts";
 import { frame, overlayCentered } from "../frame.ts";
 
 /** Title on the top border (pi's own heading for /changelog). */
 export const CHANGELOG_TITLE = "What's New";
+
+/** Loading line while the (large) changelog markdown is being rendered. */
+export const CHANGELOG_LOADING = "Loading changelog…";
 
 /** Footer hints while the dialog is open. */
 export const CHANGELOG_HINTS: KeyHint[] = [
@@ -41,20 +45,30 @@ export interface ChangelogDialogOptions {
 
 export class ChangelogDialog {
 	private markdown: string | undefined;
+	/** True between `openLoading()` and `setContent()` while the markdown is loaded / rendered. */
+	private loading = false;
+	/** Rotating-square frame index for the loading line, advanced by the panel. */
+	private spinnerFrame = 0;
 	private scroll = 0;
-	/** Rendered lines for the last width. */
-	private cache: { width: number; lines: string[] } | undefined;
+	/** Rendered lines cached by (width, markdown) so reopening the same changelog is instant. */
+	private cache: { width: number; markdown: string; lines: string[] } | undefined;
 	/** Body rows visible at the last render, for paging and clamping. */
 	private visible = 10;
 
 	constructor(private readonly o: ChangelogDialogOptions) {}
 
 	get isOpen(): boolean {
-		return this.markdown !== undefined;
+		return this.loading || this.markdown !== undefined;
+	}
+
+	/** True while waiting for the changelog to load / render (the box shows the loading line). */
+	get isLoading(): boolean {
+		return this.loading;
 	}
 
 	get hints(): KeyHint[] {
-		return this.isOpen ? CHANGELOG_HINTS : [];
+		// 加载中不给滚动提示（还没内容可滚），提示都在弹窗自己的底部说明里。
+		return this.markdown !== undefined ? CHANGELOG_HINTS : [];
 	}
 
 	/** Current top line (for tests). */
@@ -62,22 +76,43 @@ export class ChangelogDialog {
 		return this.scroll;
 	}
 
-	open(markdown: string): void {
-		this.markdown = markdown;
+	/** Show the loading box while the markdown is fetched / rendered. */
+	openLoading(): void {
+		this.loading = true;
+		this.markdown = undefined;
+		this.spinnerFrame = 0;
 		this.scroll = 0;
-		this.cache = undefined;
+	}
+
+	/** Advance the loading spinner one frame (driven by the panel's timer). */
+	advanceSpinner(): void {
+		this.spinnerFrame++;
+	}
+
+	/** Show the changelog content; the rendered lines are cached across opens so reopening is instant. */
+	setContent(markdown: string): void {
+		this.markdown = markdown;
+		this.loading = false;
+		this.scroll = 0;
+		// 不主动清 cache：lines() 按 (width, markdown) 判断能否复用，同一份 changelog 再开就秒开。
 	}
 
 	close(): void {
 		this.markdown = undefined;
-		this.cache = undefined;
+		this.loading = false;
+		// 保留 cache：同一宽度、同一份 changelog 下次打开直接复用渲染结果。
 	}
 
 	handleInput(data: string): void {
 		if (!this.isOpen) return;
+		// 加载中只允许取消（Esc / q），滚动等按键先吞掉。
+		if (matchesKeyId(data, "escape") || matchesKeyId(data, "q")) {
+			this.o.onClose();
+			return;
+		}
+		if (this.loading) return;
 		const half = Math.max(1, Math.floor(this.visible / 2));
-		if (matchesKeyId(data, "escape") || matchesKeyId(data, "q")) this.o.onClose();
-		else if (matchesKeyId(data, "j") || matchesKeyId(data, "down")) this.scrollBy(1);
+		if (matchesKeyId(data, "j") || matchesKeyId(data, "down")) this.scrollBy(1);
 		else if (matchesKeyId(data, "k") || matchesKeyId(data, "up")) this.scrollBy(-1);
 		else if (matchesKeyId(data, "ctrl+d") || matchesKeyId(data, "pagedown")) this.scrollBy(half);
 		else if (matchesKeyId(data, "ctrl+u") || matchesKeyId(data, "pageup")) this.scrollBy(-half);
@@ -91,10 +126,11 @@ export class ChangelogDialog {
 	}
 
 	private lines(width: number): string[] {
-		if (this.cache?.width === width) return this.cache.lines;
-		const md = new Markdown(this.markdown ?? "", 1, 0, getMarkdownTheme());
+		const markdown = this.markdown ?? "";
+		if (this.cache?.width === width && this.cache.markdown === markdown) return this.cache.lines;
+		const md = new Markdown(markdown, 1, 0, getMarkdownTheme());
 		const lines = md.render(width);
-		this.cache = { width, lines };
+		this.cache = { width, markdown, lines };
 		return lines;
 	}
 
@@ -106,8 +142,9 @@ export class ChangelogDialog {
 	/** Render the box itself, every line exactly `width` columns and `height` lines tall. */
 	render(width: number, height: number): string[] {
 		const { theme } = this.o;
-		const all = this.lines(width - 2);
 		this.visible = Math.max(1, height - 2);
+		if (this.loading) return this.renderLoading(width, height);
+		const all = this.lines(width - 2);
 		const maxTop = Math.max(0, all.length - this.visible);
 		this.scroll = Math.min(this.scroll, maxTop);
 		const body = all.slice(this.scroll, this.scroll + this.visible);
@@ -118,6 +155,26 @@ export class ChangelogDialog {
 			height,
 			title: CHANGELOG_TITLE,
 			...(meta ? { meta } : {}),
+			border: (s) => theme.fg("borderAccent", s),
+			titleStyle: (s) => theme.bold(theme.fg("accent", s)),
+			metaStyle: (s) => theme.fg("dim", s),
+		});
+	}
+
+	/** The loading box: an empty body with a centered spinner + text in its middle. */
+	private renderLoading(width: number, height: number): string[] {
+		const { theme } = this.o;
+		const inner = width - 2;
+		const glyph = SPINNER_FRAMES[this.spinnerFrame % SPINNER_FRAMES.length] ?? SPINNER_FRAMES[0];
+		const msg = `${glyph} ${CHANGELOG_LOADING}`;
+		const pad = Math.max(0, Math.floor((inner - visibleWidth(msg)) / 2));
+		const body: string[] = Array.from({ length: this.visible }, () => "");
+		// 垂直居中：放在中间那一行。
+		body[Math.floor((this.visible - 1) / 2)] = " ".repeat(pad) + theme.fg("dim", msg);
+		return frame(body, {
+			width,
+			height,
+			title: CHANGELOG_TITLE,
 			border: (s) => theme.fg("borderAccent", s),
 			titleStyle: (s) => theme.bold(theme.fg("accent", s)),
 			metaStyle: (s) => theme.fg("dim", s),

@@ -2816,7 +2816,7 @@ test("e / I / S report when no actions are wired", async () => {
 	assert.equal(h.panel.state.mode, "normal");
 });
 
-test("space toggles the multi-selection: • marker, header count, Esc clears it before quitting", async () => {
+test("space toggles the multi-selection: title highlight (no glyph), header count, Esc clears it before quitting", async () => {
 	const h = makeSessionActionPanel();
 	await h.panel.load();
 	h.panel.handleInput(" ");
@@ -2825,8 +2825,10 @@ test("space toggles the multi-selection: • marker, header count, Esc clears it
 	h.panel.handleInput(" ");
 	assert.deepEqual([...h.panel.state.selectedSessionFiles].sort(), ["/tmp/s1.jsonl", "/tmp/s2.jsonl"]);
 	const lines = h.text();
-	assert.ok(lines.some((l) => l.includes(" •alpha")), "a selected row off the cursor shows •");
-	assert.ok(lines.some((l) => l.includes("›•beta")), "the cursor row keeps both marks");
+	// 选中只靠标题着色，不再画勾图标：行里出现标题、但没有 ✓（• 是 TREE 面板的活动路径标记，不算）。
+	assert.ok(lines.some((l) => l.includes("alpha")) && lines.some((l) => l.includes("beta")), lines.join("\n"));
+	assert.equal(lines.some((l) => l.includes("✓")), false, "no selection glyph is drawn");
+	assert.ok(h.header().includes("2 selected"), h.header());
 	assert.ok(h.header().includes("2 selected"), h.header());
 	// space again unselects
 	h.panel.handleInput(" ");
@@ -2931,7 +2933,17 @@ test("@ opens pi's changelog in a big box: j/k/arrows scroll, G / g jump, Esc / 
 	await flush();
 	assert.equal(loads, 1);
 	assert.equal(panel.state.mode, "changelog");
+	// first the loading box shows (the whole changelog is slow to render): a spinner + hint, no content yet
 	let lines = text();
+	assert.ok(dialogAt(lines, "What's New"), "the box is drawn while loading");
+	assert.ok(
+		lines.some((l) => l.includes("Loading changelog")),
+		`a loading hint shows: ${lines.join("\n")}`,
+	);
+	assert.equal(dialogAt(lines, "What's New")!.body.some((l) => l.includes("line 1 ")), false, "content is not rendered yet");
+	// past the yield: the content is rendered and the scroll hints appear
+	await flush();
+	lines = text();
 	const dlg = dialogAt(lines, "What's New");
 	assert.ok(dlg, "the dialog is drawn");
 	assert.ok(dlg.body.some((l) => l.includes("line 1 ")), dlg.body.join("\n"));

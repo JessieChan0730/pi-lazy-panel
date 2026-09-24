@@ -15,62 +15,64 @@ import { TREE_DIALOG_SCOPE } from "../constants.ts";
 import type { ActionId, KeyScope, Keymap, PaneId } from "../types.ts";
 
 export const DEFAULT_KEYMAP: Keymap = {
+	// 每个 scope 里 key 的书写顺序 = ? 帮助里的展示顺序（buildScopeLines 遍历 Object.keys），
+	// 所以按使用频率排：高频在前。键位解析和顺序无关，footer 另有 FOOTER_HINTS 顺序，互不影响。
 	global: {
+		search: "/",
 		// 面板切换参考 lazygit：h/l 前后切换，1/2/3 直接跳到对应编号的面板。
 		"focus-next": ["l", "tab"],
 		"focus-prev": "h",
 		"focus-sessions": "1",
 		"focus-tree": "2",
 		"focus-content": "3",
+		"search-next": "n",
+		"search-prev": "N",
 		// C / A 各自只切到一种范围，不做 toggle。
 		"scope-current": "C",
 		"scope-all": "A",
 		help: "?",
-		quit: ["q", "ctrl+c"],
-		search: "/",
-		"search-next": "n",
-		"search-prev": "N",
 		// 和 pi 的 /changelog 一样查看 pi 的更新日志（居中大弹窗，可滚动）。
 		changelog: "@",
+		quit: ["q", "ctrl+c"],
 	},
 
 	sessions: {
+		"session-resume": "return",
 		"move-down": ["j", "down"],
 		"move-up": ["k", "up"],
 		"go-top": "gg",
 		"go-bottom": "G",
-		"scroll-content-down": "J",
-		"scroll-content-up": "K",
-		"session-resume": "return",
+		"session-new": "n",
 		"session-delete": "d",
 		"session-rename": "r",
-		"session-fork": "o",
+		"session-sort": "s",
+		"session-info": "i",
 		"session-toggle-select": "space",
+		// c 压缩光标所在会话（对应 /compact）；C（大写）是全局 scope-current，不冲突。
+		"session-compact": "c",
+		"session-fork": "o",
+		"session-clone": "y",
+		"session-copy-last-reply": "Y",
+		"scroll-content-down": "J",
+		"scroll-content-up": "K",
 		"session-export": "e",
 		"session-import": "I",
 		"session-share": "S",
-		"session-clone": "y",
-		"session-copy-last-reply": "Y",
-		// c 压缩光标所在会话（对应 /compact）；C（大写）是全局 scope-current，不冲突。
-		"session-compact": "c",
-		"session-sort": "s",
-		"session-new": "n",
-		"session-info": "i",
 	},
 
 	tree: {
+		"tree-restore": "return",
 		"move-down": ["j", "down"],
 		"move-up": ["k", "up"],
 		"go-top": "gg",
 		"go-bottom": "G",
-		"tree-restore": "return",
-		"tree-copy": "y",
-		// 打标签用 T，和 pi 自带 /tree 的 shift+T 一致；这样 l 留给全局的“下一个面板”。
-		"tree-label": "T",
-		// 小面板只显示部分数据，搜索 / 过滤放在 a 打开的完整树对话框里。
-		"tree-open": "a",
 		// 折叠 / 展开光标所在的分支段（vim 的 za）。
 		"tree-fold": "z",
+		// 小面板只显示部分数据，搜索 / 过滤放在 a 打开的完整树对话框里。
+		"tree-open": "a",
+		// 打标签用 T，和 pi 自带 /tree 的 shift+T 一致；这样 l 留给全局的“下一个面板”。
+		"tree-label": "T",
+		"tree-copy": "y",
 	},
 
 	// 只读面板：只保留上下滚动 + 顶部/底部（搜索 / 帮助等走 global）。
@@ -201,33 +203,16 @@ export const HELP_GROUPS: HelpGroup[] = [
 	},
 ];
 
-/** Actions shown as footer hints per pane, in display order (first few that fit). */
+/**
+ * Actions shown as footer hints per pane, in display order (first few that fit).
+ *
+ * 只留最常用的键，长尾（排序 / 信息 / 压缩 / fork / clone / 复制 / 导出 / 导入 / 分享 / changelog）
+ * 都收进 ? 帮助里，避免 footer 挤满一串半高频的键。
+ */
 export const FOOTER_HINTS: Record<PaneId, ActionId[]> = {
-	sessions: [
-		"search",
-		"help",
-		"focus-next",
-		"scope-current",
-		"scope-all",
-		"session-resume",
-		"session-delete",
-		"session-rename",
-		"session-new",
-		"session-sort",
-		"session-info",
-		"session-compact",
-		// fork / clone / 复制回复 / 导出导入分享用得少，放后面：窄终端里先被挤掉，? 帮助里仍然都有。
-		"session-fork",
-		"session-clone",
-		"session-copy-last-reply",
-		"session-export",
-		"session-import",
-		"session-share",
-		"changelog",
-		"quit",
-	],
-	tree: ["search", "help", "focus-next", "tree-restore", "tree-fold", "tree-open", "tree-label", "tree-copy", "changelog", "quit"],
-	content: ["search", "help", "focus-next", "go-top", "go-bottom", "changelog", "quit"],
+	sessions: ["search", "focus-next", "scope-current", "scope-all", "session-resume", "session-delete", "session-rename", "session-new", "help", "quit"],
+	tree: ["search", "focus-next", "tree-restore", "tree-fold", "tree-open", "help", "quit"],
+	content: ["search", "focus-next", "go-top", "go-bottom", "help", "quit"],
 };
 
 /**

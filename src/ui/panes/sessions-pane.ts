@@ -6,8 +6,9 @@
  *   › FilmRecall                       09-20 22:18
  *     opus-4 · ~/code/myself/FilmRecall · 128 msgs
  *
- * The cursor row is highlighted; sessions picked with space show a `•` in the
- * second marker column and the header starts with "3 selected". While a `/` search is active in the pane the
+ * The cursor row is highlighted; sessions picked with space have no marker glyph
+ * — their title is tinted accent so selected rows stand out in a long list — and
+ * the header starts with "3 selected". While a `/` search is active in the pane the
  * matching rows get their hits painted (see ../search-highlight.ts) and the
  * header counts them ("2/7 matches"); the list itself is never filtered.
  */
@@ -81,9 +82,9 @@ export function renderSessionsPane(p: SessionsPaneProps, width: number, height: 
 function renderRow(row: SessionRow, inner: number, isCursor: boolean, p: SessionsPaneProps): string[] {
 	const { theme } = p;
 	const indent = "  ".repeat(row.threadDepth ?? 0);
-	// 两列标记：第一列是光标 ›，第二列是多选的 •（光标停在选中行上时两个都看得见）。
+	// 光标标记 ›（占第一列，第二列留空对齐）；多选不再画图标，只靠标题着色区分。
 	const isSelected = p.selected.has(row.file);
-	const marker = `${isCursor ? "›" : " "}${isSelected ? "•" : " "}`;
+	const marker = `${isCursor ? "›" : " "} `;
 	const date = formatShortDate(row.updatedAt);
 	const title = row.name ?? row.preview ?? "(empty session)";
 
@@ -99,14 +100,17 @@ function renderRow(row: SessionRow, inner: number, isCursor: boolean, p: Session
 
 	if (isCursor) {
 		const hl = (s: string) => theme.bg("selectedBg", fit(s, inner));
+		// 光标行整行反白；被选中时标题额外着 accent 色。
+		const titleSpan = isSelected ? theme.bold(theme.fg("accent", titleText)) : theme.bold(titleText);
 		return [
-			hl(theme.bold(theme.fg("accent", marker[0]!)) + theme.bold(theme.fg("warning", marker.slice(1))) + indent + theme.bold(titleText) + " " + theme.fg("dim", date)),
+			hl(theme.bold(theme.fg("accent", marker[0]!)) + marker.slice(1) + indent + titleSpan + " " + theme.fg("dim", date)),
 			hl(theme.fg("muted", line2Raw)),
 		];
 	}
-	const markerStyle = isSelected ? (s: string) => theme.fg("warning", s) : (s: string) => s;
+	// 选中行：标题用 accent 色，一眼能从列表里扫出来；未选中用普通 text 色。
+	const titleStyle = isSelected ? (s: string) => theme.fg("accent", s) : (s: string) => theme.fg("text", s);
 	return [
-		fit(markerStyle(marker) + indent + theme.fg("text", titleText) + " " + theme.fg("dim", date), inner),
+		fit(marker + indent + titleStyle(titleText) + " " + theme.fg("dim", date), inner),
 		fit(theme.fg("muted", line2Raw), inner),
 	];
 }

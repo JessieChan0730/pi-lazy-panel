@@ -53,7 +53,7 @@ import type { Component, Focusable } from "@earendil-works/pi-tui";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import { type Binding, compileKeymap, labelsFor, labelsForFocus, matchesKeyId, resolveKeys } from "../config/keys.ts";
 import { DEFAULT_KEYMAP, FOCUS_ACTIONS, isDisabledIn, PANE_TITLES, TREE_DIALOG_FOOTER, TREE_DIALOG_HINT_TEXT } from "../config/keymap.ts";
-import { LEFT_COLUMN_RATIO, PANE_IDS, SESSION_SORT_MODES, SUMMARIZING_STATUS, TREE_DIALOG_SCOPE } from "../constants.ts";
+import { LEFT_COLUMN_RATIO, PANE_IDS, SESSION_SORT_MODES, SPINNER_INTERVAL_MS, SUMMARIZING_STATUS, TREE_DIALOG_SCOPE } from "../constants.ts";
 import { highlightTerms, matchesTokens, matchSessionRow, matchTreeRow, parseSearchQuery, searchTokens } from "../data/search.ts";
 import { findSessionIndex } from "../data/sessions.ts";
 import {
@@ -326,6 +326,10 @@ export class LazyPanel implements Component, Focusable {
 	private readonly infoDialog: SessionInfoDialog;
 	/** `@`: pi's changelog in a big scrollable box. */
 	private readonly changelogDialog: ChangelogDialog;
+	/** Cached changelog markdown so a second `@` opens instantly (only the first render is slow). */
+	private changelogMd: string | undefined;
+	/** Ticker that rotates the changelog loading spinner while the markdown is fetched / rendered. */
+	private changelogSpinner: ReturnType<typeof setInterval> | undefined;
 	/**
 	 * Fold state from before the dialog's search started: a search shows every
 	 * match, so folds are cleared meanwhile and restored when the query is gone.
@@ -1756,30 +1760,72 @@ export class LazyPanel implements Component, Focusable {
 		return true;
 	}
 
-	/** @: load pi's changelog and show it in the scrollable dialog. */
+	/** @: show pi's changelog. Rendering the whole file is slow, so the box opens with a loading spinner first. */
 	private async openChangelog(): Promise<void> {
 		const load = this.o.data.loadChangelog;
 		if (!load) {
 			this.setStatus("changelog: unavailable");
 			return;
 		}
+		this.state.mode = "changelog";
+		this.status = undefined;
+		// 已经加载过：直接用缓存内容打开，渲染结果按宽度缓存，秒开，不再显示加载中。
+		if (this.changelogMd !== undefined) {
+			this.changelogDialog.setContent(this.changelogMd);
+			this.o.requestRender();
+			return;
+		}
+		// 首次打开：Markdown 渲染整份 changelog（几千行）是同步的、比较慢。先画出"加载中"的弹窗
+		// （底部转方块 + 文案），让反馈在那次卡顿渲染之前先出现。
+		this.changelogDialog.openLoading();
+		this.startChangelogSpinner();
+		this.o.requestRender();
 		let markdown: string;
 		try {
 			markdown = await load();
-			if (this.disposed) return;
 		} catch (err) {
+			this.stopChangelogSpinner();
+			if (this.disposed) return;
+			this.changelogDialog.close();
+			this.state.mode = this.baseMode();
 			this.setStatus(`changelog failed: ${(err as Error).message}`);
 			return;
 		}
-		this.state.mode = "changelog";
-		this.changelogDialog.open(markdown);
+		// 先让"加载中"那一帧画出来，再做同步的重渲染（否则两次 requestRender 可能被合并，加载提示看不见）。
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		// 加载期间用户可能已经关掉弹窗或退出了面板。
+		if (this.disposed || !this.changelogDialog.isLoading) {
+			this.stopChangelogSpinner();
+			return;
+		}
+		this.stopChangelogSpinner();
+		this.changelogMd = markdown;
+		this.changelogDialog.setContent(markdown);
 		this.o.requestRender();
 	}
 
 	private closeChangelog(): void {
+		this.stopChangelogSpinner();
 		this.changelogDialog.close();
 		this.state.mode = this.baseMode();
 		this.o.requestRender();
+	}
+
+	/** Rotate the changelog loading spinner one frame every SPINNER_INTERVAL_MS. */
+	private startChangelogSpinner(): void {
+		this.stopChangelogSpinner();
+		const timer = setInterval(() => {
+			this.changelogDialog.advanceSpinner();
+			this.o.requestRender();
+		}, SPINNER_INTERVAL_MS);
+		// unref：加载很快时不让这个定时器拖住进程（尤其是测试）。
+		timer.unref?.();
+		this.changelogSpinner = timer;
+	}
+
+	private stopChangelogSpinner(): void {
+		if (this.changelogSpinner) clearInterval(this.changelogSpinner);
+		this.changelogSpinner = undefined;
 	}
 
 	private closeConfirm(): void {
@@ -2541,6 +2587,7 @@ export class LazyPanel implements Component, Focusable {
 
 	dispose(): void {
 		this.disposed = true;
+		this.stopChangelogSpinner();
 		this.clearPending();
 		this.clearSessionLoad();
 	}
