@@ -20,8 +20,9 @@
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { ACTION_DESCRIPTIONS, HELP_GROUPS, isDisabledIn, SCOPE_TITLES } from "../../config/keymap.ts";
+import { actionDescription, HELP_GROUPS, helpGroupText, isDisabledIn, scopeTitle } from "../../config/keymap.ts";
 import { labelsFor, scopeChain } from "../../config/keys.ts";
+import { t } from "../../i18n/index.ts";
 import type { ActionId, Keymap, KeyScope } from "../../types.ts";
 import { fit, frame, overlayCentered } from "../frame.ts";
 
@@ -42,7 +43,7 @@ export function buildHelpLines(keymap: Keymap, focus: KeyScope): HelpLine[] {
 	const out: HelpLine[] = [];
 	for (const scope of scopeChain(focus)) {
 		if (out.length) out.push({ kind: "blank" });
-		out.push({ kind: "header", text: SCOPE_TITLES[scope] });
+		out.push({ kind: "header", text: scopeTitle(scope) });
 		out.push(...buildScopeLines(keymap, scope, focus));
 	}
 	return out;
@@ -70,10 +71,10 @@ function buildScopeLines(keymap: Keymap, scope: KeyScope, focus: KeyScope): Help
 		if (group && members.length >= 2) {
 			for (const m of members) consumed.add(m);
 			const keys = members.flatMap((m) => labelsFor(keymap, scope, m));
-			out.push({ kind: "binding", keys: compactKeys(keys), text: group.text });
+			out.push({ kind: "binding", keys: compactKeys(keys), text: helpGroupText(group) });
 			continue;
 		}
-		out.push({ kind: "binding", keys: compactKeys(labels), text: ACTION_DESCRIPTIONS[action] });
+		out.push({ kind: "binding", keys: compactKeys(labels), text: actionDescription(action) });
 	}
 	return out;
 }
@@ -127,8 +128,8 @@ export function renderHelpBox(p: HelpOverlayProps, width: number, height: number
 	return frame(body, {
 		width,
 		height,
-		title: `HELP · ${SCOPE_TITLES[p.focus]}`,
-		meta: `? / Esc close${maxScroll > 0 ? " · j/k scroll" : ""}${more}`,
+		title: `${t("help.titlePrefix")} · ${scopeTitle(p.focus)}`,
+		meta: `${t("help.closeHint")}${maxScroll > 0 ? ` · ${t("help.scrollHint")}` : ""}${more}`,
 		border: (s) => theme.fg("borderAccent", s),
 		titleStyle: (s) => theme.bold(theme.fg("accent", s)),
 		metaStyle: (s) => theme.fg("dim", s),

@@ -18,6 +18,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { sliceByColumn, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { findMatchRanges } from "../data/search.ts";
+import { t } from "../i18n/index.ts";
 
 /** How one rendered row is highlighted: the terms to mark, and whether it is the current match. */
 export interface RowHighlight {
@@ -98,6 +99,10 @@ function styleText(text: string, style: (text: string) => string): string {
  */
 export function searchMeta(position: number, total: number, budget: number): string {
 	const candidates =
-		total === 0 ? ["no matches", "0/0"] : position > 0 ? [`${position}/${total} matches`, `${position}/${total}`] : [`${total} matches`, `${total}`];
+		total === 0
+			? [t("search.none"), "0/0"]
+			: position > 0
+				? [t("search.matches", { position, total }), `${position}/${total}`]
+				: [t("search.total", { total }), `${total}`];
 	return candidates.find((c) => visibleWidth(c) <= budget) ?? candidates[candidates.length - 1]!;
 }

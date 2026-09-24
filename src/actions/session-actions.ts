@@ -32,8 +32,9 @@ import {
 	type ExtensionCommandContext,
 	SessionManager,
 } from "@earendil-works/pi-coding-agent";
-import { COMPACTING_STATUS, EXTENSION_ID, SPINNER_FRAMES, SPINNER_INTERVAL_MS } from "../constants.ts";
+import { EXTENSION_ID, SPINNER_FRAMES, SPINNER_INTERVAL_MS } from "../constants.ts";
 import { loadLastReply } from "../data/content.ts";
+import { t } from "../i18n/index.ts";
 import type { DeleteMethod, EnterOutcome, ExportFormat, ExportTarget, ShareResult } from "../types.ts";
 import { resolveUserPath, stripQuotes } from "../utils/paths.ts";
 
@@ -275,7 +276,7 @@ export type CompactContext = Pick<ExtensionCommandContext, "sessionManager" | "s
  */
 export async function compactSession(ctx: CompactContext, sessionFile: string, customInstructions?: string): Promise<EnterOutcome> {
 	if (isCurrentSession(ctx, sessionFile)) {
-		const stop = startFooterSpinner(ctx.ui, COMPACTING_STATUS);
+		const stop = startFooterSpinner(ctx.ui, t("status.compacting"));
 		try {
 			await runCompaction(ctx, customInstructions);
 		} finally {
@@ -285,7 +286,7 @@ export async function compactSession(ctx: CompactContext, sessionFile: string, c
 	}
 	await resumeSession(ctx, sessionFile, {
 		withSession: async (next) => {
-			const stop = startFooterSpinner(next.ui, COMPACTING_STATUS);
+			const stop = startFooterSpinner(next.ui, t("status.compacting"));
 			try {
 				await runCompaction(next, customInstructions);
 			} catch (err) {

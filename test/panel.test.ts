@@ -10,7 +10,10 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { DEFAULT_KEYMAP } from "../src/config/keymap.ts";
 import { mergeKeymap } from "../src/config/config.ts";
-import { SUMMARIZING_STATUS } from "../src/constants.ts";
+import { initI18n, t } from "../src/i18n/index.ts";
+
+// 测试统一按英文界面断言：先把 i18n 固定成 en（放在其它 src 模块的顶层 t() 别名之前）。
+initI18n("en");
 import type {
 	ContentBlock,
 	ExportFormat,
@@ -23,26 +26,48 @@ import type {
 	TreeRow,
 } from "../src/types.ts";
 import { type ActionSource, type DataSource, LazyPanel } from "../src/ui/app.ts";
-import { COMPACT_DIALOG_TITLE } from "../src/ui/widgets/compact-dialog.ts";
+import { compactDialogTitle } from "../src/ui/widgets/compact-dialog.ts";
 import {
-	CLONE_SESSION_TITLE,
-	DELETE_SESSION_TITLE,
-	FORK_SESSION_TITLE,
-	IMPORT_SESSION_TITLE,
-	OVERWRITE_FILE_TITLE,
-	SHARE_SESSION_TITLE,
+	cloneSessionTitle,
+	deleteSessionTitle,
+	forkSessionTitle,
+	importSessionTitle,
+	overwriteFileTitle,
+	shareSessionTitle,
 } from "../src/ui/widgets/confirm-dialog.ts";
-import { EXPORT_FORMAT_TITLE, EXPORT_PATH_TITLE } from "../src/ui/widgets/export-dialog.ts";
-import { FORK_DIALOG_TITLE } from "../src/ui/widgets/fork-dialog.ts";
-import { IMPORT_DIALOG_TITLE } from "../src/ui/widgets/import-dialog.ts";
+import { exportFormatTitle, exportPathTitle } from "../src/ui/widgets/export-dialog.ts";
+import { forkDialogTitle } from "../src/ui/widgets/fork-dialog.ts";
+import { importDialogTitle } from "../src/ui/widgets/import-dialog.ts";
 import { InputDialog } from "../src/ui/widgets/input-dialog.ts";
-import { LABEL_DIALOG_TITLE } from "../src/ui/widgets/label-dialog.ts";
-import { NEW_SESSION_DIALOG_TITLE } from "../src/ui/widgets/new-session-dialog.ts";
-import { RENAME_DIALOG_TITLE } from "../src/ui/widgets/rename-dialog.ts";
-import { CUSTOM_PROMPT_TITLE, SUMMARY_MENU, SUMMARY_MENU_TITLE } from "../src/ui/widgets/restore-dialog.ts";
-import { SEARCH_LABEL } from "../src/ui/widgets/search-bar.ts";
+import { labelDialogTitle } from "../src/ui/widgets/label-dialog.ts";
+import { newSessionDialogTitle } from "../src/ui/widgets/new-session-dialog.ts";
+import { renameDialogTitle } from "../src/ui/widgets/rename-dialog.ts";
+import { customPromptTitle, summaryMenu as restoreSummaryMenu, summaryMenuTitle } from "../src/ui/widgets/restore-dialog.ts";
+import { searchLabel } from "../src/ui/widgets/search-bar.ts";
 import { SelectDialog } from "../src/ui/widgets/select-dialog.ts";
-import { SESSION_INFO_TITLE, sessionInfoText } from "../src/ui/widgets/session-info-dialog.ts";
+import { sessionInfoText, sessionInfoTitle } from "../src/ui/widgets/session-info-dialog.ts";
+
+// i18n 已在文件顶部固定为 en；这些别名让下面的断言仍然引用固定的英文文案（所见即所测）。
+const SUMMARIZING_STATUS = t("status.summarizing");
+const CLONE_SESSION_TITLE = cloneSessionTitle();
+const DELETE_SESSION_TITLE = deleteSessionTitle();
+const FORK_SESSION_TITLE = forkSessionTitle();
+const IMPORT_SESSION_TITLE = importSessionTitle();
+const OVERWRITE_FILE_TITLE = overwriteFileTitle();
+const SHARE_SESSION_TITLE = shareSessionTitle();
+const EXPORT_FORMAT_TITLE = exportFormatTitle();
+const EXPORT_PATH_TITLE = exportPathTitle();
+const FORK_DIALOG_TITLE = forkDialogTitle();
+const IMPORT_DIALOG_TITLE = importDialogTitle();
+const LABEL_DIALOG_TITLE = labelDialogTitle();
+const NEW_SESSION_DIALOG_TITLE = newSessionDialogTitle();
+const RENAME_DIALOG_TITLE = renameDialogTitle();
+const CUSTOM_PROMPT_TITLE = customPromptTitle();
+const SUMMARY_MENU_TITLE = summaryMenuTitle();
+const SUMMARY_MENU = restoreSummaryMenu();
+const SEARCH_LABEL = searchLabel();
+const SESSION_INFO_TITLE = sessionInfoTitle();
+const COMPACT_DIALOG_TITLE = compactDialogTitle();
 
 /** Styling is irrelevant here; return text unchanged so assertions stay simple. */
 const fakeTheme = {
@@ -255,7 +280,7 @@ test("/ shows the 搜索 bar, typing searches live, Enter keeps the query, Esc i
 	assert.equal(h.panel.state.search.sessions?.query, "foo");
 	// nothing is loaded: the footer keeps the query and says there is nothing to jump to
 	bottom = h.text().at(-1)!;
-	assert.ok(bottom.includes("foo") && bottom.includes("搜索") && bottom.includes("no matches"), bottom);
+	assert.ok(bottom.includes("foo") && bottom.includes("Search:") && bottom.includes("no matches"), bottom);
 	h.panel.handleInput("n");
 	assert.ok(h.text().at(-1)!.includes("no matches"), h.text().at(-1));
 
@@ -272,7 +297,7 @@ test("/ shows the 搜索 bar, typing searches live, Enter keeps the query, Esc i
 	h.panel.handleInput("\x1b");
 	assert.equal(h.panel.state.mode, "normal");
 	assert.equal(h.panel.state.search.sessions, undefined);
-	assert.equal(h.text().at(-1)!.includes("搜索"), false);
+	assert.equal(h.text().at(-1)!.includes("Search:"), false);
 });
 
 test("q quits, custom keymap overrides defaults and combos work", () => {
@@ -584,7 +609,7 @@ test("/ opens the search bar in the tree pane (footer lists it), and a opens the
 	// / opens the search bar like in the other panes (the search itself is covered below); Esc closes it
 	h.panel.handleInput("/");
 	assert.equal(h.panel.state.mode, "search");
-	assert.ok(h.text().at(-1)!.includes("搜索:"), h.text().at(-1));
+	assert.ok(h.text().at(-1)!.includes("Search:"), h.text().at(-1));
 	h.panel.handleInput("\x1b");
 	assert.equal(h.panel.state.mode, "normal");
 	h.panel.handleInput("n");
@@ -1636,7 +1661,7 @@ test("/ in SESSIONS jumps live to the first match from the cursor, Enter keeps i
 	h.panel.handleInput("\r");
 	assert.equal(h.panel.state.mode, "normal");
 	assert.equal(h.panel.state.search.sessions?.query, "film");
-	assert.ok(/搜索: film\s+2\/2\s+n next\s+N prev\s+Esc clear/.test(footer()), footer());
+	assert.ok(/Search: film\s+2\/2\s+n next\s+N prev\s+Esc clear/.test(footer()), footer());
 	// n wraps to the first match, N back to the last; n is "next match" here although the pane binds it to new session
 	h.panel.handleInput("n");
 	assert.equal(h.panel.state.cursor.sessions, 0);
@@ -1649,7 +1674,7 @@ test("/ in SESSIONS jumps live to the first match from the cursor, Enter keeps i
 	h.panel.handleInput("j");
 	assert.equal(h.panel.state.cursor.sessions, 1);
 	assert.ok(header().includes("2 matches") && !header().includes("/2"), header());
-	assert.ok(/搜索: film\s+2\s+n next/.test(footer()), footer());
+	assert.ok(/Search: film\s+2\s+n next/.test(footer()), footer());
 	h.panel.handleInput("n");
 	assert.equal(h.panel.state.cursor.sessions, 3);
 	await settle();
@@ -1658,7 +1683,7 @@ test("/ in SESSIONS jumps live to the first match from the cursor, Enter keeps i
 	h.panel.handleInput("\x1b");
 	assert.equal(h.panel.state.search.sessions, undefined);
 	assert.ok(header().includes("4/4 · Current"), header());
-	assert.equal(footer().includes("搜索"), false, footer());
+	assert.equal(footer().includes("Search:"), false, footer());
 	h.panel.handleInput("n");
 	assert.ok(footer().includes("new: actions unavailable"), footer());
 	assert.equal(h.panel.state.cursor.sessions, 3);
@@ -1827,7 +1852,7 @@ test("each pane keeps its own query: switching panes shows the other pane's hint
 	h.panel.handleInput("\r");
 	assert.equal(h.panel.state.cursor.sessions, 0);
 	h.panel.handleInput("2");
-	assert.ok(!footer().includes("搜索") && footer().includes("a Tree"), footer());
+	assert.ok(!footer().includes("Search:") && footer().includes("a Tree"), footer());
 	// the sessions header keeps counting while another pane is focused; n here says there is no tree search
 	assert.ok(h.text().find((l) => l.includes("[1] SESSIONS"))!.includes("1/2 matches"));
 	h.panel.handleInput("n");
@@ -1838,7 +1863,7 @@ test("each pane keeps its own query: switching panes shows the other pane's hint
 	assert.equal(h.panel.state.search.tree?.query, "south");
 	h.panel.handleInput("1");
 	assert.equal(h.panel.state.search.sessions?.query, "film");
-	assert.ok(footer().includes("搜索: film"), footer());
+	assert.ok(footer().includes("Search: film"), footer());
 	h.panel.handleInput("n");
 	assert.equal(h.panel.state.cursor.sessions, 3);
 	await settle();

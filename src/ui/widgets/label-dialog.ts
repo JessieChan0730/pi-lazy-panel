@@ -10,14 +10,19 @@
  * 其他场景（比如给 session 起名）照此再写一个预设即可。
  */
 
+import { t } from "../../i18n/index.ts";
 import type { KeyHint } from "../../types.ts";
 
 /** Title on the top border of the box. */
-export const LABEL_DIALOG_TITLE = "Label";
+export function labelDialogTitle(): string {
+	return t("dialog.labelTitle");
+}
 
 /** Footer hints while the dialog is open. */
-export const LABEL_DIALOG_HINTS: KeyHint[] = [
-	["Enter", "save"],
-	["Esc", "cancel"],
-	["empty", "removes"],
-];
+export function labelDialogHints(): KeyHint[] {
+	return [
+		["Enter", t("hint.save")],
+		["Esc", t("hint.cancel")],
+		[t("hint.emptyKey"), t("hint.removes")],
+	];
+}

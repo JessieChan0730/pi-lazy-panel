@@ -21,22 +21,29 @@ import { getMarkdownTheme, type Theme } from "@earendil-works/pi-coding-agent";
 import { Markdown, visibleWidth } from "@earendil-works/pi-tui";
 import { SPINNER_FRAMES } from "../../constants.ts";
 import { matchesKeyId } from "../../config/keys.ts";
+import { t } from "../../i18n/index.ts";
 import type { KeyHint } from "../../types.ts";
 import { frame, overlayCentered } from "../frame.ts";
 
-/** Title on the top border (pi's own heading for /changelog). */
-export const CHANGELOG_TITLE = "What's New";
+/** Title on the top border (pi's own heading for /changelog, localised). */
+export function changelogTitle(): string {
+	return t("dialog.changelogTitle");
+}
 
-/** Loading line while the (large) changelog markdown is being rendered. */
-export const CHANGELOG_LOADING = "Loading changelog…";
+/** Loading line while the (large) changelog markdown is being rendered (localised). */
+export function changelogLoading(): string {
+	return t("dialog.changelogLoading");
+}
 
 /** Footer hints while the dialog is open. */
-export const CHANGELOG_HINTS: KeyHint[] = [
-	["j/k", "scroll"],
-	["ctrl+d/u", "page"],
-	["g/G", "top/bottom"],
-	["Esc", "close"],
-];
+export function changelogHints(): KeyHint[] {
+	return [
+		["j/k", t("hint.scroll")],
+		["ctrl+d/u", t("hint.page")],
+		["g/G", t("hint.topBottom")],
+		["Esc", t("hint.close")],
+	];
+}
 
 export interface ChangelogDialogOptions {
 	theme: Theme;
@@ -67,8 +74,8 @@ export class ChangelogDialog {
 	}
 
 	get hints(): KeyHint[] {
-		// 加载中不给滚动提示（还没内容可滚），提示都在弹窗自己的底部说明里。
-		return this.markdown !== undefined ? CHANGELOG_HINTS : [];
+		// 加载中不给滚动提示（还没内容可滚）；关闭时也没有。
+		return this.markdown !== undefined ? changelogHints() : [];
 	}
 
 	/** Current top line (for tests). */
@@ -153,7 +160,7 @@ export class ChangelogDialog {
 		return frame(body, {
 			width,
 			height,
-			title: CHANGELOG_TITLE,
+			title: changelogTitle(),
 			...(meta ? { meta } : {}),
 			border: (s) => theme.fg("borderAccent", s),
 			titleStyle: (s) => theme.bold(theme.fg("accent", s)),
@@ -166,7 +173,7 @@ export class ChangelogDialog {
 		const { theme } = this.o;
 		const inner = width - 2;
 		const glyph = SPINNER_FRAMES[this.spinnerFrame % SPINNER_FRAMES.length] ?? SPINNER_FRAMES[0];
-		const msg = `${glyph} ${CHANGELOG_LOADING}`;
+		const msg = `${glyph} ${changelogLoading()}`;
 		const pad = Math.max(0, Math.floor((inner - visibleWidth(msg)) / 2));
 		const body: string[] = Array.from({ length: this.visible }, () => "");
 		// 垂直居中：放在中间那一行。
@@ -174,7 +181,7 @@ export class ChangelogDialog {
 		return frame(body, {
 			width,
 			height,
-			title: CHANGELOG_TITLE,
+			title: changelogTitle(),
 			border: (s) => theme.fg("borderAccent", s),
 			titleStyle: (s) => theme.bold(theme.fg("accent", s)),
 			metaStyle: (s) => theme.fg("dim", s),

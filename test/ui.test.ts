@@ -25,8 +25,12 @@ import { renderTreePane, treeMeta } from "../src/ui/panes/tree-pane.ts";
 import { highlightLine, searchMeta } from "../src/ui/search-highlight.ts";
 import { treePrefixes } from "../src/ui/tree-lines.ts";
 import { ELLIPSIS, MARK_FOLDED, MARK_LEAF, MARK_OPEN, MAX_DEPTH, treeOutline } from "../src/ui/tree-outline.ts";
-import { TREE_SEARCH_HINTS, TreeDialog } from "../src/ui/widgets/tree-dialog.ts";
+import { treeSearchHints, TreeDialog } from "../src/ui/widgets/tree-dialog.ts";
 import { formatCost, formatTokens, normalizeNewlines, shortenPath, singleLine } from "../src/utils/format.ts";
+import { initI18n } from "../src/i18n/index.ts";
+
+// 测试统一按英文界面断言。
+initI18n("en");
 
 /** Styling is irrelevant here: a theme that returns text unchanged. */
 const plainTheme = {
@@ -381,13 +385,13 @@ test("TreeDialog search row: idle hint, live query reports, Esc keeps the query 
 	const rows = forest();
 	dlg.open({ rows, filter: "default", hints: [["q", "close"]], searchKey: "/", onQueryChange: (q) => queries.push(q) });
 	const box = () => dlg.render(60, 12).map((l) => stripTerminalSequences(l));
-	assert.ok(box()[1]!.includes("搜索: / to search"), box()[1]);
+	assert.ok(box()[1]!.includes("Search: / to search"), box()[1]);
 	assert.deepEqual(dlg.hints, [["q", "close"]]);
 	assert.equal(dlg.searchFocused, false);
 
 	dlg.focusSearch();
 	assert.equal(dlg.searchFocused, true);
-	assert.deepEqual(dlg.hints, TREE_SEARCH_HINTS);
+	assert.deepEqual(dlg.hints, treeSearchHints());
 	dlg.handleSearchInput("b");
 	dlg.handleSearchInput("1");
 	assert.deepEqual(queries, ["b", "b1"]);
@@ -407,7 +411,7 @@ test("TreeDialog search row: idle hint, live query reports, Esc keeps the query 
 	assert.equal(dlg.searchFocused, false);
 	assert.equal(dlg.searchQuery, "b1");
 	assert.deepEqual(queries, ["b", "b1"]);
-	assert.ok(box()[1]!.includes("搜索: b1") && !box()[1]!.includes("to search"), box()[1]);
+	assert.ok(box()[1]!.includes("Search: b1") && !box()[1]!.includes("to search"), box()[1]);
 
 	// / again continues the same query (cursor at its end); deleting everything reports the empty query
 	dlg.focusSearch();
@@ -418,7 +422,7 @@ test("TreeDialog search row: idle hint, live query reports, Esc keeps the query 
 	assert.equal(queries.at(-1), "");
 	dlg.handleSearchInput("\x1b");
 	assert.equal(dlg.searchFocused, false);
-	assert.ok(box()[1]!.includes("搜索: / to search"), box()[1]);
+	assert.ok(box()[1]!.includes("Search: / to search"), box()[1]);
 
 	// no rows while a query is active reads "No matches."
 	dlg.focusSearch();

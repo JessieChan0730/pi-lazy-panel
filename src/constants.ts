@@ -38,21 +38,9 @@ export const TREE_DIALOG_SCOPE = "tree-dialog" as const;
 export const KEY_SCOPES = ["global", ...PANE_IDS, TREE_DIALOG_SCOPE] as const;
 
 /**
- * Progress text while pi writes a branch summary for TREE Enter. Shown in the
- * panel footer and, because the panel is hidden meanwhile, in pi's own footer.
- */
-export const SUMMARIZING_STATUS = "summarizing branch…";
-
-/**
- * Progress text while pi compacts the selected conversation (manual /compact).
- * Shown in pi's own footer (the panel is hidden meanwhile), prefixed with a
- * rotating spinner frame.
- */
-export const COMPACTING_STATUS = "compacting conversation…";
-
-/**
  * Spinner frames for footer progress — a rotating square (正方形旋转). Kept here
- * so other slow operations (e.g. the changelog dialog) can reuse the same look.
+ * so slow operations (branch summary, compaction, the changelog dialog) share
+ * the same look. The progress text itself is localised via i18n (status.*).
  */
 export const SPINNER_FRAMES = ["◰", "◳", "◲", "◱"] as const;
 

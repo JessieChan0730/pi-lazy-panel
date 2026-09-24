@@ -32,18 +32,24 @@
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
+import { t } from "../../i18n/index.ts";
 import type { KeyHint, TreeFilter, TreeRow } from "../../types.ts";
 import { FRAME_DIVIDER, frame, overlayCentered } from "../frame.ts";
 import { renderTreeRow } from "../panes/tree-pane.ts";
 import { scrollOffset } from "../panes/sessions-pane.ts";
 import { treePrefixes } from "../tree-lines.ts";
 import { PromptBar } from "./prompt-bar.ts";
-import { SEARCH_LABEL } from "./search-bar.ts";
+import { searchLabel } from "./search-bar.ts";
 
-export const TREE_DIALOG_TITLE = "TREE";
+/** Title on the top border of the dialog (localised). */
+export function treeDialogTitle(): string {
+	return t("dialog.treeTitle");
+}
 
 /** Hints while the search row has the keys (Esc goes back to the list, the query stays). */
-export const TREE_SEARCH_HINTS: KeyHint[] = [["Esc", "back to the list"]];
+export function treeSearchHints(): KeyHint[] {
+	return [["Esc", t("hint.backToList")]];
+}
 
 /** What the dialog shows; passed to `open`. */
 export interface TreeDialogSpec {
@@ -86,7 +92,7 @@ export class TreeDialog {
 	constructor(private readonly o: TreeDialogOptions) {
 		this.search = new PromptBar({
 			theme: o.theme,
-			label: SEARCH_LABEL,
+			label: searchLabel(),
 			hints: [],
 			// Enter 在搜索框里没有含义；Esc 把按键交还给列表，关键字保留（再按 / 接着改）。
 			onSubmit: () => {},
@@ -103,7 +109,7 @@ export class TreeDialog {
 	/** Footer hints while the dialog is open: the search row's while it has the keys, else the list's. */
 	get hints(): KeyHint[] {
 		if (!this.spec) return [];
-		return this._searchFocused ? TREE_SEARCH_HINTS : (this.spec.hints ?? []);
+		return this._searchFocused ? treeSearchHints() : (this.spec.hints ?? []);
 	}
 
 	/** Index of the highlighted row. */
@@ -225,7 +231,7 @@ export class TreeDialog {
 
 		const body: string[] = [` ${this.renderSearchRow(inner - 1)}`, FRAME_DIVIDER];
 		if (rows.length === 0) {
-			body.push(theme.fg("muted", this.query ? " No matches." : " No entries."));
+			body.push(theme.fg("muted", this.query ? ` ${t("dialog.treeNoMatches")}` : ` ${t("pane.treeEmpty")}`));
 		} else {
 			const prefixes = treePrefixes(rows, this.folded);
 			const first = scrollOffset(this.index, rows.length, visible);
@@ -240,8 +246,8 @@ export class TreeDialog {
 		return frame(body, {
 			width,
 			height,
-			title: TREE_DIALOG_TITLE,
-			meta: `${position} · ${this.spec?.filter ?? "default"}`,
+			title: treeDialogTitle(),
+			meta: `${position} · ${t(`filter.${this.spec?.filter ?? "default"}`)}`,
 			border: (s) => theme.fg("borderAccent", s),
 			titleStyle: (s) => theme.bold(theme.fg("accent", s)),
 			metaStyle: (s) => theme.fg("dim", s),
@@ -255,9 +261,9 @@ export class TreeDialog {
 	private renderSearchRow(width: number): string {
 		if (this._searchFocused) return this.search.render(width)[0] ?? "";
 		const { theme } = this.o;
-		const label = theme.bold(theme.fg("accent", SEARCH_LABEL));
+		const label = theme.bold(theme.fg("accent", searchLabel()));
 		const key = this.spec?.searchKey;
-		const rest = this.query ? theme.fg("text", this.query) : key ? theme.fg("dim", `${key} to search`) : "";
+		const rest = this.query ? theme.fg("text", this.query) : key ? theme.fg("dim", t("dialog.toSearch", { key })) : "";
 		return `${label}${rest}`;
 	}
 

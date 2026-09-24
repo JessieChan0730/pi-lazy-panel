@@ -10,16 +10,23 @@
  * 支持 ~），回车后确认，再复制进会话目录并切过去。
  */
 
+import { t } from "../../i18n/index.ts";
 import type { KeyHint } from "../../types.ts";
 
 /** Title on the top border of the box. */
-export const IMPORT_DIALOG_TITLE = "Import session";
+export function importDialogTitle(): string {
+	return t("dialog.importTitle");
+}
 
 /** Right end of the title bar: what the prompt wants. */
-export const IMPORT_DIALOG_SUBJECT = "path to a .jsonl file";
+export function importDialogSubject(): string {
+	return t("dialog.importSubject");
+}
 
 /** Footer hints while the dialog is open. */
-export const IMPORT_DIALOG_HINTS: KeyHint[] = [
-	["Enter", "import"],
-	["Esc", "cancel"],
-];
+export function importDialogHints(): KeyHint[] {
+	return [
+		["Enter", t("hint.import")],
+		["Esc", t("hint.cancel")],
+	];
+}

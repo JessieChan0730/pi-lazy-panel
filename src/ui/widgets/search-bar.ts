@@ -17,18 +17,21 @@
  */
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
+import { t } from "../../i18n/index.ts";
 import type { KeyHint } from "../../types.ts";
 import { fit } from "../frame.ts";
 import { PromptBar, type PromptBarOptions } from "./prompt-bar.ts";
 
-/** Label shown in front of the input; "搜索:" like lazygit's "Search:". */
-export const SEARCH_LABEL = "搜索: ";
+/** Label shown in front of the input, e.g. "Search: " (lazygit style), localised. */
+export function searchLabel(): string {
+	return t("search.label");
+}
 
 export type SearchBarOptions = Omit<PromptBarOptions, "label" | "hints">;
 
 export class SearchBar extends PromptBar {
 	constructor(o: SearchBarOptions) {
-		super({ ...o, label: SEARCH_LABEL, hints: [["Enter", "search"], ["Esc", "cancel"]] });
+		super({ ...o, label: searchLabel(), hints: [["Enter", t("hint.searchConfirm")], ["Esc", t("hint.cancel")]] });
 	}
 }
 
@@ -51,10 +54,10 @@ export interface SearchStatusProps {
  */
 export function renderSearchStatus(p: SearchStatusProps, width: number): string {
 	const { theme } = p;
-	const label = theme.bold(theme.fg("accent", SEARCH_LABEL));
+	const label = theme.bold(theme.fg("accent", searchLabel()));
 	const count =
 		p.total === 0
-			? theme.fg("warning", "no matches")
+			? theme.fg("warning", t("search.none"))
 			: theme.fg("success", p.position > 0 ? `${p.position}/${p.total}` : String(p.total));
 	const hint = p.hints.map(([k, t]) => `${theme.fg("dim", k)} ${theme.fg("muted", t)}`).join("  ");
 	const status = p.status ? `   ${theme.fg("warning", p.status)}` : "";

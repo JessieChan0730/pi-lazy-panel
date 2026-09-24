@@ -27,7 +27,12 @@
 		"test": "node --import tsx --test \"test/**/*.test.ts\"",
 		"dev": "pi -e ./src/index.ts",
 		"install:pi": "pi install .",
-		"uninstall:pi": "pi remove ."
+		"uninstall:pi": "pi remove .",
+		"i18n:scan": "node scripts/i18n-scan.mjs",
+		"i18n:check": "node scripts/i18n-scan.mjs --check"
+	},
+	"dependencies": {
+		"i18next": "23.16.8"
 	},
 	"peerDependencies": {
 		"@earendil-works/pi-coding-agent": "*",

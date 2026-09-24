@@ -19,30 +19,44 @@
  * 预填 pi 的默认路径，Esc 退回格式菜单）。目标文件已存在时再弹确认框。
  */
 
+import { t } from "../../i18n/index.ts";
 import type { ExportFormat, KeyHint } from "../../types.ts";
 
-/** Title of the format menu. */
-export const EXPORT_FORMAT_TITLE = "Export as";
+/** Title of the format menu (localised). */
+export function exportFormatTitle(): string {
+	return t("dialog.exportFormatTitle");
+}
 
-/** Menu entries, top to bottom (HTML first, like /export without an extension). */
-export const EXPORT_FORMATS: ReadonlyArray<{ format: ExportFormat; label: string }> = [
-	{ format: "html", label: "HTML   whole tree, opens in a browser" },
-	{ format: "jsonl", label: "JSONL  active branch, can be imported again" },
-];
+/** Format order, top to bottom (HTML first, like /export without an extension). */
+export const EXPORT_FORMAT_ORDER: readonly ExportFormat[] = ["html", "jsonl"];
+
+/** Menu entries, top to bottom, localised. */
+export function exportFormats(): ReadonlyArray<{ format: ExportFormat; label: string }> {
+	return [
+		{ format: "html", label: t("dialog.exportHtml") },
+		{ format: "jsonl", label: t("dialog.exportJsonl") },
+	];
+}
 
 /** Footer hints while the format menu is open. */
-export const EXPORT_FORMAT_HINTS: KeyHint[] = [
-	["j/k", "move"],
-	["Enter", "select"],
-	["Esc", "cancel"],
-];
+export function exportFormatHints(): KeyHint[] {
+	return [
+		["j/k", t("hint.move")],
+		["Enter", t("hint.select")],
+		["Esc", t("hint.cancel")],
+	];
+}
 
-/** Title of the output-path prompt. */
-export const EXPORT_PATH_TITLE = "Export to";
+/** Title of the output-path prompt (localised). */
+export function exportPathTitle(): string {
+	return t("dialog.exportPathTitle");
+}
 
 /** Footer hints while the output-path prompt is open. */
-export const EXPORT_PATH_HINTS: KeyHint[] = [
-	["Enter", "export"],
-	["Esc", "back"],
-	["folder", "default name inside"],
-];
+export function exportPathHints(): KeyHint[] {
+	return [
+		["Enter", t("hint.export")],
+		["Esc", t("hint.back")],
+		[t("hint.folderKey"), t("hint.defaultInside")],
+	];
+}

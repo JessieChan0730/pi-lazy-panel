@@ -11,14 +11,19 @@
  * 弹窗标题右侧显示被改名的会话（首条消息预览），空值清除名称。
  */
 
+import { t } from "../../i18n/index.ts";
 import type { KeyHint } from "../../types.ts";
 
 /** Title on the top border of the box. */
-export const RENAME_DIALOG_TITLE = "Rename";
+export function renameDialogTitle(): string {
+	return t("dialog.renameTitle");
+}
 
 /** Footer hints while the dialog is open. */
-export const RENAME_DIALOG_HINTS: KeyHint[] = [
-	["Enter", "save"],
-	["Esc", "cancel"],
-	["empty", "removes"],
-];
+export function renameDialogHints(): KeyHint[] {
+	return [
+		["Enter", t("hint.save")],
+		["Esc", t("hint.cancel")],
+		[t("hint.emptyKey"), t("hint.removes")],
+	];
+}

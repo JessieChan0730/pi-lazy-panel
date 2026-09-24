@@ -12,6 +12,7 @@
  */
 
 import { TREE_DIALOG_SCOPE } from "../constants.ts";
+import { t } from "../i18n/index.ts";
 import type { ActionId, KeyScope, Keymap, PaneId } from "../types.ts";
 
 export const DEFAULT_KEYMAP: Keymap = {
@@ -96,53 +97,10 @@ export const DEFAULT_KEYMAP: Keymap = {
 	},
 };
 
-/** Short English description of every action, shown in the help overlay. */
-export const ACTION_DESCRIPTIONS: Record<ActionId, string> = {
-	"focus-next": "Focus next pane",
-	"focus-prev": "Focus previous pane",
-	"focus-sessions": "Focus sessions pane",
-	"focus-tree": "Focus tree pane",
-	"focus-content": "Focus content pane",
-	"scope-current": "Scope: Current folder",
-	"scope-all": "Scope: All",
-	help: "Toggle this help",
-	quit: "Quit the panel",
-	search: "Search in the focused pane",
-	"search-next": "Next search match",
-	"search-prev": "Previous search match",
-	changelog: "Show pi's changelog (/changelog)",
-	"move-down": "Move cursor down",
-	"move-up": "Move cursor up",
-	"go-top": "Go to top",
-	"go-bottom": "Go to bottom",
-	"scroll-content-down": "Scroll content pane down",
-	"scroll-content-up": "Scroll content pane up",
-	"session-resume": "Resume session",
-	"session-delete": "Delete session(s)",
-	"session-rename": "Rename session",
-	"session-fork": "Fork session and open the fork",
-	"session-toggle-select": "Toggle multi-select",
-	"session-export": "Export to HTML / JSONL",
-	"session-import": "Import from JSONL",
-	"session-share": "Share as private GitHub Gist",
-	"session-clone": "Clone active branch to a new session",
-	"session-copy-last-reply": "Copy last assistant reply",
-	"session-compact": "Compact this conversation and open it (/compact)",
-	"session-sort": "Cycle sort: recent / created / title / threaded",
-	"session-new": "New session",
-	"session-info": "Session info",
-	"tree-restore": "Restore conversation to this node (asks about a branch summary)",
-	"tree-copy": "Copy node text",
-	"tree-label": "Add / edit label",
-	"tree-open": "Open the full tree dialog (search / filters live there)",
-	"tree-fold": "Fold / unfold the branch under the cursor (inside a branch: fold it and jump to its head)",
-	"tree-filter-default": "Filter: default (hide bookkeeping entries)",
-	"tree-filter-no-tools": "Filter: also hide tool results (toggle)",
-	"tree-filter-user": "Filter: user messages only (toggle)",
-	"tree-filter-labeled": "Filter: labeled entries only (toggle)",
-	"tree-filter-all": "Filter: show everything (toggle)",
-	"tree-dialog-close": "Close the tree dialog",
-};
+/** Short description of `action`, shown in the help overlay (localised). */
+export function actionDescription(action: ActionId): string {
+	return t(`action.${action}`);
+}
 
 /**
  * Actions of outer scopes that do nothing while `scope` has the keys.
@@ -186,20 +144,25 @@ export function isDisabledIn(scope: KeyScope, action: ActionId): boolean {
 export interface HelpGroup {
 	/** Member actions, in the order their keys are listed. */
 	actions: ActionId[];
-	/** Description for the merged line. */
-	text: string;
+	/** i18n key (under `helpGroup.`) for the merged line's description. */
+	key: string;
+}
+
+/** Localised description of a merged help line. */
+export function helpGroupText(group: HelpGroup): string {
+	return t(`helpGroup.${group.key}`);
 }
 
 export const HELP_GROUPS: HelpGroup[] = [
-	{ actions: ["focus-prev", "focus-next"], text: "Focus previous / next pane" },
-	{ actions: ["focus-sessions", "focus-tree", "focus-content"], text: "Focus pane by number" },
-	{ actions: ["scope-current", "scope-all"], text: "Scope: current folder / all" },
-	{ actions: ["search-next", "search-prev"], text: "Next / previous search match" },
-	{ actions: ["go-top", "go-bottom"], text: "Go to top / bottom" },
-	{ actions: ["scroll-content-down", "scroll-content-up"], text: "Scroll content pane down / up" },
+	{ actions: ["focus-prev", "focus-next"], key: "focus" },
+	{ actions: ["focus-sessions", "focus-tree", "focus-content"], key: "focusNumber" },
+	{ actions: ["scope-current", "scope-all"], key: "scope" },
+	{ actions: ["search-next", "search-prev"], key: "searchStep" },
+	{ actions: ["go-top", "go-bottom"], key: "topBottom" },
+	{ actions: ["scroll-content-down", "scroll-content-up"], key: "scrollContent" },
 	{
 		actions: ["tree-filter-default", "tree-filter-no-tools", "tree-filter-user", "tree-filter-labeled", "tree-filter-all"],
-		text: "Filter: default / no tool results / user only / labeled only / all (t/u/l/a toggle back to default)",
+		key: "filters",
 	},
 ];
 
@@ -220,7 +183,7 @@ export const FOOTER_HINTS: Record<PaneId, ActionId[]> = {
  * order — the first ones survive a narrow terminal, so `q close` comes before
  * the filters; an inner array is one merged hint such as `d/t/u/l/a filter`.
  * Keys come from the resolved keymap (`tree-dialog` scope, then `tree`, then
- * `global`), the wording from TREE_DIALOG_HINT_TEXT.
+ * `global`), the wording from treeDialogHintText().
  */
 export const TREE_DIALOG_FOOTER: ActionId[][] = [
 	["search"],
@@ -233,33 +196,20 @@ export const TREE_DIALOG_FOOTER: ActionId[][] = [
 	["tree-label"],
 ];
 
-/** Wording of each TREE_DIALOG_FOOTER hint, keyed by its first action (lowercase like pi's own /tree help row). */
-export const TREE_DIALOG_HINT_TEXT: Partial<Record<ActionId, string>> = {
-	search: "search",
-	"move-down": "move",
-	"tree-restore": "restore",
-	"tree-fold": "fold",
-	"tree-copy": "copy",
-	"tree-label": "label",
-	"tree-filter-default": "filter",
-	"tree-dialog-close": "close",
-};
+/** Wording of a TREE_DIALOG_FOOTER hint (localised), keyed by its first action. */
+export function treeDialogHintText(action: ActionId): string {
+	return t(`treeHint.${action}`);
+}
 
-/** Display names of scopes in the help overlay. */
-export const SCOPE_TITLES: Record<KeyScope, string> = {
-	global: "Global",
-	sessions: "Sessions pane",
-	tree: "Tree pane",
-	content: "Content pane",
-	[TREE_DIALOG_SCOPE]: "Tree dialog",
-};
+/** Display name of a scope in the help overlay (localised). */
+export function scopeTitle(scope: KeyScope): string {
+	return t(`scopeTitle.${scope}`);
+}
 
-/** Pane title shown in the frame header; the panel prefixes it with the jump key ("[1] SESSIONS"). */
-export const PANE_TITLES: Record<PaneId, string> = {
-	sessions: "SESSIONS",
-	tree: "TREE",
-	content: "CONTENT",
-};
+/** Pane title shown in the frame header (localised); the panel prefixes it with the jump key ("[1] SESSIONS"). */
+export function paneTitleText(pane: PaneId): string {
+	return t(`pane.${pane}Title`);
+}
 
 /** Action that focuses each pane, used to derive the "[1]" prefix from the resolved keymap. */
 export const FOCUS_ACTIONS: Record<PaneId, ActionId> = {

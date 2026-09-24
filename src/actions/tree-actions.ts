@@ -15,8 +15,9 @@ import {
 	type ExtensionCommandContext,
 	SessionManager,
 } from "@earendil-works/pi-coding-agent";
-import { EXTENSION_ID, SUMMARIZING_STATUS } from "../constants.ts";
+import { EXTENSION_ID } from "../constants.ts";
 import { isEffectiveLeaf, loadNodeText } from "../data/tree.ts";
+import { t } from "../i18n/index.ts";
 import type { EnterOutcome, RestoreOptions } from "../types.ts";
 import { isCurrentSession, openSessionFile, resumeSession } from "./session-actions.ts";
 
@@ -90,7 +91,7 @@ async function navigateTo(ctx: NavigateContext, entryId: string, options: Restor
 		ctx.abort();
 		await withTimeout(ctx.waitForIdle(), IDLE_TIMEOUT_MS, "pi is still busy; try again once the current response has stopped");
 	}
-	if (options.summarize) ctx.ui.setStatus(EXTENSION_ID, SUMMARIZING_STATUS);
+	if (options.summarize) ctx.ui.setStatus(EXTENSION_ID, t("status.summarizing"));
 	try {
 		const result = await ctx.navigateTree(entryId, navigateOptions(options));
 		if (result.cancelled) {

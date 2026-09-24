@@ -52,8 +52,9 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, Focusable } from "@earendil-works/pi-tui";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import { type Binding, compileKeymap, labelsFor, labelsForFocus, matchesKeyId, resolveKeys } from "../config/keys.ts";
-import { DEFAULT_KEYMAP, FOCUS_ACTIONS, isDisabledIn, PANE_TITLES, TREE_DIALOG_FOOTER, TREE_DIALOG_HINT_TEXT } from "../config/keymap.ts";
-import { LEFT_COLUMN_RATIO, PANE_IDS, SESSION_SORT_MODES, SPINNER_INTERVAL_MS, SUMMARIZING_STATUS, TREE_DIALOG_SCOPE } from "../constants.ts";
+import { DEFAULT_KEYMAP, FOCUS_ACTIONS, isDisabledIn, paneTitleText, TREE_DIALOG_FOOTER, treeDialogHintText } from "../config/keymap.ts";
+import { LEFT_COLUMN_RATIO, PANE_IDS, SESSION_SORT_MODES, SPINNER_INTERVAL_MS, TREE_DIALOG_SCOPE } from "../constants.ts";
+import { t } from "../i18n/index.ts";
 import { highlightTerms, matchesTokens, matchSessionRow, matchTreeRow, parseSearchQuery, searchTokens } from "../data/search.ts";
 import { findSessionIndex } from "../data/sessions.ts";
 import {
@@ -93,32 +94,34 @@ import { renderSessionsPane } from "./panes/sessions-pane.ts";
 import { renderTreePane } from "./panes/tree-pane.ts";
 import { type OutlinePrefix, treeOutline } from "./tree-outline.ts";
 import { ChangelogDialog } from "./widgets/changelog-dialog.ts";
-import { COMPACT_DIALOG_HINTS, COMPACT_DIALOG_TITLE } from "./widgets/compact-dialog.ts";
+import { compactDialogHints, compactDialogTitle } from "./widgets/compact-dialog.ts";
 import {
-	CLONE_SESSION_TITLE,
+	cloneSessionTitle,
 	confirmDialogSpec,
-	DELETE_SESSION_TITLE,
-	FORK_SESSION_TITLE,
-	IMPORT_SESSION_TITLE,
-	OVERWRITE_FILE_TITLE,
-	SHARE_SESSION_TITLE,
+	deleteSessionsTitle,
+	deleteSessionTitle,
+	forkSessionTitle,
+	importSessionTitle,
+	overwriteFileTitle,
+	shareSessionTitle,
 } from "./widgets/confirm-dialog.ts";
-import { EXPORT_FORMAT_HINTS, EXPORT_FORMAT_TITLE, EXPORT_FORMATS, EXPORT_PATH_HINTS, EXPORT_PATH_TITLE } from "./widgets/export-dialog.ts";
+import { EXPORT_FORMAT_ORDER, exportFormatHints, exportFormats, exportFormatTitle, exportPathHints, exportPathTitle } from "./widgets/export-dialog.ts";
 import { renderFooter } from "./widgets/footer.ts";
-import { FORK_DIALOG_HINTS, FORK_DIALOG_TITLE } from "./widgets/fork-dialog.ts";
+import { forkDialogHints, forkDialogTitle } from "./widgets/fork-dialog.ts";
 import { compactKeys, helpLineCount, overlayHelp } from "./widgets/help-overlay.ts";
-import { IMPORT_DIALOG_HINTS, IMPORT_DIALOG_SUBJECT, IMPORT_DIALOG_TITLE } from "./widgets/import-dialog.ts";
+import { importDialogHints, importDialogSubject, importDialogTitle } from "./widgets/import-dialog.ts";
 import { InputDialog } from "./widgets/input-dialog.ts";
-import { LABEL_DIALOG_HINTS, LABEL_DIALOG_TITLE } from "./widgets/label-dialog.ts";
-import { NEW_SESSION_DIALOG_HINTS, NEW_SESSION_DIALOG_TITLE } from "./widgets/new-session-dialog.ts";
-import { RENAME_DIALOG_HINTS, RENAME_DIALOG_TITLE } from "./widgets/rename-dialog.ts";
+import { labelDialogHints, labelDialogTitle } from "./widgets/label-dialog.ts";
+import { newSessionDialogHints, newSessionDialogTitle } from "./widgets/new-session-dialog.ts";
+import { renameDialogHints, renameDialogTitle } from "./widgets/rename-dialog.ts";
 import {
-	CUSTOM_PROMPT_HINTS,
+	customPromptHints,
 	CUSTOM_PROMPT_INDEX,
-	CUSTOM_PROMPT_TITLE,
-	SUMMARY_MENU,
-	SUMMARY_MENU_HINTS,
-	SUMMARY_MENU_TITLE,
+	customPromptTitle,
+	SUMMARY_CHOICES,
+	summaryMenu,
+	summaryMenuHints,
+	summaryMenuTitle,
 } from "./widgets/restore-dialog.ts";
 import { renderSearchStatus, SearchBar } from "./widgets/search-bar.ts";
 import { SelectDialog } from "./widgets/select-dialog.ts";
@@ -263,9 +266,6 @@ const PENDING_TIMEOUT_MS = 1000;
 
 /** Delay before (re)loading the session under the cursor while the user is still moving. */
 const SESSION_LOAD_DEBOUNCE_MS = 40;
-
-/** pi's wording when `d` lands on the session it currently has open. */
-const CURRENT_SESSION_DELETE_STATUS = "Cannot delete the currently active session";
 
 /** Node TREE Enter is restoring to while its menu / custom prompt is open. */
 interface RestoreTarget {
@@ -420,7 +420,7 @@ export class LazyPanel implements Component, Focusable {
 
 	/** Load sessions, then the tree + content for the cursor session. */
 	async load(): Promise<void> {
-		this.setStatus("loading sessions…");
+		this.setStatus(t("status.loadingSessions"));
 		// 首次加载：光标落到 pi 当前打开的会话上（新会话还没列出来时就留在第一行）。
 		// 之后 C / A 切范围重新加载时不再定位，光标照旧回到顶部。
 		const keep = this.locateSessionFile;
@@ -444,7 +444,7 @@ export class LazyPanel implements Component, Focusable {
 			if (this.disposed) return false;
 			this.sessions = rows;
 		} catch (err) {
-			this.setStatus(`failed to list sessions: ${(err as Error).message}`);
+			this.setStatus(t("status.listFailed", { error: (err as Error).message }));
 			return false;
 		}
 		// 多选里已经不在列表中的会话（被删掉、换了范围）一并去掉。
@@ -495,7 +495,7 @@ export class LazyPanel implements Component, Focusable {
 		} catch (err) {
 			this.setTree([], new Set());
 			this.setContent([], undefined);
-			this.setStatus(`failed to open session: ${(err as Error).message}`);
+			this.setStatus(t("status.openFailed", { error: (err as Error).message }));
 		}
 		this.o.requestRender();
 	}
@@ -570,7 +570,7 @@ export class LazyPanel implements Component, Focusable {
 				if (this.visibleTree[this.state.cursor.tree]?.entryId !== node.entryId || this.loadedSessionFile !== file) return;
 				this.setContent(content, wantLeaf);
 			} catch (err) {
-				this.setStatus(`failed to load branch: ${(err as Error).message}`);
+				this.setStatus(t("status.loadBranchFailed", { error: (err as Error).message }));
 				return;
 			}
 		}
@@ -896,7 +896,7 @@ export class LazyPanel implements Component, Focusable {
 				void this.openChangelog();
 				return;
 			default:
-				this.setStatus(`${action}: not implemented yet`);
+				this.setStatus(t("status.notImplemented", { action }));
 				return;
 		}
 	}
@@ -1152,12 +1152,12 @@ export class LazyPanel implements Component, Focusable {
 		const pane = this.state.focus;
 		const search = this.state.search[pane];
 		if (!search) {
-			this.setStatus("no active search — press / first");
+			this.setStatus(t("status.noActiveSearch"));
 			return;
 		}
 		const matches = this.matchesOf(pane, search);
 		if (matches.length === 0) {
-			this.setStatus("no matches");
+			this.setStatus(t("status.noMatches"));
 			return;
 		}
 		let next: number;
@@ -1242,7 +1242,7 @@ export class LazyPanel implements Component, Focusable {
 		const row = this.visibleTree[this.state.cursor.tree];
 		const file = this.loadedSessionFile;
 		if (!row || !file) {
-			this.setStatus("no tree node selected");
+			this.setStatus(t("status.noTreeNode"));
 			return undefined;
 		}
 		return { file, row };
@@ -1252,15 +1252,15 @@ export class LazyPanel implements Component, Focusable {
 	private async copyTreeNode(target: TreeTarget | undefined): Promise<void> {
 		if (!target) return;
 		if (!this.o.actions) {
-			this.setStatus("copy: actions unavailable");
+			this.setStatus(t("status.copyUnavailable"));
 			return;
 		}
 		try {
 			const copied = await this.o.actions.copyNodeText(target.file, target.row.entryId);
 			if (this.disposed) return;
-			this.setStatus(copied ? "copied node text to clipboard" : "selected entry has no text to copy");
+			this.setStatus(copied ? t("status.copiedNode") : t("status.noTextToCopy"));
 		} catch (err) {
-			this.setStatus(`copy failed: ${(err as Error).message}`);
+			this.setStatus(t("status.copyFailed", { error: (err as Error).message }));
 		}
 	}
 
@@ -1268,17 +1268,17 @@ export class LazyPanel implements Component, Focusable {
 	private openLabelInput(target: TreeTarget | undefined): void {
 		if (!target) return;
 		if (!this.o.actions) {
-			this.setStatus("label: actions unavailable");
+			this.setStatus(t("status.labelUnavailable"));
 			return;
 		}
 		this.labelTarget = { file: target.file, entryId: target.row.entryId };
 		this.state.mode = "label";
 		// 弹窗标题右侧显示是给哪条消息打标签。
 		this.inputDialog.open({
-			title: LABEL_DIALOG_TITLE,
+			title: labelDialogTitle(),
 			value: target.row.label ?? "",
 			subject: `${target.row.role}: ${target.row.text}`,
-			hints: LABEL_DIALOG_HINTS,
+			hints: labelDialogHints(),
 			onSubmit: (v) => void this.submitLabel(v),
 			onCancel: () => this.cancelLabel(),
 		});
@@ -1295,9 +1295,9 @@ export class LazyPanel implements Component, Focusable {
 		try {
 			await this.o.actions.setNodeLabel(target.file, target.entryId, label);
 			if (this.disposed) return;
-			this.setStatus(label ? `label set: ${label}` : "label removed");
+			this.setStatus(label ? t("status.labelSet", { label }) : t("status.labelRemoved"));
 		} catch (err) {
-			this.setStatus(`label failed: ${(err as Error).message}`);
+			this.setStatus(t("status.labelFailed", { error: (err as Error).message }));
 			return;
 		}
 		await this.reloadTree(target.file, target.entryId);
@@ -1331,7 +1331,7 @@ export class LazyPanel implements Component, Focusable {
 			if (this.treeDialog.isOpen) this.refreshTreeDialog(entryId);
 			await this.syncContentToTree();
 		} catch (err) {
-			this.setStatus(`failed to reload tree: ${(err as Error).message}`);
+			this.setStatus(t("status.reloadTreeFailed", { error: (err as Error).message }));
 		}
 		this.o.requestRender();
 	}
@@ -1349,7 +1349,7 @@ export class LazyPanel implements Component, Focusable {
 	private toggleTreeFold(): void {
 		const row = this.visibleTree[this.state.cursor.tree];
 		if (!row) {
-			this.setStatus("no tree node selected");
+			this.setStatus(t("status.noTreeNode"));
 			return;
 		}
 		const target = this.toggleFold(this.tree, row.entryId);
@@ -1370,7 +1370,7 @@ export class LazyPanel implements Component, Focusable {
 	private toggleFold(base: TreeRow[], entryId: string): string | undefined {
 		const target = foldTarget(base, entryId);
 		if (!target) {
-			this.setStatus("nothing to fold here");
+			this.setStatus(t("status.nothingToFold"));
 			return undefined;
 		}
 		const folded = this.state.treeFolded;
@@ -1387,7 +1387,7 @@ export class LazyPanel implements Component, Focusable {
 	/** a: show the whole tree of the loaded session with the cursor on the pane's node (same fold state as the pane). */
 	private openTreeDialog(): void {
 		if (!this.loadedSessionFile) {
-			this.setStatus("no session loaded");
+			this.setStatus(t("status.noSessionLoaded"));
 			return;
 		}
 		this.state.mode = "tree";
@@ -1442,7 +1442,7 @@ export class LazyPanel implements Component, Focusable {
 			const keys = group.flatMap((a) => labelsForFocus(this.keymap, TREE_DIALOG_SCOPE, a).slice(0, 1));
 			// 组里只要还有一个动作绑了键就显示，文字取组里第一个动作的。
 			if (keys.length === 0) continue;
-			out.push([compactKeys(keys), TREE_DIALOG_HINT_TEXT[group[0]!] ?? group[0]!]);
+			out.push([compactKeys(keys), treeDialogHintText(group[0]!)]);
 		}
 		return out;
 	}
@@ -1537,7 +1537,7 @@ export class LazyPanel implements Component, Focusable {
 		const row = this.treeDialog.selectedRow;
 		const file = this.loadedSessionFile;
 		if (!row || !file) {
-			this.setStatus("no tree node selected");
+			this.setStatus(t("status.noTreeNode"));
 			return undefined;
 		}
 		return { file, row };
@@ -1585,7 +1585,7 @@ export class LazyPanel implements Component, Focusable {
 	private dialogToggleFold(): void {
 		const row = this.treeDialog.selectedRow;
 		if (!row) {
-			this.setStatus("no tree node selected");
+			this.setStatus(t("status.noTreeNode"));
 			return;
 		}
 		const target = this.toggleFold(this.dialogBaseRows(), row.entryId);
@@ -1620,7 +1620,7 @@ export class LazyPanel implements Component, Focusable {
 			this.state.cursor.tree = idx >= 0 ? idx : clamp(this.state.cursor.tree, 0, Math.max(0, this.visibleTree.length - 1));
 			this.refreshTreeDialog(keep);
 		} catch (err) {
-			this.setStatus(`failed to reload tree: ${(err as Error).message}`);
+			this.setStatus(t("status.reloadTreeFailed", { error: (err as Error).message }));
 		}
 	}
 
@@ -1631,7 +1631,7 @@ export class LazyPanel implements Component, Focusable {
 	/** Session row under the cursor, or undefined with a footer hint. */
 	private currentSessionRow(): SessionRow | undefined {
 		const row = this.sessions[this.state.cursor.sessions];
-		if (!row) this.setStatus("no session selected");
+		if (!row) this.setStatus(t("status.noSessionSelected"));
 		return row;
 	}
 
@@ -1652,19 +1652,19 @@ export class LazyPanel implements Component, Focusable {
 		const row = this.currentSessionRow();
 		if (!row) return;
 		if (!this.o.actions?.deleteSession) {
-			this.setStatus("delete: actions unavailable");
+			this.setStatus(t("status.deleteUnavailable"));
 			return;
 		}
 		// 和 pi 内置 /resume 一样：当前打开的会话直接拒绝，不弹确认框。
 		if (findSessionIndex([row], this.currentSessionFile) === 0) {
-			this.setStatus(CURRENT_SESSION_DELETE_STATUS);
+			this.setStatus(t("status.cannotDeleteActive"));
 			return;
 		}
 		this.deleteTarget = row;
 		this.state.mode = "confirm";
 		this.selectDialog.open(
 			confirmDialogSpec({
-				title: DELETE_SESSION_TITLE,
+				title: deleteSessionTitle(),
 				subject: this.sessionTitle(row),
 				onConfirm: () => void this.deleteSession(),
 				onCancel: () => this.closeConfirm(),
@@ -1682,13 +1682,13 @@ export class LazyPanel implements Component, Focusable {
 	 */
 	private confirmDeleteSelected(): void {
 		if (!this.o.actions?.deleteSession) {
-			this.setStatus("delete: actions unavailable");
+			this.setStatus(t("status.deleteUnavailable"));
 			return;
 		}
 		const rows = this.sessions.filter((r) => this.state.selectedSessionFiles.has(r.file));
 		const targets = rows.filter((r) => findSessionIndex([r], this.currentSessionFile) !== 0);
 		if (targets.length === 0) {
-			this.setStatus(CURRENT_SESSION_DELETE_STATUS);
+			this.setStatus(t("status.cannotDeleteActive"));
 			return;
 		}
 		const skipped = rows.length - targets.length;
@@ -1698,8 +1698,10 @@ export class LazyPanel implements Component, Focusable {
 		this.state.mode = "confirm";
 		this.selectDialog.open(
 			confirmDialogSpec({
-				title: `Delete ${targets.length} session${targets.length === 1 ? "" : "s"}?`,
-				subject: skipped ? `current session skipped · ${targets.map((r) => this.sessionTitle(r)).join(", ")}` : targets.map((r) => this.sessionTitle(r)).join(", "),
+				title: deleteSessionsTitle(targets.length),
+				subject: skipped
+					? t("confirm.deleteSkipped", { subjects: targets.map((r) => this.sessionTitle(r)).join(", ") })
+					: targets.map((r) => this.sessionTitle(r)).join(", "),
 				onConfirm: () => void this.deleteSelected(),
 				onCancel: () => this.closeConfirm(),
 			}),
@@ -1716,7 +1718,7 @@ export class LazyPanel implements Component, Focusable {
 		this.closeConfirm();
 		const remove = this.o.actions?.deleteSession;
 		if (!remove || targets.length === 0) return;
-		this.setStatus(`deleting ${targets.length}…`);
+		this.setStatus(t("status.deletingN", { count: targets.length }));
 		let deleted = 0;
 		let firstError: string | undefined;
 		for (const row of targets) {
@@ -1730,7 +1732,7 @@ export class LazyPanel implements Component, Focusable {
 			if (this.disposed) return;
 		}
 		const failed = targets.length - deleted;
-		const summary = failed ? `deleted ${deleted}, ${failed} failed — ${firstError}` : `${deleted} session${deleted === 1 ? "" : "s"} deleted`;
+		const summary = failed ? t("status.batchDeletedFailed", { deleted, failed, error: firstError }) : t("status.sessionsDeleted", { count: deleted });
 		if (await this.listSessions(undefined)) this.setStatus(summary);
 		await this.followSessionsCursor();
 	}
@@ -1747,7 +1749,7 @@ export class LazyPanel implements Component, Focusable {
 
 	private clearSelection(): void {
 		this.state.selectedSessionFiles.clear();
-		this.setStatus("selection cleared");
+		this.setStatus(t("status.selectionCleared"));
 	}
 
 	/**
@@ -1756,7 +1758,7 @@ export class LazyPanel implements Component, Focusable {
 	 */
 	private refuseMultiSelect(label: string): boolean {
 		if (this.state.selectedSessionFiles.size <= 1) return false;
-		this.setStatus(`${label}: cannot act on multiple sessions (Esc clears the selection)`);
+		this.setStatus(t("status.multiSelectRefused", { action: t(`enter.${label}`) }));
 		return true;
 	}
 
@@ -1764,7 +1766,7 @@ export class LazyPanel implements Component, Focusable {
 	private async openChangelog(): Promise<void> {
 		const load = this.o.data.loadChangelog;
 		if (!load) {
-			this.setStatus("changelog: unavailable");
+			this.setStatus(t("status.changelogUnavailable"));
 			return;
 		}
 		this.state.mode = "changelog";
@@ -1788,7 +1790,7 @@ export class LazyPanel implements Component, Focusable {
 			if (this.disposed) return;
 			this.changelogDialog.close();
 			this.state.mode = this.baseMode();
-			this.setStatus(`changelog failed: ${(err as Error).message}`);
+			this.setStatus(t("status.changelogFailed", { error: (err as Error).message }));
 			return;
 		}
 		// 先让"加载中"那一帧画出来，再做同步的重渲染（否则两次 requestRender 可能被合并，加载提示看不见）。
@@ -1842,18 +1844,18 @@ export class LazyPanel implements Component, Focusable {
 		this.closeConfirm();
 		const remove = this.o.actions?.deleteSession;
 		if (!row || !remove) return;
-		this.setStatus("deleting…");
+		this.setStatus(t("status.deleting"));
 		let method: DeleteMethod;
 		try {
 			method = await remove(row.file);
 			if (this.disposed) return;
 		} catch (err) {
-			this.setStatus(`delete failed: ${(err as Error).message}`);
+			this.setStatus(t("status.deleteFailed", { error: (err as Error).message }));
 			return;
 		}
 		this.state.selectedSessionFiles.delete(row.file);
 		// 删掉的行没了，光标夹回范围内；光标下换了会话就重新加载右边。
-		if (await this.listSessions(undefined)) this.setStatus(method === "trash" ? "session moved to trash" : "session deleted");
+		if (await this.listSessions(undefined)) this.setStatus(method === "trash" ? t("status.movedToTrash") : t("status.deleted"));
 		await this.followSessionsCursor();
 	}
 
@@ -1863,17 +1865,17 @@ export class LazyPanel implements Component, Focusable {
 		const row = this.currentSessionRow();
 		if (!row) return;
 		if (!this.o.actions?.renameSession) {
-			this.setStatus("rename: actions unavailable");
+			this.setStatus(t("status.renameUnavailable"));
 			return;
 		}
 		this.renameTarget = row;
 		this.state.mode = "rename";
 		// 弹窗标题右侧显示是给哪个会话改名（首条消息预览，名字本身在输入框里）。
 		this.inputDialog.open({
-			title: RENAME_DIALOG_TITLE,
+			title: renameDialogTitle(),
 			value: row.name ?? "",
 			subject: row.preview || row.id,
-			hints: RENAME_DIALOG_HINTS,
+			hints: renameDialogHints(),
 			onSubmit: (v) => void this.submitRename(v),
 			onCancel: () => this.closeRenameInput(),
 		});
@@ -1892,10 +1894,10 @@ export class LazyPanel implements Component, Focusable {
 			await rename(row.file, name);
 			if (this.disposed) return;
 		} catch (err) {
-			this.setStatus(`rename failed: ${(err as Error).message}`);
+			this.setStatus(t("status.renameFailed", { error: (err as Error).message }));
 			return;
 		}
-		if (await this.listSessions(row.file)) this.setStatus(name ? `renamed: ${name}` : "name removed");
+		if (await this.listSessions(row.file)) this.setStatus(name ? t("status.renamed", { name }) : t("status.nameRemoved"));
 		// 改名会在会话文件里追加一条 session_info：TREE 在 all 过滤下要能看到它，光标留在原节点。
 		if (row.file === this.loadedSessionFile) {
 			const entryId = this.visibleTree[this.state.cursor.tree]?.entryId;
@@ -1916,14 +1918,14 @@ export class LazyPanel implements Component, Focusable {
 	/** n: prompt for an optional name, then start a fresh session (/new) and close the panel. */
 	private openNewSessionInput(): void {
 		if (!this.o.actions?.newSession) {
-			this.setStatus("new: actions unavailable");
+			this.setStatus(t("status.newUnavailable"));
 			return;
 		}
 		this.state.mode = "new";
 		this.inputDialog.open({
-			title: NEW_SESSION_DIALOG_TITLE,
+			title: newSessionDialogTitle(),
 			value: "",
-			hints: NEW_SESSION_DIALOG_HINTS,
+			hints: newSessionDialogHints(),
 			onSubmit: (v) => void this.submitNewSession(v),
 			onCancel: () => this.closeNewSessionInput(),
 		});
@@ -1953,17 +1955,17 @@ export class LazyPanel implements Component, Focusable {
 		const row = this.currentSessionRow();
 		if (!row) return;
 		if (!this.o.actions?.compactSession) {
-			this.setStatus("compact: actions unavailable");
+			this.setStatus(t("status.compactUnavailable"));
 			return;
 		}
 		this.compactTarget = row;
 		this.state.mode = "compact";
 		// 标题右侧显示压缩的是哪个会话（首条消息预览）；输入框留空 = 用 pi 的默认压缩指令。
 		this.inputDialog.open({
-			title: COMPACT_DIALOG_TITLE,
+			title: compactDialogTitle(),
 			value: "",
 			subject: row.preview || row.id,
-			hints: COMPACT_DIALOG_HINTS,
+			hints: compactDialogHints(),
 			onSubmit: (v) => void this.submitCompact(v),
 			onCancel: () => this.closeCompactInput(),
 		});
@@ -1995,7 +1997,7 @@ export class LazyPanel implements Component, Focusable {
 		const row = this.currentSessionRow();
 		if (!row) return;
 		if (!this.o.actions?.forkSession || !this.o.data.loadForkPoints) {
-			this.setStatus("fork: actions unavailable");
+			this.setStatus(t("status.forkUnavailable"));
 			return;
 		}
 		let points: ForkPoint[];
@@ -2003,11 +2005,11 @@ export class LazyPanel implements Component, Focusable {
 			points = await this.o.data.loadForkPoints(row.file);
 			if (this.disposed) return;
 		} catch (err) {
-			this.setStatus(`fork failed: ${(err as Error).message}`);
+			this.setStatus(t("status.forkFailed", { error: (err as Error).message }));
 			return;
 		}
 		if (points.length === 0) {
-			this.setStatus("No messages to fork from");
+			this.setStatus(t("status.noForkMessages"));
 			return;
 		}
 		this.forkTarget = { file: row.file, subject: this.sessionTitle(row), points };
@@ -2021,11 +2023,11 @@ export class LazyPanel implements Component, Focusable {
 		if (!target) return;
 		this.state.mode = "fork";
 		this.selectDialog.open({
-			title: FORK_DIALOG_TITLE,
+			title: forkDialogTitle(),
 			items: target.points.map((p) => p.text),
 			initialIndex: index,
 			subject: target.subject,
-			hints: FORK_DIALOG_HINTS,
+			hints: forkDialogHints(),
 			// 消息多了按窗口滚动，不撑破终端。
 			maxRows: this.dialogMaxRows(),
 			onSelect: (i) => this.confirmFork(i),
@@ -2045,7 +2047,7 @@ export class LazyPanel implements Component, Focusable {
 		this.state.mode = "fork";
 		this.selectDialog.open(
 			confirmDialogSpec({
-				title: FORK_SESSION_TITLE,
+				title: forkSessionTitle(),
 				subject: point.text,
 				onConfirm: () => void this.runFork(target.file, point.entryId),
 				// Esc / No：退回选择器，光标停在刚选中的那条消息上。
@@ -2076,14 +2078,14 @@ export class LazyPanel implements Component, Focusable {
 		const row = this.currentSessionRow();
 		if (!row) return;
 		if (!this.o.actions?.cloneSession) {
-			this.setStatus("clone: actions unavailable");
+			this.setStatus(t("status.cloneUnavailable"));
 			return;
 		}
 		this.cloneTarget = row;
 		this.state.mode = "clone";
 		this.selectDialog.open(
 			confirmDialogSpec({
-				title: CLONE_SESSION_TITLE,
+				title: cloneSessionTitle(),
 				subject: this.sessionTitle(row),
 				onConfirm: () => void this.runClone(),
 				onCancel: () => this.closeCloneConfirm(),
@@ -2113,15 +2115,15 @@ export class LazyPanel implements Component, Focusable {
 		if (!row) return;
 		const copy = this.o.actions?.copyLastReply;
 		if (!copy) {
-			this.setStatus("copy: actions unavailable");
+			this.setStatus(t("status.copyUnavailable"));
 			return;
 		}
 		try {
 			const copied = await copy(row.file);
 			if (this.disposed) return;
-			this.setStatus(copied ? "copied last reply" : "no assistant reply to copy");
+			this.setStatus(copied ? t("status.copiedLastReply") : t("status.noReplyToCopy"));
 		} catch (err) {
-			this.setStatus(`copy failed: ${(err as Error).message}`);
+			this.setStatus(t("status.copyFailed", { error: (err as Error).message }));
 		}
 	}
 
@@ -2131,7 +2133,7 @@ export class LazyPanel implements Component, Focusable {
 		const row = this.currentSessionRow();
 		if (!row) return;
 		if (!this.o.actions?.exportSession || !this.o.actions.exportTarget) {
-			this.setStatus("export: actions unavailable");
+			this.setStatus(t("status.exportUnavailable"));
 			return;
 		}
 		this.exportJob = { file: row.file, subject: this.sessionTitle(row) };
@@ -2144,13 +2146,13 @@ export class LazyPanel implements Component, Focusable {
 		if (!job) return;
 		this.state.mode = "export";
 		this.selectDialog.open({
-			title: EXPORT_FORMAT_TITLE,
-			items: EXPORT_FORMATS.map((f) => f.label),
+			title: exportFormatTitle(),
+			items: exportFormats().map((f) => f.label),
 			initialIndex: index,
 			subject: job.subject,
-			hints: EXPORT_FORMAT_HINTS,
+			hints: exportFormatHints(),
 			onSelect: (i) => {
-				const format = EXPORT_FORMATS[i]?.format;
+				const format = exportFormats()[i]?.format;
 				if (format) this.openExportPath(format);
 			},
 			onCancel: () => this.closeExportDialogs(),
@@ -2170,17 +2172,17 @@ export class LazyPanel implements Component, Focusable {
 		this.selectDialog.close();
 		this.state.mode = "export";
 		this.inputDialog.open({
-			title: EXPORT_PATH_TITLE,
+			title: exportPathTitle(),
 			// 预填 pi 的默认路径（绝对路径），用户一眼能看到会写到哪里；改成目录就在里面用默认文件名。
 			value: value ?? resolveTarget(job.file, format, "").path,
 			subject: job.subject,
-			hints: EXPORT_PATH_HINTS,
+			hints: exportPathHints(),
 			onSubmit: (v) => this.submitExportPath(v),
 			// Esc：退回格式菜单，光标停在刚选的格式上。
 			onCancel: () => {
 				this.inputDialog.close();
 				this.inputDialog.focused = false;
-				this.openExportMenu(EXPORT_FORMATS.findIndex((f) => f.format === format));
+				this.openExportMenu(EXPORT_FORMAT_ORDER.indexOf(format));
 			},
 		});
 		this.inputDialog.focused = this._focused;
@@ -2207,7 +2209,7 @@ export class LazyPanel implements Component, Focusable {
 		this.state.mode = "export";
 		this.selectDialog.open(
 			confirmDialogSpec({
-				title: OVERWRITE_FILE_TITLE,
+				title: overwriteFileTitle(),
 				subject: target.path,
 				onConfirm: () => void this.runExport(job.file, format, target.path),
 				onCancel: () => this.openExportPath(format, value),
@@ -2221,14 +2223,14 @@ export class LazyPanel implements Component, Focusable {
 		const write = this.o.actions?.exportSession;
 		this.closeExportDialogs();
 		if (!write) return;
-		this.setStatus("exporting…");
+		this.setStatus(t("status.exporting"));
 		try {
 			const written = await write(file, format, path);
 			if (this.disposed) return;
-			this.setStatus(`exported to ${written}`);
+			this.setStatus(t("status.exportedTo", { path: written }));
 		} catch (err) {
 			if (this.disposed) return;
-			this.setStatus(`export failed: ${(err as Error).message}`);
+			this.setStatus(t("status.exportFailed", { error: (err as Error).message }));
 		}
 	}
 
@@ -2244,16 +2246,16 @@ export class LazyPanel implements Component, Focusable {
 	/** I: ask for the JSONL to import (`value` = what was typed before backing out of the confirmation). */
 	private openImportInput(value: string): void {
 		if (!this.o.actions?.importSession) {
-			this.setStatus("import: actions unavailable");
+			this.setStatus(t("status.importUnavailable"));
 			return;
 		}
 		this.selectDialog.close();
 		this.state.mode = "import";
 		this.inputDialog.open({
-			title: IMPORT_DIALOG_TITLE,
+			title: importDialogTitle(),
 			value,
-			subject: IMPORT_DIALOG_SUBJECT,
-			hints: IMPORT_DIALOG_HINTS,
+			subject: importDialogSubject(),
+			hints: importDialogHints(),
 			onSubmit: (v) => this.confirmImport(v),
 			onCancel: () => this.closeImportDialogs(),
 		});
@@ -2268,13 +2270,13 @@ export class LazyPanel implements Component, Focusable {
 		const path = value.trim();
 		if (!path) {
 			this.closeImportDialogs();
-			this.setStatus("import: no file given");
+			this.setStatus(t("status.importNoFile"));
 			return;
 		}
 		this.state.mode = "import";
 		this.selectDialog.open(
 			confirmDialogSpec({
-				title: IMPORT_SESSION_TITLE,
+				title: importSessionTitle(),
 				subject: path,
 				onConfirm: () => void this.runImport(path),
 				// Esc / No：退回输入框，保留刚才输入的路径。
@@ -2306,13 +2308,13 @@ export class LazyPanel implements Component, Focusable {
 		const row = this.currentSessionRow();
 		if (!row) return;
 		if (!this.o.actions?.shareSession) {
-			this.setStatus("share: actions unavailable");
+			this.setStatus(t("status.shareUnavailable"));
 			return;
 		}
 		this.state.mode = "share";
 		this.selectDialog.open(
 			confirmDialogSpec({
-				title: SHARE_SESSION_TITLE,
+				title: shareSessionTitle(),
 				subject: this.sessionTitle(row),
 				onConfirm: () => void this.runShare(row.file),
 				onCancel: () => this.closeShareConfirm(),
@@ -2326,14 +2328,14 @@ export class LazyPanel implements Component, Focusable {
 		const share = this.o.actions?.shareSession;
 		this.closeShareConfirm();
 		if (!share) return;
-		this.setStatus("sharing…");
+		this.setStatus(t("status.sharing"));
 		let result: ShareResult;
 		try {
 			result = await share(file);
 			if (this.disposed) return;
 		} catch (err) {
 			if (this.disposed) return;
-			this.setStatus(`share failed: ${(err as Error).message}`);
+			this.setStatus(t("status.shareFailed", { error: (err as Error).message }));
 			return;
 		}
 		const copy = this.o.actions?.copyText;
@@ -2341,10 +2343,10 @@ export class LazyPanel implements Component, Focusable {
 			if (!copy) throw new Error("no clipboard");
 			await copy(result.url);
 			if (this.disposed) return;
-			this.setStatus(`share URL copied: ${result.url}`);
+			this.setStatus(t("status.shareUrlCopied", { url: result.url }));
 		} catch {
 			if (this.disposed) return;
-			this.setStatus(`shared: ${result.url}`);
+			this.setStatus(t("status.shared", { url: result.url }));
 		}
 	}
 
@@ -2365,7 +2367,7 @@ export class LazyPanel implements Component, Focusable {
 		const next = SESSION_SORT_MODES[(i + 1) % SESSION_SORT_MODES.length]!;
 		this.state.sort = next;
 		const keep = this.sessions[this.state.cursor.sessions]?.file;
-		if (await this.listSessions(keep)) this.setStatus(`sort: ${next}`);
+		if (await this.listSessions(keep)) this.setStatus(t("status.sort", { sort: t(`sort.${next}`) }));
 		await this.followSessionsCursor();
 	}
 
@@ -2375,19 +2377,19 @@ export class LazyPanel implements Component, Focusable {
 		if (!row) return;
 		const load = this.o.data.loadSessionInfo;
 		if (!load) {
-			this.setStatus("session info: unavailable");
+			this.setStatus(t("status.sessionInfoUnavailable"));
 			return;
 		}
 		let info: SessionInfo | undefined;
 		try {
 			info = await load(row.file);
 		} catch (err) {
-			this.setStatus(`session info failed: ${(err as Error).message}`);
+			this.setStatus(t("status.sessionInfoFailed", { error: (err as Error).message }));
 			return;
 		}
 		if (this.disposed) return;
 		if (!info) {
-			this.setStatus(`session info failed: cannot read ${row.file}`);
+			this.setStatus(t("status.sessionInfoCannotRead", { file: row.file }));
 			return;
 		}
 		this.state.mode = "info";
@@ -2403,15 +2405,15 @@ export class LazyPanel implements Component, Focusable {
 	private async copySessionInfo(text: string): Promise<void> {
 		const copy = this.o.actions?.copyText;
 		if (!copy) {
-			this.setStatus("copy: actions unavailable");
+			this.setStatus(t("status.copyUnavailable"));
 			return;
 		}
 		try {
 			await copy(text);
 			if (this.disposed) return;
-			this.setStatus("copied session info to clipboard");
+			this.setStatus(t("status.copiedSessionInfo"));
 		} catch (err) {
-			this.setStatus(`copy failed: ${(err as Error).message}`);
+			this.setStatus(t("status.copyFailed", { error: (err as Error).message }));
 		}
 	}
 
@@ -2429,12 +2431,12 @@ export class LazyPanel implements Component, Focusable {
 	private async resumeSession(): Promise<void> {
 		const row = this.sessions[this.state.cursor.sessions];
 		if (!row) {
-			this.setStatus("no session selected");
+			this.setStatus(t("status.noSessionSelected"));
 			return;
 		}
 		const actions = this.o.actions;
 		if (!actions) {
-			this.setStatus("resume: actions unavailable");
+			this.setStatus(t("status.resumeUnavailable"));
 			return;
 		}
 		await this.enter("resume", () => actions.resumeSession(row.file));
@@ -2449,7 +2451,7 @@ export class LazyPanel implements Component, Focusable {
 	private restoreTreeNode(target: TreeTarget | undefined): void {
 		if (!target) return;
 		if (!this.o.actions) {
-			this.setStatus("restore: actions unavailable");
+			this.setStatus(t("status.restoreUnavailable"));
 			return;
 		}
 		const restore: RestoreTarget = {
@@ -2469,11 +2471,11 @@ export class LazyPanel implements Component, Focusable {
 		this.restoreTarget = target;
 		this.state.mode = "restore";
 		this.selectDialog.open({
-			title: SUMMARY_MENU_TITLE,
-			items: SUMMARY_MENU.map((m) => m.label),
+			title: summaryMenuTitle(),
+			items: summaryMenu().map((m) => m.label),
 			initialIndex: index,
 			subject: target.subject,
-			hints: SUMMARY_MENU_HINTS,
+			hints: summaryMenuHints(),
 			onSelect: (i) => this.chooseSummary(i),
 			// Esc：退回 tree 面板，什么都不做（pi 是退回 tree 选择器）。
 			onCancel: () => this.closeRestoreDialogs(),
@@ -2484,7 +2486,7 @@ export class LazyPanel implements Component, Focusable {
 	/** Enter in the menu: restore right away, or ask for the custom instructions first. */
 	private chooseSummary(index: number): void {
 		const target = this.restoreTarget;
-		const choice = SUMMARY_MENU[index]?.choice;
+		const choice = SUMMARY_CHOICES[index];
 		this.closeRestoreDialogs();
 		if (!target || !choice) return;
 		switch (choice) {
@@ -2505,9 +2507,9 @@ export class LazyPanel implements Component, Focusable {
 		this.restoreTarget = target;
 		this.state.mode = "restore";
 		this.inputDialog.open({
-			title: CUSTOM_PROMPT_TITLE,
+			title: customPromptTitle(),
 			subject: target.subject,
-			hints: CUSTOM_PROMPT_HINTS,
+			hints: customPromptHints(),
 			onSubmit: (v) => this.submitCustomPrompt(v),
 			// Esc：退回三选菜单，光标停在 custom prompt 那一项，和 pi 一致。
 			onCancel: () => {
@@ -2544,7 +2546,7 @@ export class LazyPanel implements Component, Focusable {
 		await this.enter(
 			"restore",
 			() => actions.restoreNode(target.file, target.entryId, options),
-			options.summarize ? SUMMARIZING_STATUS : undefined,
+			options.summarize ? t("status.summarizing") : undefined,
 		);
 	}
 
@@ -2558,7 +2560,8 @@ export class LazyPanel implements Component, Focusable {
 	private async enter(what: string, run: () => Promise<EnterOutcome>, progress?: string): Promise<void> {
 		if (this.entering) return;
 		this.entering = true;
-		this.setStatus(progress ?? `${what}…`);
+		const verb = t(`enter.${what}`);
+		this.setStatus(progress ?? t("status.working", { what: verb }));
 		this.o.setHidden?.(true);
 		try {
 			await run();
@@ -2567,7 +2570,7 @@ export class LazyPanel implements Component, Focusable {
 		} catch (err) {
 			if (this.disposed) return;
 			this.o.setHidden?.(false);
-			this.setStatus(`${what} failed: ${(err as Error).message}`);
+			this.setStatus(t("status.workFailed", { what: verb, error: (err as Error).message }));
 		} finally {
 			this.entering = false;
 		}
@@ -2702,7 +2705,7 @@ export class LazyPanel implements Component, Focusable {
 			return this.searchBar.render(width)[0] ?? "";
 		}
 		const footer = { mode: this.state.mode, focus: this.state.focus, keymap: this.keymap, scope: this.state.scope, theme: this.o.theme };
-		const pendingHint = this.pending.length ? `pending: ${this.pending.join("")}` : undefined;
+		const pendingHint = this.pending.length ? t("status.pending", { keys: this.pending.join("") }) : undefined;
 		const status = pendingHint ?? this.status;
 		// 弹窗打开时 footer 只显示弹窗自己的按键提示（如 Enter save / Esc cancel / empty removes）；状态文字照常显示。
 		const dialog = this.inputDialog.isOpen
@@ -2732,15 +2735,15 @@ export class LazyPanel implements Component, Focusable {
 	}
 
 	private emptyMessage(selected: SessionRow | undefined): string {
-		if (!selected) return "Select a session.";
-		if (this.loadedSessionFile !== selected.file) return "Loading…";
-		return "Nothing to show.";
+		if (!selected) return t("pane.selectSession");
+		if (this.loadedSessionFile !== selected.file) return t("pane.loading");
+		return t("pane.nothingToShow");
 	}
 
 	/** "[1] SESSIONS": the jump key comes from the resolved keymap, so rebinding shows up here. */
 	private paneTitle(pane: PaneId): string {
 		const key = labelsFor(this.keymap, "global", FOCUS_ACTIONS[pane])[0];
-		return key ? `[${key}] ${PANE_TITLES[pane]}` : PANE_TITLES[pane];
+		return key ? `[${key}] ${paneTitleText(pane)}` : paneTitleText(pane);
 	}
 }
 
