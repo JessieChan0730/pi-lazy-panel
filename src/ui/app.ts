@@ -260,6 +260,8 @@ export interface LazyPanelOptions {
 	leftColumnRatio?: number;
 	/** Initial footer status, e.g. config warnings. */
 	status?: string;
+	/** Extension version, shown muted at the far right of the footer. */
+	version?: string;
 	/** pi's `branchSummary.skipPrompt`: TREE Enter restores without asking (no summary). */
 	skipSummaryPrompt?: boolean;
 	/**
@@ -2820,7 +2822,15 @@ export class LazyPanel implements Component, Focusable {
 		if (this.state.mode === "search") {
 			return this.searchBar.render(width)[0] ?? "";
 		}
-		const footer = { mode: this.state.mode, focus: this.state.focus, keymap: this.keymap, scope: this.state.scope, theme: this.o.theme };
+		const footer = {
+			mode: this.state.mode,
+			focus: this.state.focus,
+			keymap: this.keymap,
+			scope: this.state.scope,
+			theme: this.o.theme,
+			// 版本号常驻在 footer 最右侧（搜索状态行除外）。
+			...(this.o.version ? { version: this.o.version } : {}),
+		};
 		const pendingHint = this.pending.length ? t("status.pending", { keys: this.pending.join("") }) : undefined;
 		const status = pendingHint ?? this.status;
 		// 弹窗打开时 footer 只显示弹窗自己的按键提示（如 Enter save / Esc cancel / empty removes）；状态文字照常显示。

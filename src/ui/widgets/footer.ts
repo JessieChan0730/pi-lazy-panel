@@ -30,6 +30,8 @@ export interface FooterProps {
 	status?: string;
 	/** Replace the keymap-derived hints, e.g. with a dialog's keys while it is open. */
 	hints?: KeyHint[];
+	/** Extension version, shown muted at the far right (e.g. "0.1.0" → "v0.1.0"). */
+	version?: string;
 }
 
 /** Scope actions are one-way, so only the one that would change something is worth a hint. */
@@ -78,7 +80,10 @@ export function renderFooter(p: FooterProps, width: number): string[] {
 	const { theme } = p;
 	const mode = theme.bold(theme.bg("selectedBg", ` ${t(`mode.${p.mode}`)} `));
 	const status = p.status ? `  ${theme.fg("warning", p.status)}` : "";
-	const budget = width - visibleWidth(mode) - visibleWidth(status) - 1;
+	// 右下角的版本号（muted 弱化显示），先给它预留位置，避免按键提示占满后把它挤没。
+	const version = p.version ? theme.fg("muted", `v${p.version}`) : "";
+	const versionBudget = version ? visibleWidth(version) + 2 : 0;
+	const budget = width - visibleWidth(mode) - visibleWidth(status) - versionBudget - 1;
 
 	// 只显示放得下的提示，避免窄终端里被截断成半个词。
 	const parts: string[] = [];
@@ -90,7 +95,11 @@ export function renderFooter(p: FooterProps, width: number): string[] {
 		parts.push(part);
 		used += w;
 	}
-	return [fit(`${mode} ${parts.join("   ")}${status}`, width)];
+	const left = `${mode} ${parts.join("   ")}${status}`;
+	if (!version) return [fit(left, width)];
+	// 版本号靠右：中间用空格撑开，整体再 fit 到宽度（放不下时优先保留左侧提示，版本被截断）。
+	const gap = Math.max(1, width - visibleWidth(left) - visibleWidth(version));
+	return [fit(`${left}${" ".repeat(gap)}${version}`, width)];
 }
 
 /** Hints of the focused pane from the resolved keymap, in FOOTER_HINTS order. */

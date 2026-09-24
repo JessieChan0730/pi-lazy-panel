@@ -11,6 +11,9 @@
  */
 
 import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
 	cloneSession,
 	compactSession,
@@ -37,6 +40,17 @@ import { listSessions, sortSessions } from "./data/sessions.ts";
 import { applyTreeFilter, loadTree } from "./data/tree.ts";
 import { type ActionSource, type DataSource, LazyPanel } from "./ui/app.ts";
 import { attachMouse } from "./ui/mouse-input.ts";
+
+/** 读本插件 package.json 的版本号，展示在 footer 右下角；读不到就返回空串（不显示）。 */
+function extensionVersion(): string {
+	try {
+		const pkgPath = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "package.json");
+		const pkg = JSON.parse(readFileSync(pkgPath, "utf-8")) as { version?: unknown };
+		return typeof pkg.version === "string" ? pkg.version : "";
+	} catch {
+		return "";
+	}
+}
 
 export default function (pi: ExtensionAPI) {
 	// 按系统语言初始化 i18n（命令描述在注册时就要用到，一次会话内固定）。
@@ -89,6 +103,7 @@ export default function (pi: ExtensionAPI) {
 			// regular 模式下 pi 不开鼠标追踪，面板自己开；关闭时再关掉（fullscreen 由 pi 管，不碰）。
 			let disableMouse: (() => void) | undefined;
 			const currentFile = ctx.sessionManager.getSessionFile();
+			const version = extensionVersion();
 
 			await ctx.ui.custom<void>(
 				(tui, theme, _keybindings, done) => {
@@ -112,6 +127,8 @@ export default function (pi: ExtensionAPI) {
 						...(currentFile ? { currentSessionFile: currentFile } : {}),
 						// 配置文件有问题时在底部提示，但不阻止面板打开。
 						...(config.warnings.length ? { status: config.warnings[0] } : {}),
+						// footer 右下角的版本号（读不到 package.json 时为空、不显示）。
+						...(version ? { version } : {}),
 					});
 					// fullscreen 模式 pi 已经开了鼠标并派给 overlay 的 handleMouse；regular 模式
 					// 由 attachMouse 自己开 SGR 上报并解析（fullscreen 下是 no-op）。
