@@ -15,6 +15,7 @@
 
 import { getMarkdownTheme, type Theme } from "@earendil-works/pi-coding-agent";
 import { Markdown } from "@earendil-works/pi-tui";
+import { t } from "../../i18n/index.ts";
 import type { ContentBlock, SearchView } from "../../types.ts";
 import { formatTime } from "../../utils/format.ts";
 import { fit, frame, metaBudget } from "../frame.ts";
@@ -62,7 +63,7 @@ export function layoutContent(blocks: ContentBlock[], inner: number, theme: Them
 	for (const block of blocks) {
 		const isUser = block.role === "user";
 		const isHighlight = block.entryId === highlightEntryId;
-		const who = isUser ? "YOU" : "ASSISTANT";
+		const who = isUser ? t("pane.you") : t("pane.assistant");
 		const head = ` ${who} · ${formatTime(block.timestamp)} `;
 		const borderStyle = (s: string) => theme.fg(isUser ? "userMessageText" : "accent", s);
 		const headStyle = (s: string) => theme.bold(theme.fg(isUser ? "userMessageText" : "accent", s));
@@ -101,7 +102,7 @@ export function renderContentPane(p: ContentPaneProps, width: number, height: nu
 	const visible = Math.max(1, height - 2);
 	let body: string[];
 	if (p.blocks.length === 0) {
-		body = ["", theme.fg("muted", `  ${p.emptyMessage ?? "No messages."}`)];
+		body = ["", theme.fg("muted", `  ${p.emptyMessage ?? t("pane.contentEmpty")}`)];
 	} else {
 		const all = (p.layout ?? layoutContent(p.blocks, inner, theme, p.highlightEntryId)).lines;
 		const start = Math.min(Math.max(0, p.scroll), maxScroll(all.length, visible));
@@ -116,7 +117,7 @@ export function renderContentPane(p: ContentPaneProps, width: number, height: nu
 		}
 	}
 	const title = p.title ?? "CONTENT";
-	const meta = p.search ? searchMeta(p.search.position, p.search.total, metaBudget(width, title)) : p.blocks.length ? `${p.blocks.length} messages` : "";
+	const meta = p.search ? searchMeta(p.search.position, p.search.total, metaBudget(width, title)) : p.blocks.length ? t("pane.messages", { count: p.blocks.length }) : "";
 	return frame(body, {
 		width,
 		height,

@@ -32,16 +32,21 @@ import { loadPiSettings } from "./config/pi-settings.ts";
 import { COMMAND_NAME } from "./constants.ts";
 import { loadChangelog } from "./data/changelog.ts";
 import { loadContent, loadForkPoints, loadSessionInfo } from "./data/content.ts";
+import { initI18n, t } from "./i18n/index.ts";
 import { listSessions, sortSessions } from "./data/sessions.ts";
 import { applyTreeFilter, loadTree } from "./data/tree.ts";
 import { type ActionSource, type DataSource, LazyPanel } from "./ui/app.ts";
 
 export default function (pi: ExtensionAPI) {
+	// 按系统语言初始化 i18n（命令描述在注册时就要用到，一次会话内固定）。
+	initI18n();
 	pi.registerCommand(COMMAND_NAME, {
-		description: "Open the lazygit-style session panel (sessions / tree / content)",
+		description: t("command.description"),
 		handler: async (_args, ctx) => {
+			// 按系统语言初始化 i18n（一次会话内固定），之后所有 UI 文案走 t()。
+			initI18n();
 			if (ctx.mode !== "tui") {
-				ctx.ui.notify(`/${COMMAND_NAME} is only available in TUI mode`, "warning");
+				ctx.ui.notify(t("notify.tuiOnly", { command: COMMAND_NAME }), "warning");
 				return;
 			}
 			const config = await loadConfig(getAgentDir());

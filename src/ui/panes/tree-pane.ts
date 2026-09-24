@@ -27,6 +27,7 @@
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { t } from "../../i18n/index.ts";
 import type { SearchView, TreeFilter, TreeRow } from "../../types.ts";
 import { formatTime } from "../../utils/format.ts";
 import { fit, frame, metaBudget } from "../frame.ts";
@@ -61,7 +62,7 @@ export function renderTreePane(p: TreePaneProps, width: number, height: number):
 	const body: string[] = [];
 
 	if (p.rows.length === 0) {
-		body.push(theme.fg("muted", ` ${p.emptyMessage ?? "No entries."}`));
+		body.push(theme.fg("muted", ` ${p.emptyMessage ?? t("pane.treeEmpty")}`));
 	} else {
 		const outline = p.outline ?? treeOutline(p.rows, new Set());
 		const first = scrollOffset(p.cursor, p.rows.length, visible);
@@ -95,7 +96,8 @@ export function renderTreePane(p: TreePaneProps, width: number, height: number):
  */
 export function treeMeta(total: number, cursor: number, filter: TreeFilter, budget: number): string {
 	const pos = total ? `${Math.min(cursor + 1, total)}/${total}` : "";
-	const candidates = filter === "default" ? [pos] : total ? [`${pos} · ${filter}`, pos] : [filter, ""];
+	const name = t(`filter.${filter}`);
+	const candidates = filter === "default" ? [pos] : total ? [`${pos} · ${name}`, pos] : [name, ""];
 	return candidates.find((c) => visibleWidth(c) <= budget) ?? "";
 }
 
@@ -118,7 +120,7 @@ export function renderTreeRow(row: TreeRow, prefix: string, inner: number, isCur
 	const path = row.onActiveBranch ? "• " : "";
 	const label = row.label ? `[${row.label}] ` : "";
 	const time = `${formatTime(row.timestamp)} `;
-	const role = row.role === "system" ? "" : `${row.role}: `;
+	const role = row.role === "system" ? "" : `${t(`role.${row.role}`)}: `;
 	const prefixW =
 		visibleWidth(marker) + visibleWidth(prefix) + visibleWidth(path) + visibleWidth(label) + visibleWidth(time) + visibleWidth(role);
 	const text = truncateToWidth(row.text, Math.max(1, inner - prefixW), "…", false);

@@ -15,6 +15,7 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { FOOTER_HINTS } from "../../config/keymap.ts";
 import { labelsForFocus } from "../../config/keys.ts";
+import { t } from "../../i18n/index.ts";
 import type { ActionId, KeyHint, Keymap, ListScope, PaneId, PanelMode } from "../../types.ts";
 import { fit } from "../frame.ts";
 
@@ -37,40 +38,45 @@ const SCOPE_ACTION_OF: Record<ListScope, ActionId> = {
 	all: "scope-all",
 };
 
-/** Short footer wording per action (falls back to the action id). */
-const SHORT: Partial<Record<ActionId, string>> = {
-	search: "Search",
-	help: "Help",
-	"focus-next": "Focus",
-	"scope-current": "Current",
-	"scope-all": "All",
-	quit: "Quit",
-	"session-resume": "Resume",
-	"session-delete": "Delete",
-	"session-rename": "Rename",
-	"session-new": "New",
-	"session-fork": "Fork",
-	"session-clone": "Clone",
-	"session-copy-last-reply": "Copy reply",
-	"session-export": "Export",
-	"session-import": "Import",
-	"session-share": "Share",
-	"session-sort": "Sort",
-	"session-info": "Info",
-	"session-compact": "Compact",
-	"tree-restore": "Restore",
-	"tree-open": "Tree",
-	"tree-fold": "Fold",
-	"tree-label": "Label",
-	"tree-copy": "Copy",
-	"go-top": "Top",
-	"go-bottom": "Bottom",
-	changelog: "Changelog",
-};
+/** Actions with a short footer wording (under `footer.` in the locale files); others fall back to the action id. */
+const HAS_SHORT: ReadonlySet<ActionId> = new Set<ActionId>([
+	"search",
+	"help",
+	"focus-next",
+	"scope-current",
+	"scope-all",
+	"quit",
+	"session-resume",
+	"session-delete",
+	"session-rename",
+	"session-new",
+	"session-fork",
+	"session-clone",
+	"session-copy-last-reply",
+	"session-export",
+	"session-import",
+	"session-share",
+	"session-sort",
+	"session-info",
+	"session-compact",
+	"tree-restore",
+	"tree-open",
+	"tree-fold",
+	"tree-label",
+	"tree-copy",
+	"go-top",
+	"go-bottom",
+	"changelog",
+]);
+
+/** Short footer wording of `action` (localised), falling back to the action id. */
+function footerLabel(action: ActionId): string {
+	return HAS_SHORT.has(action) ? t(`footer.${action}`) : action;
+}
 
 export function renderFooter(p: FooterProps, width: number): string[] {
 	const { theme } = p;
-	const mode = theme.bold(theme.bg("selectedBg", ` ${p.mode.toUpperCase()} `));
+	const mode = theme.bold(theme.bg("selectedBg", ` ${t(`mode.${p.mode}`)} `));
 	const status = p.status ? `  ${theme.fg("warning", p.status)}` : "";
 	const budget = width - visibleWidth(mode) - visibleWidth(status) - 1;
 
@@ -96,7 +102,7 @@ function keymapHints(p: FooterProps): KeyHint[] {
 		if (action === activeScopeAction) continue;
 		const labels = labelsForFocus(p.keymap, p.focus, action);
 		if (labels.length === 0) continue;
-		out.push([labels[0]!, SHORT[action] ?? action]);
+		out.push([labels[0]!, footerLabel(action)]);
 	}
 	return out;
 }

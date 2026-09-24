@@ -11,14 +11,19 @@
  * （对应 /name 的可选 [name] 参数，空则不设置），回车新建并关闭面板。
  */
 
+import { t } from "../../i18n/index.ts";
 import type { KeyHint } from "../../types.ts";
 
 /** Title on the top border of the box. */
-export const NEW_SESSION_DIALOG_TITLE = "New session";
+export function newSessionDialogTitle(): string {
+	return t("dialog.newTitle");
+}
 
 /** Footer hints while the dialog is open. */
-export const NEW_SESSION_DIALOG_HINTS: KeyHint[] = [
-	["Enter", "create"],
-	["Esc", "cancel"],
-	["empty", "no name"],
-];
+export function newSessionDialogHints(): KeyHint[] {
+	return [
+		["Enter", t("hint.create")],
+		["Esc", t("hint.cancel")],
+		[t("hint.emptyKey"), t("hint.noName")],
+	];
+}

@@ -37,6 +37,8 @@ npm test               # node --import tsx --test "test/**/*.test.ts"
 npm run dev            # pi -e ./src/index.ts，临时把插件加载进一个 pi TUI，不写配置
 npm run install:pi     # pi install .，把本目录以本地路径注册到 ~/.pi/agent/settings.json（pi 会把 . 解析成绝对路径），只需执行一次
 npm run uninstall:pi   # pi remove .，从 pi 中移除
+npm run i18n:scan      # 扫描 src 里的 t("…") key，和 src/i18n/locales/{en,zh}.json 对齐（缺失的以空串补进去、按字母排序），报告缺失 / 需翻译 / 孤儿
+npm run i18n:check     # 同上但只读不写，有不一致时退出码非 0（CI 用）
 ```
 
 - 运行单个测试文件：`node --import tsx --test test/ui.test.ts`
@@ -95,9 +97,17 @@ src/
 │   ├── keys.ts               # 纯函数：chord 解析（ctrl+d / G / gg）、按键匹配、按 scope 解析 ActionId；scopeChain 定义查找顺序（对话框 → tree → global，面板 → global）
 │   ├── config.ts             # 唯一知道 ~/.pi/agent/lazy-panel.json 的模块，深合并用户配置（null 解绑）
 │   └── pi-settings.ts        # 唯一读 pi 自己 settings.json 的模块（SettingsManager.create 只读），目前取 branchSummary.skipPrompt 和 treeFilterMode（TREE 的初始过滤）
+├── i18n/                     # 国际化：唯一知道 i18next 的层
+│   ├── index.ts              # initI18n(lng?)（同步、按系统语言、fallback en）、detectLocale / normalizeLocale、导出 t()。约定：不在模块顶层用 t() 算 const，文案一律写成函数、渲染时才 t()
+│   └── locales/
+│       ├── en.json           # 基准语言（source of truth）
+│       └── zh.json           # 中文
 └── utils/
     ├── format.ts             # 纯格式化：时间、token、费用、路径缩写
     └── paths.ts              # 用户输入的路径：去引号、~ 用 os.homedir() 展开（Windows 也能用）、相对路径按 cwd 解析
+
+scripts/
+└── i18n-scan.mjs             # 扫描 t("…") key 并和 locales 对齐（i18n:scan 写 / i18n:check 只读）
 
 test/
 ├── smoke.test.ts             # 键位表、搜索解析的冒烟测试
@@ -108,6 +118,7 @@ test/
 ├── pi-settings.test.ts       # 临时目录上验证 branchSummary.skipPrompt 的全局 / 项目两级读取、treeFilterMode 映射
 ├── changelog.test.ts         # parseChangelog 的切分 / 跳过无版本段、文件缺失
 ├── search.test.ts            # parseSearchQuery 的限定词解析、matchTreeRow / matchSessionRow / matchesTokens 的匹配规则、findMatchRanges
+├── i18n.test.ts              # 语言检测 / 初始化 / 插值 / 复数 / 缺失回退（initI18n / detectLocale / normalizeLocale / t）
 └── ui.test.ts                # 格式化、frame 几何、树过滤 / 折叠、TreeDialog 搜索行、highlightLine / searchMeta
 
 docs/keybindings.md           # 默认快捷键表，新增 ActionId 时同步更新
@@ -135,6 +146,7 @@ AGENTS.md                     # 仅指向本文件，规则统一在这里维护
 10. 模块之间尽量低耦合
 11. 更新 design, progress, keybindings 这些文档，提交消息固定为 `chore(doc): update doc by $progress` 后面 $变量 根据实际修改的文档来定
 12. 新增功能一定要考虑跨平台，不要使用某些特定平台的特性，比如路径使用`~/` 这个在 windows下是会报错的。
+13. 所有 UI 文案走 `src/i18n` 的 `t()`，中英两份 `src/i18n/locales/{en,zh}.json` 同步维护（英文是基准）；**不要在模块顶层用 `t()` 计算 `export const`**（import 期求值会早于 `initI18n`），需要文案的地方写成函数、渲染时才调用。改完跑 `npm run i18n:check` 确认对齐。i18next 放 `dependencies`（第 6 条只约束那三个 pi 包，不影响新增普通依赖）。
 
 ## 重要文档
 

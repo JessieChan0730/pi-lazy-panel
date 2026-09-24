@@ -10,14 +10,19 @@
  * 选项来自会话里的 user 消息（app 层从 data 拿），默认停在最后一条（pi 的默认）。
  */
 
+import { t } from "../../i18n/index.ts";
 import type { KeyHint } from "../../types.ts";
 
 /** Title on the top border of the fork selector. */
-export const FORK_DIALOG_TITLE = "Fork before which message?";
+export function forkDialogTitle(): string {
+	return t("dialog.forkTitle");
+}
 
 /** Footer hints while the fork selector is open. */
-export const FORK_DIALOG_HINTS: KeyHint[] = [
-	["j/k", "move"],
-	["Enter", "select"],
-	["Esc", "cancel"],
-];
+export function forkDialogHints(): KeyHint[] {
+	return [
+		["j/k", t("hint.move")],
+		["Enter", t("hint.select")],
+		["Esc", t("hint.cancel")],
+	];
+}

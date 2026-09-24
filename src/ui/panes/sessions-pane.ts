@@ -15,6 +15,7 @@
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { t } from "../../i18n/index.ts";
 import type { ListScope, SearchView, SessionRow, SessionSortMode } from "../../types.ts";
 import { formatShortDate, shortenPath } from "../../utils/format.ts";
 import { fit, frame, metaBudget } from "../frame.ts";
@@ -43,7 +44,7 @@ export function renderSessionsPane(p: SessionsPaneProps, width: number, height: 
 	const body: string[] = [];
 
 	if (p.rows.length === 0) {
-		body.push(theme.fg("muted", " No sessions found."));
+		body.push(theme.fg("muted", ` ${t("pane.sessionsEmpty")}`));
 	} else {
 		const first = scrollOffset(p.cursor, p.rows.length, visibleRows);
 		for (let i = first; i < Math.min(p.rows.length, first + visibleRows); i++) {
@@ -86,16 +87,17 @@ function renderRow(row: SessionRow, inner: number, isCursor: boolean, p: Session
 	const isSelected = p.selected.has(row.file);
 	const marker = `${isCursor ? "›" : " "} `;
 	const date = formatShortDate(row.updatedAt);
-	const title = row.name ?? row.preview ?? "(empty session)";
+	const emptyTitle = t("pane.emptySession");
+	const title = row.name ?? row.preview ?? emptyTitle;
 
 	// line 1: marker + indent + title ....... date
 	const rightW = visibleWidth(date) + 1;
 	const titleW = Math.max(1, inner - visibleWidth(marker) - visibleWidth(indent) - rightW);
-	const titleText = truncateToWidth(title || "(empty session)", titleW, "…", true);
+	const titleText = truncateToWidth(title || emptyTitle, titleW, "…", true);
 	const line1Raw = `${marker}${indent}${titleText} ${date}`;
 
 	// line 2: model · cwd · N msgs
-	const details = [row.model ?? "", shortenPath(row.cwd), `${row.messageCount} msgs`].filter(Boolean).join(" · ");
+	const details = [row.model ?? "", shortenPath(row.cwd), t("pane.msgs", { count: row.messageCount })].filter(Boolean).join(" · ");
 	const line2Raw = `  ${indent}${truncateToWidth(details, Math.max(1, inner - 2 - visibleWidth(indent)), "…", false)}`;
 
 	if (isCursor) {
@@ -115,11 +117,12 @@ function renderRow(row: SessionRow, inner: number, isCursor: boolean, p: Session
 	];
 }
 
-/** Header labels of the list scope, long form and the short form used when space is tight. */
-export const SCOPE_LABELS: Record<ListScope, { long: string; short: string }> = {
-	"current-folder": { long: "Current", short: "Cur" },
-	all: { long: "All", short: "All" },
-};
+/** Header labels of the list scope (localised), long form and the short form used when space is tight. */
+export function scopeLabels(scope: ListScope): { long: string; short: string } {
+	return scope === "all"
+		? { long: t("scope.allLong"), short: t("scope.allShort") }
+		: { long: t("scope.currentLong"), short: t("scope.currentShort") };
+}
 
 /**
  * Header meta for the sessions pane: "1/15 · Current · recent".
@@ -128,17 +131,18 @@ export const SCOPE_LABELS: Record<ListScope, { long: string; short: string }> = 
  * 用户都能看到当前 scope 和会话数量，而不是整段消失。
  */
 export function sessionsMeta(total: number, cursor: number, scope: ListScope, sort: SessionSortMode, budget: number): string {
-	const label = SCOPE_LABELS[scope];
+	const label = scopeLabels(scope);
+	const sortName = t(`sort.${sort}`);
 	const pos = `${Math.min(cursor + 1, total)}/${total}`;
 	const candidates = total
-		? [`${pos} · ${label.long} · ${sort}`, `${pos} · ${label.long}`, `${pos} · ${label.short}`, pos]
+		? [`${pos} · ${label.long} · ${sortName}`, `${pos} · ${label.long}`, `${pos} · ${label.short}`, pos]
 		: [label.long, label.short];
 	return candidates.find((c) => visibleWidth(c) <= budget) ?? candidates[candidates.length - 1]!;
 }
 
 /** "3 selected" while sessions are multi-selected with space, "" otherwise. */
 export function selectedMeta(count: number): string {
-	return count > 0 ? `${count} selected` : "";
+	return count > 0 ? t("pane.selected", { count }) : "";
 }
 
 /** First visible index so that `cursor` stays inside a window of `visible` rows. */

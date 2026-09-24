@@ -11,14 +11,19 @@
  * 被压缩的会话（首条消息预览），输入可留空（空 = 用 pi 的默认压缩指令）。
  */
 
+import { t } from "../../i18n/index.ts";
 import type { KeyHint } from "../../types.ts";
 
 /** Title on the top border of the box. */
-export const COMPACT_DIALOG_TITLE = "Compact";
+export function compactDialogTitle(): string {
+	return t("dialog.compactTitle");
+}
 
 /** Footer hints while the dialog is open. */
-export const COMPACT_DIALOG_HINTS: KeyHint[] = [
-	["Enter", "compact"],
-	["Esc", "cancel"],
-	["empty", "= default"],
-];
+export function compactDialogHints(): KeyHint[] {
+	return [
+		["Enter", t("hint.compact")],
+		["Esc", t("hint.cancel")],
+		[t("hint.emptyKey"), t("hint.compactDefault")],
+	];
+}

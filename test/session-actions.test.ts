@@ -35,10 +35,14 @@ import {
 	shareViewerUrl,
 } from "../src/actions/session-actions.ts";
 import { type RestoreContext, restoreNode } from "../src/actions/tree-actions.ts";
-import { COMPACTING_STATUS, EXTENSION_ID, SPINNER_FRAMES } from "../src/constants.ts";
+import { EXTENSION_ID, SPINNER_FRAMES } from "../src/constants.ts";
 import { loadForkPoints, loadLastReply } from "../src/data/content.ts";
 import { isEffectiveLeaf } from "../src/data/tree.ts";
+import { initI18n } from "../src/i18n/index.ts";
 import { expandHome, resolveUserPath, stripQuotes } from "../src/utils/paths.ts";
+
+// 恢复 / 摘要进度这类会话操作会经 t() 输出文案，测试统一按英文界面断言。
+initI18n("en");
 
 type AnyMessage = Parameters<SessionManager["appendMessage"]>[0];
 
@@ -343,7 +347,7 @@ test("compactSession: compacts the current session in place, showing a spinner i
 	assert.deepEqual(ctx.compacts, [undefined]);
 	assert.deepEqual(ctx.switches, [], "the current session is compacted in place, never switched");
 	// the panel is hidden meanwhile, so progress goes to pi's own footer and is cleared afterwards
-	assert.ok(isSpinnerStart(ctx.statuses[0], EXTENSION_ID, COMPACTING_STATUS), "spinner starts on pi's footer");
+	assert.ok(isSpinnerStart(ctx.statuses[0], EXTENSION_ID, "compacting conversation…"), "spinner starts on pi's footer");
 	assert.deepEqual(ctx.statuses.at(-1), [EXTENSION_ID, undefined], "status is cleared when done");
 
 	// custom instructions travel through to ctx.compact
@@ -372,7 +376,7 @@ test("compactSession in another session: switch first, then compact with the rep
 	assert.deepEqual(ctx.nextCompacts, ["keep it short"], "compaction runs on the replacement ctx");
 	assert.deepEqual(ctx.compacts, [], "the stale pre-switch ctx must not be used");
 	// the panel is gone after the switch, so the spinner goes to the replacement ctx's footer
-	assert.ok(isSpinnerStart(ctx.statuses[0], `next:${EXTENSION_ID}`, COMPACTING_STATUS));
+	assert.ok(isSpinnerStart(ctx.statuses[0], `next:${EXTENSION_ID}`, "compacting conversation…"));
 	assert.deepEqual(ctx.statuses.at(-1), [`next:${EXTENSION_ID}`, undefined]);
 
 	// a missing file is rejected before pi tears anything down

@@ -30,18 +30,23 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { sliceByColumn, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { matchesKeyId } from "../../config/keys.ts";
+import { t } from "../../i18n/index.ts";
 import type { KeyHint, SessionInfo } from "../../types.ts";
 import { formatCost, formatDateTime, formatTokens, shortenPath } from "../../utils/format.ts";
 import { dialogWidth, frame, metaBudget, overlayCentered } from "../frame.ts";
 
-/** Title on the top border. */
-export const SESSION_INFO_TITLE = "Session Info";
+/** Title on the top border (localised). */
+export function sessionInfoTitle(): string {
+	return t("dialog.sessionInfoTitle");
+}
 
 /** Footer hints while the dialog is open. */
-export const SESSION_INFO_HINTS: KeyHint[] = [
-	["y", "copy"],
-	["Esc", "close"],
-];
+export function sessionInfoHints(): KeyHint[] {
+	return [
+		["y", t("hint.copy")],
+		["Esc", t("hint.close")],
+	];
+}
 
 /** Width of the label column ("Messages" is the longest label). */
 const LABEL_WIDTH = 9;
@@ -64,22 +69,28 @@ export interface SessionInfoDialogOptions {
  */
 export function sessionInfoRows(info: SessionInfo, fullPath = false): Array<[label: string, value: string]> {
 	return [
-		["Name", info.name ?? "(none)"],
-		["Model", info.model ?? "(unknown)"],
-		["Messages", String(info.messages)],
-		["Tokens", formatTokens(info.tokens)],
-		["Cost", formatCost(info.cost)],
-		["Created", formatDateTime(info.createdAt) || "-"],
-		["Updated", formatDateTime(info.updatedAt) || "-"],
-		["Path", fullPath ? info.path : shortenPath(info.path)],
-		["ID", info.id],
+		[t("info.name"), info.name ?? t("info.none")],
+		[t("info.model"), info.model ?? t("info.unknown")],
+		[t("info.messages"), String(info.messages)],
+		[t("info.tokens"), formatTokens(info.tokens)],
+		[t("info.cost"), formatCost(info.cost)],
+		[t("info.created"), formatDateTime(info.createdAt) || "-"],
+		[t("info.updated"), formatDateTime(info.updatedAt) || "-"],
+		[t("info.path"), fullPath ? info.path : shortenPath(info.path)],
+		[t("info.id"), info.id],
 	];
+}
+
+/** Pad `text` with spaces until it is at least `width` visible columns (wide chars count as two). */
+function padColumns(text: string, width: number): string {
+	const extra = width - visibleWidth(text);
+	return extra > 0 ? text + " ".repeat(extra) : text;
 }
 
 /** What `y` copies: one `Label     value` line per row, with the full path. */
 export function sessionInfoText(info: SessionInfo): string {
 	return sessionInfoRows(info, true)
-		.map(([label, value]) => `${label.padEnd(LABEL_WIDTH)} ${value}`)
+		.map(([label, value]) => `${padColumns(label, LABEL_WIDTH)} ${value}`)
 		.join("\n");
 }
 
@@ -112,7 +123,7 @@ export class SessionInfoDialog {
 
 	/** Footer hints while open (empty when closed). */
 	get hints(): KeyHint[] {
-		return this.spec ? SESSION_INFO_HINTS : [];
+		return this.spec ? sessionInfoHints() : [];
 	}
 
 	open(spec: SessionInfoDialogSpec): void {
@@ -152,17 +163,17 @@ export class SessionInfoDialog {
 		for (const [label, value] of rows) {
 			const parts = wrapValue(value, valueWidth);
 			parts.forEach((part, i) => {
-				// 第一行带标签（muted、固定宽度），续行标签列留空。
-				const head = i === 0 ? theme.fg("muted", label.padEnd(LABEL_WIDTH)) : " ".repeat(LABEL_WIDTH);
+				// 第一行带标签（muted、按可见列对齐），续行标签列留空。
+				const head = i === 0 ? theme.fg("muted", padColumns(label, LABEL_WIDTH)) : " ".repeat(LABEL_WIDTH);
 				body.push(` ${head} ${theme.fg("text", part)}`);
 			});
 		}
 		const subject = info?.name ?? "";
-		const meta = truncateToWidth(subject, metaBudget(width, SESSION_INFO_TITLE) - 3, "…", false);
+		const meta = truncateToWidth(subject, metaBudget(width, sessionInfoTitle()) - 3, "…", false);
 		return frame(body, {
 			width,
 			height: body.length + 2,
-			title: SESSION_INFO_TITLE,
+			title: sessionInfoTitle(),
 			...(meta ? { meta } : {}),
 			border: (s) => theme.fg("borderAccent", s),
 			titleStyle: (s) => theme.bold(theme.fg("accent", s)),

@@ -16,38 +16,60 @@
  * y / n 直接选，Enter 确认光标所在项，Esc 取消。这里只放文案、顺序和提示，不做 I/O。
  */
 
+import { t } from "../../i18n/index.ts";
 import type { KeyHint } from "../../types.ts";
 import type { SelectDialogSpec } from "./select-dialog.ts";
 
-/** Menu entries; `CONFIRM_YES_INDEX` / `CONFIRM_NO_INDEX` name them. */
-export const CONFIRM_ITEMS = ["Yes", "No"] as const;
+/** Menu entries, localised; `CONFIRM_YES_INDEX` / `CONFIRM_NO_INDEX` name them. */
+export function confirmItems(): string[] {
+	return [t("confirm.yes"), t("confirm.no")];
+}
 export const CONFIRM_YES_INDEX = 0;
 export const CONFIRM_NO_INDEX = 1;
 
 /** Footer hints while a confirmation is open. */
-export const CONFIRM_HINTS: KeyHint[] = [
-	["y/n", "choose"],
-	["Enter", "confirm"],
-	["Esc", "cancel"],
-];
+export function confirmHints(): KeyHint[] {
+	return [
+		["y/n", t("hint.choose")],
+		["Enter", t("hint.confirm")],
+		["Esc", t("hint.cancel")],
+	];
+}
 
 /** Title of the delete-session confirmation. */
-export const DELETE_SESSION_TITLE = "Delete session?";
+export function deleteSessionTitle(): string {
+	return t("confirm.delete");
+}
+
+/** Title of the batch delete confirmation (`d` with a multi-selection). */
+export function deleteSessionsTitle(count: number): string {
+	return t("confirm.deleteN", { count });
+}
 
 /** Title of the clone-session confirmation (`y`). */
-export const CLONE_SESSION_TITLE = "Clone session?";
+export function cloneSessionTitle(): string {
+	return t("confirm.clone");
+}
 
 /** Title of the fork confirmation, shown after a message is picked (`o`). */
-export const FORK_SESSION_TITLE = "Fork session?";
+export function forkSessionTitle(): string {
+	return t("confirm.fork");
+}
 
 /** Title of the share confirmation (`S`): the session leaves the machine. */
-export const SHARE_SESSION_TITLE = "Upload as secret gist?";
+export function shareSessionTitle(): string {
+	return t("confirm.share");
+}
 
 /** Title of the import confirmation (`I`), pi's "Replace current session with …?". */
-export const IMPORT_SESSION_TITLE = "Import and switch to it?";
+export function importSessionTitle(): string {
+	return t("confirm.import");
+}
 
 /** Title of the confirmation before an export overwrites an existing file (`e`). */
-export const OVERWRITE_FILE_TITLE = "Overwrite file?";
+export function overwriteFileTitle(): string {
+	return t("confirm.overwrite");
+}
 
 export interface ConfirmSpecOptions {
 	/** Title on the top border, e.g. "Delete session?". */
@@ -65,10 +87,10 @@ export interface ConfirmSpecOptions {
 export function confirmDialogSpec(o: ConfirmSpecOptions): SelectDialogSpec {
 	return {
 		title: o.title,
-		items: [...CONFIRM_ITEMS],
+		items: confirmItems(),
 		initialIndex: CONFIRM_NO_INDEX,
 		...(o.subject ? { subject: o.subject } : {}),
-		hints: CONFIRM_HINTS,
+		hints: confirmHints(),
 		shortcuts: { y: CONFIRM_YES_INDEX, n: CONFIRM_NO_INDEX },
 		onSelect: (index) => (index === CONFIRM_YES_INDEX ? o.onConfirm() : o.onCancel()),
 		onCancel: o.onCancel,
