@@ -13,6 +13,7 @@
 import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
 	cloneSession,
+	compactSession,
 	copyLastReply,
 	copyText,
 	deleteSession,
@@ -68,6 +69,7 @@ export default function (pi: ExtensionAPI) {
 				newSession: (name) => newSession(ctx, name),
 				forkSession: (file, entryId) => forkSession(ctx, file, entryId),
 				cloneSession: (file) => cloneSession(ctx, file),
+				compactSession: (file, customInstructions) => compactSession(ctx, file, customInstructions),
 				copyLastReply,
 				copyText,
 				// 导出 / 分享的 HTML 走 pi 自己的 `pi --export`；相对路径和默认文件名都按 pi 的工作目录算。

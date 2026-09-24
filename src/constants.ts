@@ -42,3 +42,19 @@ export const KEY_SCOPES = ["global", ...PANE_IDS, TREE_DIALOG_SCOPE] as const;
  * panel footer and, because the panel is hidden meanwhile, in pi's own footer.
  */
 export const SUMMARIZING_STATUS = "summarizing branch…";
+
+/**
+ * Progress text while pi compacts the selected conversation (manual /compact).
+ * Shown in pi's own footer (the panel is hidden meanwhile), prefixed with a
+ * rotating spinner frame.
+ */
+export const COMPACTING_STATUS = "compacting conversation…";
+
+/**
+ * Spinner frames for footer progress — a rotating square (正方形旋转). Kept here
+ * so other slow operations (e.g. the changelog dialog) can reuse the same look.
+ */
+export const SPINNER_FRAMES = ["◰", "◳", "◲", "◱"] as const;
+
+/** How fast the footer spinner advances one frame. */
+export const SPINNER_INTERVAL_MS = 120;

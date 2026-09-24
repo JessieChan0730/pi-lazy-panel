@@ -23,6 +23,7 @@ import type {
 	TreeRow,
 } from "../src/types.ts";
 import { type ActionSource, type DataSource, LazyPanel } from "../src/ui/app.ts";
+import { COMPACT_DIALOG_TITLE } from "../src/ui/widgets/compact-dialog.ts";
 import {
 	CLONE_SESSION_TITLE,
 	DELETE_SESSION_TITLE,
@@ -1872,6 +1873,7 @@ function makeSessionActionPanel(opts: { actions?: Partial<ActionSource> | null; 
 	const copies: string[] = [];
 	const infoCalls: string[] = [];
 	const news: string[] = [];
+	const compacts: Array<{ file: string; instructions: string | undefined }> = [];
 	const forks: Array<{ file: string; entryId: string }> = [];
 	const clones: string[] = [];
 	const lastReplies: string[] = [];
@@ -1942,6 +1944,10 @@ function makeSessionActionPanel(opts: { actions?: Partial<ActionSource> | null; 
 			news.push(name);
 			return "switched";
 		},
+		compactSession: async (file, instructions) => {
+			compacts.push({ file, instructions });
+			return file === opts.currentSessionFile ? "compacted" : "switched";
+		},
 		forkSession: async (file, entryId) => {
 			forks.push({ file, entryId });
 			return "switched";
@@ -1996,6 +2002,7 @@ function makeSessionActionPanel(opts: { actions?: Partial<ActionSource> | null; 
 		copies,
 		infoCalls,
 		news,
+		compacts,
 		forks,
 		clones,
 		lastReplies,
@@ -2159,6 +2166,7 @@ test("d on the session pi has open is refused up front (pi's wording), and a pan
 	for (const [key, what] of [
 		["d", "delete"],
 		["r", "rename"],
+		["c", "compact"],
 	] as const) {
 		bare.panel.handleInput(key);
 		assert.equal(bare.panel.state.mode, "normal");
@@ -2392,6 +2400,65 @@ test("n prompts for an optional name, creates the session and closes; empty name
 	assert.equal(cancel.panel.state.mode, "normal");
 	assert.deepEqual(cancel.news, []);
 	assert.equal(cancel.closed(), false);
+});
+
+test("c prompts for optional focus instructions, then compacts the cursor session and closes; Enter empty uses the default; Esc cancels", async () => {
+	const h = makeSessionActionPanel();
+	await h.panel.load();
+	h.panel.handleInput("j");
+	await settle();
+	assert.equal(h.panel.state.cursor.sessions, 1);
+
+	h.panel.handleInput("c");
+	assert.equal(h.panel.state.mode, "compact");
+	const dlg = dialogAt(h.text(), COMPACT_DIALOG_TITLE);
+	assert.ok(dlg, "the Compact prompt is drawn");
+	assert.ok(dlg.title.includes("second words"), dlg.title);
+	assert.ok(h.footer().includes("COMPACT") && h.footer().includes("Enter compact"), h.footer());
+
+	// typed instructions travel through to the action; the panel is hidden while pi works, then closes
+	for (const ch of "focus on API") h.panel.handleInput(ch);
+	h.panel.handleInput("\r");
+	await flush();
+	assert.deepEqual(h.compacts, [{ file: "/tmp/s2.jsonl", instructions: "focus on API" }]);
+	assert.deepEqual(h.hidden, [true], "the panel is hidden while pi compacts");
+	assert.equal(h.closed(), true);
+
+	// empty instructions compact with pi's default (undefined, not "")
+	const bare = makeSessionActionPanel();
+	await bare.panel.load();
+	bare.panel.handleInput("c");
+	bare.panel.handleInput("\r");
+	await flush();
+	assert.deepEqual(bare.compacts, [{ file: "/tmp/s1.jsonl", instructions: undefined }]);
+	assert.equal(bare.closed(), true);
+
+	// Esc cancels the prompt without compacting
+	const cancel = makeSessionActionPanel();
+	await cancel.panel.load();
+	cancel.panel.handleInput("c");
+	cancel.panel.handleInput("x");
+	cancel.panel.handleInput("\x1b");
+	assert.equal(cancel.panel.state.mode, "normal");
+	assert.deepEqual(cancel.compacts, []);
+	assert.equal(cancel.closed(), false);
+
+	// a failure stays in the footer and the panel comes back
+	const failing = makeSessionActionPanel({
+		actions: {
+			compactSession: async () => {
+				throw new Error("Nothing to compact (session too small)");
+			},
+		},
+	});
+	await failing.panel.load();
+	failing.panel.handleInput("c");
+	failing.panel.handleInput("\r");
+	await flush();
+	assert.equal(failing.panel.state.mode, "normal");
+	assert.ok(failing.footer().includes("compact failed: Nothing to compact"), failing.footer());
+	assert.equal(failing.closed(), false);
+	h.panel.dispose();
 });
 
 test("o lists the user messages to fork before (last selected), confirms, then forks with the picked prompt", async () => {
@@ -2817,7 +2884,7 @@ test("d with a selection deletes them all after one confirmation, skipping the o
 	cur.panel.dispose();
 });
 
-test("r / o / y / e / S refuse while several sessions are selected", async () => {
+test("r / o / y / c / e / S refuse while several sessions are selected", async () => {
 	const h = makeSessionActionPanel();
 	await h.panel.load();
 	h.panel.handleInput(" ");
@@ -2828,6 +2895,7 @@ test("r / o / y / e / S refuse while several sessions are selected", async () =>
 		["r", "rename"],
 		["o", "fork"],
 		["y", "clone"],
+		["c", "compact"],
 		["e", "export"],
 		["S", "share"],
 	] as const) {

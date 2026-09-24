@@ -92,6 +92,8 @@ import { type ContentLayout, layoutContent, maxScroll, renderContentPane } from 
 import { renderSessionsPane } from "./panes/sessions-pane.ts";
 import { renderTreePane } from "./panes/tree-pane.ts";
 import { type OutlinePrefix, treeOutline } from "./tree-outline.ts";
+import { ChangelogDialog } from "./widgets/changelog-dialog.ts";
+import { COMPACT_DIALOG_HINTS, COMPACT_DIALOG_TITLE } from "./widgets/compact-dialog.ts";
 import {
 	CLONE_SESSION_TITLE,
 	confirmDialogSpec,
@@ -102,7 +104,6 @@ import {
 	SHARE_SESSION_TITLE,
 } from "./widgets/confirm-dialog.ts";
 import { EXPORT_FORMAT_HINTS, EXPORT_FORMAT_TITLE, EXPORT_FORMATS, EXPORT_PATH_HINTS, EXPORT_PATH_TITLE } from "./widgets/export-dialog.ts";
-import { ChangelogDialog } from "./widgets/changelog-dialog.ts";
 import { renderFooter } from "./widgets/footer.ts";
 import { FORK_DIALOG_HINTS, FORK_DIALOG_TITLE } from "./widgets/fork-dialog.ts";
 import { compactKeys, helpLineCount, overlayHelp } from "./widgets/help-overlay.ts";
@@ -211,6 +212,8 @@ export interface ActionSource {
 	forkSession?(sessionFile: string, entryId: string): Promise<EnterOutcome>;
 	/** y in SESSIONS (after confirmation): clone the active branch to a new file (/clone). */
 	cloneSession?(sessionFile: string): Promise<EnterOutcome>;
+	/** c in SESSIONS: compact this conversation's active branch and open it (/compact). */
+	compactSession?(sessionFile: string, customInstructions?: string): Promise<EnterOutcome>;
 	/** Y in SESSIONS: copy the last assistant reply to the clipboard; `false` = no reply yet. */
 	copyLastReply?(sessionFile: string): Promise<boolean>;
 	/** y in the Session Info dialog: copy its text to the clipboard. */
@@ -342,6 +345,8 @@ export class LazyPanel implements Component, Focusable {
 	private forkTarget: { file: string; subject: string; points: ForkPoint[] } | undefined;
 	/** Session the clone confirmation is about while `mode === "clone"`. */
 	private cloneTarget: SessionRow | undefined;
+	/** Session being compacted while `mode === "compact"`. */
+	private compactTarget: SessionRow | undefined;
 	/** Session being exported while `mode === "export"`: its file, title-bar subject, and the format once picked. */
 	private exportJob: { file: string; subject: string; format?: ExportFormat } | undefined;
 	/** True while an Enter action is waiting for pi (keys are ignored, the panel is hidden). */
@@ -864,6 +869,9 @@ export class LazyPanel implements Component, Focusable {
 				return;
 			case "session-clone":
 				this.confirmCloneSession();
+				return;
+			case "session-compact":
+				this.openCompactInput();
 				return;
 			case "session-copy-last-reply":
 				void this.copyLastReply();
@@ -1890,6 +1898,48 @@ export class LazyPanel implements Component, Focusable {
 		this.state.mode = this.baseMode();
 		this.inputDialog.close();
 		this.inputDialog.focused = false;
+		this.o.requestRender();
+	}
+
+	/** c: prompt for optional focus instructions, then compact the cursor session (/compact) and open it. */
+	private openCompactInput(): void {
+		if (this.refuseMultiSelect("compact")) return;
+		const row = this.currentSessionRow();
+		if (!row) return;
+		if (!this.o.actions?.compactSession) {
+			this.setStatus("compact: actions unavailable");
+			return;
+		}
+		this.compactTarget = row;
+		this.state.mode = "compact";
+		// 标题右侧显示压缩的是哪个会话（首条消息预览）；输入框留空 = 用 pi 的默认压缩指令。
+		this.inputDialog.open({
+			title: COMPACT_DIALOG_TITLE,
+			value: "",
+			subject: row.preview || row.id,
+			hints: COMPACT_DIALOG_HINTS,
+			onSubmit: (v) => void this.submitCompact(v),
+			onCancel: () => this.closeCompactInput(),
+		});
+		this.inputDialog.focused = this._focused;
+		this.o.requestRender();
+	}
+
+	/** Enter in the Compact prompt: compact the session (blank = pi's default instructions), then close via `enter()`. */
+	private async submitCompact(value: string): Promise<void> {
+		const row = this.compactTarget;
+		const compact = this.o.actions?.compactSession;
+		this.closeCompactInput();
+		if (!row || !compact) return;
+		const instructions = value.trim();
+		await this.enter("compact", () => compact(row.file, instructions || undefined));
+	}
+
+	private closeCompactInput(): void {
+		this.state.mode = this.baseMode();
+		this.inputDialog.close();
+		this.inputDialog.focused = false;
+		this.compactTarget = undefined;
 		this.o.requestRender();
 	}
 

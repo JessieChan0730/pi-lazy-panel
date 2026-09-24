@@ -51,6 +51,8 @@ export const DEFAULT_KEYMAP: Keymap = {
 		"session-share": "S",
 		"session-clone": "y",
 		"session-copy-last-reply": "Y",
+		// c 压缩光标所在会话（对应 /compact）；C（大写）是全局 scope-current，不冲突。
+		"session-compact": "c",
 		"session-sort": "s",
 		"session-new": "n",
 		"session-info": "i",
@@ -123,6 +125,7 @@ export const ACTION_DESCRIPTIONS: Record<ActionId, string> = {
 	"session-share": "Share as private GitHub Gist",
 	"session-clone": "Clone active branch to a new session",
 	"session-copy-last-reply": "Copy last assistant reply",
+	"session-compact": "Compact this conversation and open it (/compact)",
 	"session-sort": "Cycle sort: recent / created / title / threaded",
 	"session-new": "New session",
 	"session-info": "Session info",
@@ -212,6 +215,7 @@ export const FOOTER_HINTS: Record<PaneId, ActionId[]> = {
 		"session-new",
 		"session-sort",
 		"session-info",
+		"session-compact",
 		// fork / clone / 复制回复 / 导出导入分享用得少，放后面：窄终端里先被挤掉，? 帮助里仍然都有。
 		"session-fork",
 		"session-clone",

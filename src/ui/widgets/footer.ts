@@ -57,6 +57,7 @@ const SHORT: Partial<Record<ActionId, string>> = {
 	"session-share": "Share",
 	"session-sort": "Sort",
 	"session-info": "Info",
+	"session-compact": "Compact",
 	"tree-restore": "Restore",
 	"tree-open": "Tree",
 	"tree-fold": "Fold",

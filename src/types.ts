@@ -39,6 +39,7 @@ export type PanelMode =
 	| "new"
 	| "fork"
 	| "clone"
+	| "compact"
 	| "export"
 	| "import"
 	| "share"
@@ -52,9 +53,10 @@ export type KeyHint = [key: string, text: string];
 /**
  * What Enter did (SESSIONS resume / TREE restore):
  * `switched` = pi now shows another session, `restored` = the leaf moved to the
- * chosen node, `unchanged` = pi was already there. Failures throw instead.
+ * chosen node, `unchanged` = pi was already there, `compacted` = the current
+ * session's active branch was compacted in place. Failures throw instead.
  */
-export type EnterOutcome = "switched" | "restored" | "unchanged";
+export type EnterOutcome = "switched" | "restored" | "unchanged" | "compacted";
 
 /**
  * How a session file was removed (SESSIONS `d`, same as pi's /resume):
@@ -282,6 +284,7 @@ export type ActionId =
 	| "session-share"
 	| "session-clone"
 	| "session-copy-last-reply"
+	| "session-compact"
 	| "session-sort"
 	| "session-new"
 	| "session-info"

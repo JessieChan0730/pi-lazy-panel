@@ -10,6 +10,7 @@
  *   fork    -> ctx.fork(entryId, { position: "before" })          (done)
  *   clone   -> ctx.fork(leafId, { position: "at" })               (done)
  *   copy-reply -> copyToClipboard(last assistant reply) (`Y`)      (done)
+ *   compact -> ctx.compact({ customInstructions }) on the current session (done)
  *   export  -> HTML: `pi --export <file> <out>`; JSONL: header + active branch (done)
  *   import  -> copy into the session dir + ctx.switchSession       (done)
  *   share   -> `pi --export` + `gh gist create --public=false`      (done)
@@ -31,6 +32,7 @@ import {
 	type ExtensionCommandContext,
 	SessionManager,
 } from "@earendil-works/pi-coding-agent";
+import { COMPACTING_STATUS, EXTENSION_ID, SPINNER_FRAMES, SPINNER_INTERVAL_MS } from "../constants.ts";
 import { loadLastReply } from "../data/content.ts";
 import type { DeleteMethod, EnterOutcome, ExportFormat, ExportTarget, ShareResult } from "../types.ts";
 import { resolveUserPath, stripQuotes } from "../utils/paths.ts";
@@ -249,6 +251,81 @@ export async function copyLastReply(sessionFile: string): Promise<boolean> {
 	if (!text) return false;
 	await copyToClipboard(text);
 	return true;
+}
+
+// ---------------------------------------------------------------------------
+// compact
+// ---------------------------------------------------------------------------
+
+/** The slice compact needs: current session (for isCurrentSession), compact, switchSession, and the footer. */
+export type CompactContext = Pick<ExtensionCommandContext, "sessionManager" | "switchSession" | "compact" | "ui">;
+
+/**
+ * Compact the active branch of `sessionFile` (what `/compact [instructions]` does), then be in it.
+ *
+ * pi 的 `ctx.compact` 只作用于当前会话，而且是 fire-and-forget（结果走 onComplete / onError）。
+ * 所以光标会话就是当前会话时直接压缩（返回 `compacted`）；是其他会话时先 `switchSession` 切过去
+ * （这就是"压缩完进对话"里的"进对话"），再在 pi 给 `withSession` 的新 ctx 上压缩——切换后旧 ctx
+ * 已失效，面板也被 pi 收掉，所以那时的失败只能 `notify`（和 `restoreNode` 处理其他会话一致）。
+ * 压缩要跑一次模型、可能十几秒，期间面板是隐藏的，进度写到 pi 自己的 footer（带旋转 spinner）。
+ *
+ * Throws when the file cannot be opened, the switch is cancelled, or (for the
+ * current session) compaction fails — e.g. no model, session too small, already
+ * compacted. `customInstructions` focuses the summary; blank uses pi's default.
+ */
+export async function compactSession(ctx: CompactContext, sessionFile: string, customInstructions?: string): Promise<EnterOutcome> {
+	if (isCurrentSession(ctx, sessionFile)) {
+		const stop = startFooterSpinner(ctx.ui, COMPACTING_STATUS);
+		try {
+			await runCompaction(ctx, customInstructions);
+		} finally {
+			stop();
+		}
+		return "compacted";
+	}
+	await resumeSession(ctx, sessionFile, {
+		withSession: async (next) => {
+			const stop = startFooterSpinner(next.ui, COMPACTING_STATUS);
+			try {
+				await runCompaction(next, customInstructions);
+			} catch (err) {
+				next.ui.notify(`compact failed: ${(err as Error).message}`, "error");
+			} finally {
+				stop();
+			}
+		},
+	});
+	return "switched";
+}
+
+/** Wrap pi's fire-and-forget `ctx.compact` in a promise (it reports success / failure through callbacks). */
+function runCompaction(ctx: Pick<CompactContext, "compact">, customInstructions?: string): Promise<void> {
+	return new Promise((resolve, reject) => {
+		ctx.compact({
+			...(customInstructions ? { customInstructions } : {}),
+			onComplete: () => resolve(),
+			onError: (err) => reject(err),
+		});
+	});
+}
+
+/** Rotate a spinner + `text` in pi's own footer until the returned stop() clears it. */
+function startFooterSpinner(ui: Pick<CompactContext["ui"], "setStatus">, text: string): () => void {
+	let frame = 0;
+	const show = (): void => {
+		const glyph = SPINNER_FRAMES[frame % SPINNER_FRAMES.length] ?? SPINNER_FRAMES[0];
+		ui.setStatus(EXTENSION_ID, `${glyph} ${text}`);
+	};
+	show();
+	const timer = setInterval(() => {
+		frame++;
+		show();
+	}, SPINNER_INTERVAL_MS);
+	// pi 的 setInterval 句柄不需要 unref：stop() 一定会在压缩结束（成功或失败）时清掉它。
+	return () => {
+		clearInterval(timer);
+		ui.setStatus(EXTENSION_ID, undefined);
+	};
 }
 
 // ---------------------------------------------------------------------------

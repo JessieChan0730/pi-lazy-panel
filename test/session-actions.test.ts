@@ -14,6 +14,8 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import {
 	cloneSession,
 	type CommandSpec,
+	type CompactContext,
+	compactSession,
 	CURRENT_SESSION_DELETE_ERROR,
 	defaultExportName,
 	deleteSession,
@@ -33,6 +35,7 @@ import {
 	shareViewerUrl,
 } from "../src/actions/session-actions.ts";
 import { type RestoreContext, restoreNode } from "../src/actions/tree-actions.ts";
+import { COMPACTING_STATUS, EXTENSION_ID, SPINNER_FRAMES } from "../src/constants.ts";
 import { loadForkPoints, loadLastReply } from "../src/data/content.ts";
 import { isEffectiveLeaf } from "../src/data/tree.ts";
 import { expandHome, resolveUserPath, stripQuotes } from "../src/utils/paths.ts";
@@ -82,6 +85,10 @@ interface FakeCtxOptions {
 	cancelNew?: boolean;
 	/** Make `navigateTree` of the replacement context throw with this message. */
 	nextNavigateError?: string;
+	/** Make `compact` of the old ctx fail (calls onError with this message). */
+	compactError?: string;
+	/** Make `compact` of the replacement ctx fail (calls onError with this message). */
+	nextCompactError?: string;
 }
 
 /** Recording stand-in for pi's command context (and the replacement context handed to `withSession`). */
@@ -97,6 +104,9 @@ function fakeCtx(sessionManager: SessionManager, opts: FakeCtxOptions = {}) {
 	const nextForks: Array<{ entryId: string; position: string | undefined }> = [];
 	/** newSession calls: the names the setup callback would write ([] when no setup). */
 	const newSessions: Array<{ hadSetup: boolean; appended: string[] }> = [];
+	/** `compact` calls: the customInstructions on the old ctx / on the replacement ctx. */
+	const compacts: Array<string | undefined> = [];
+	const nextCompacts: Array<string | undefined> = [];
 	/** `ui.setStatus` calls: `[key, text]` on the old ctx, `["next:" + key, text]` on the replacement ctx. */
 	const statuses: Array<[string, string | undefined]> = [];
 	// 切换后 pi 给 withSession 的是绑定到新会话的另一个 ctx；这里用单独的记录器区分它和旧 ctx。
@@ -112,6 +122,11 @@ function fakeCtx(sessionManager: SessionManager, opts: FakeCtxOptions = {}) {
 		fork: async (entryId: string, options?: { position?: string }) => {
 			nextForks.push({ entryId, position: options?.position });
 			return { cancelled: opts.cancelFork ?? false };
+		},
+		compact: (options?: { customInstructions?: string; onComplete?: (r: unknown) => void; onError?: (e: Error) => void }) => {
+			nextCompacts.push(options?.customInstructions);
+			if (opts.nextCompactError) options?.onError?.(new Error(opts.nextCompactError));
+			else options?.onComplete?.({});
 		},
 		ui: {
 			notify: (msg: string, level?: string) => void notifies.push([msg, level]),
@@ -150,12 +165,18 @@ function fakeCtx(sessionManager: SessionManager, opts: FakeCtxOptions = {}) {
 			await options?.withSession?.(next as never);
 			return { cancelled: false };
 		},
+		compact: (options?: { customInstructions?: string; onComplete?: (r: unknown) => void; onError?: (e: Error) => void }) => {
+			log.push("compact");
+			compacts.push(options?.customInstructions);
+			if (opts.compactError) options?.onError?.(new Error(opts.compactError));
+			else options?.onComplete?.({});
+		},
 		ui: {
 			notify: (msg: string, level?: string) => void notifies.push([`old:${msg}`, level]),
 			setStatus: (key: string, text: string | undefined) => void statuses.push([key, text]),
 		},
-	} as unknown as RestoreContext & NewSessionContext & ForkContext;
-	return { ctx, log, switches, navigations, nextNavigations, notifies, statuses, forks, nextForks, newSessions };
+	} as unknown as RestoreContext & NewSessionContext & ForkContext & CompactContext;
+	return { ctx, log, switches, navigations, nextNavigations, notifies, statuses, forks, nextForks, newSessions, compacts, nextCompacts };
 }
 
 test("isEffectiveLeaf: the leaf itself, or a non-user entry followed only by bookkeeping entries", (t) => {
@@ -304,6 +325,65 @@ test("restoreNode passes the summary choice through to navigateTree and shows pr
 	const cancelled = fakeCtx(SessionManager.open(s.file), { cancelNavigate: true });
 	await assert.rejects(restoreNode(cancelled.ctx, s.file, s.u1, { summarize: true }), /branch summary cancelled/);
 	assert.deepEqual(cancelled.statuses.at(-1), ["lazy-panel", undefined]);
+});
+
+/** The first footer status a spinner writes: a rotating frame followed by the text. */
+function isSpinnerStart(status: [string, string | undefined] | undefined, key: string, text: string): boolean {
+	if (!status || status[0] !== key || status[1] === undefined) return false;
+	return status[1].includes(text) && SPINNER_FRAMES.some((frame) => status[1]?.startsWith(frame));
+}
+
+test("compactSession: compacts the current session in place, showing a spinner in pi's footer", async (t) => {
+	const dir = tempDir(t);
+	const s = makeSession(dir);
+	const ctx = fakeCtx(SessionManager.open(s.file));
+
+	// no instructions: compact with pi's default, no switch, outcome "compacted"
+	assert.equal(await compactSession(ctx.ctx, s.file), "compacted");
+	assert.deepEqual(ctx.compacts, [undefined]);
+	assert.deepEqual(ctx.switches, [], "the current session is compacted in place, never switched");
+	// the panel is hidden meanwhile, so progress goes to pi's own footer and is cleared afterwards
+	assert.ok(isSpinnerStart(ctx.statuses[0], EXTENSION_ID, COMPACTING_STATUS), "spinner starts on pi's footer");
+	assert.deepEqual(ctx.statuses.at(-1), [EXTENSION_ID, undefined], "status is cleared when done");
+
+	// custom instructions travel through to ctx.compact
+	assert.equal(await compactSession(ctx.ctx, s.file, "focus on the API changes"), "compacted");
+	assert.deepEqual(ctx.compacts, [undefined, "focus on the API changes"]);
+});
+
+test("compactSession: a failed compaction rejects and still clears the footer", async (t) => {
+	const dir = tempDir(t);
+	const s = makeSession(dir);
+	const failing = fakeCtx(SessionManager.open(s.file), { compactError: "No model available for summarization" });
+
+	await assert.rejects(compactSession(failing.ctx, s.file), /No model available/);
+	assert.deepEqual(failing.statuses.at(-1), [EXTENSION_ID, undefined], "the spinner is cleared even on failure");
+});
+
+test("compactSession in another session: switch first, then compact with the replacement context", async (t) => {
+	const dir = tempDir(t);
+	const s = makeSession(dir);
+	const other = makeSession(mkdtempSync(join(dir, "other-")));
+	const ctx = fakeCtx(SessionManager.open(s.file));
+
+	// switch into the other session (that is what "enter the conversation" means), then compact it there
+	assert.equal(await compactSession(ctx.ctx, other.file, "keep it short"), "switched");
+	assert.deepEqual(ctx.switches, [{ file: other.file, withSession: true }]);
+	assert.deepEqual(ctx.nextCompacts, ["keep it short"], "compaction runs on the replacement ctx");
+	assert.deepEqual(ctx.compacts, [], "the stale pre-switch ctx must not be used");
+	// the panel is gone after the switch, so the spinner goes to the replacement ctx's footer
+	assert.ok(isSpinnerStart(ctx.statuses[0], `next:${EXTENSION_ID}`, COMPACTING_STATUS));
+	assert.deepEqual(ctx.statuses.at(-1), [`next:${EXTENSION_ID}`, undefined]);
+
+	// a missing file is rejected before pi tears anything down
+	await assert.rejects(compactSession(ctx.ctx, join(dir, "missing.jsonl")), /session file not found/);
+	assert.equal(ctx.switches.length, 1);
+
+	// compaction failing after the switch is reported in the new session, and the outcome is the switch that did happen
+	const failing = fakeCtx(SessionManager.open(s.file), { nextCompactError: "boom" });
+	assert.equal(await compactSession(failing.ctx, other.file), "switched");
+	assert.deepEqual(failing.notifies, [["compact failed: boom", "error"]]);
+	assert.deepEqual(failing.statuses.at(-1), [`next:${EXTENSION_ID}`, undefined]);
 });
 
 /** A `trash` command that certainly does not exist, so the tests never touch the real system trash. */
