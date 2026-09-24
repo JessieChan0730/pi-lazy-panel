@@ -195,25 +195,25 @@
 实现说明（2026-09-22，对话框 UI 对齐 pi /tree）：
 
 - 拿本机一份有分支的真实会话对比后发现：pi 的分支实际挂在 `[system]` 系统提示词节点下（每次 /resume 或 /tree restore 再继续对话，pi 会先追加一条新的 system 消息），插件之前把 system 消息归到 `meta` 默认隐藏，过滤后重新挂父节点就把整棵树压平成了几条独立的链，树线一根都画不出来。现在 `TreeRow.kind` 拆成四类和 pi 一致：`message`（user / assistant）、`tool`（工具结果）、`system`（system 提示词、bash 执行、compaction、branch summary，pi 默认就显示的骨架节点）、`meta`（model / thinking / name 这些记账条目，pi 默认隐藏）。`TreeFilter` 的 `tools` 改名 `no-tools`（对应 pi 的 ctrl+t）：`default` 只隐藏 meta（和 pi 默认一样能看到工具结果），`no-tools` 再去掉工具结果。
-- 行文字改成 pi 的中括号标签风格：`[system]`、`[bash]: cmd`、`[compaction: 12k tokens]`、`[branch summary]: …`、`[model: xxx]`、`[thinking: off]`、`[name: xxx]`；system 行不再带 `system: ` 前缀，整行 muted。
-- 活动路径标记：和 pi 一样，活动分支上的节点在文字前加 accent 色的 `• `，一眼能看出当前对话走的是哪条路；非活动分支仍然 dim。
-- 对话框和小面板共用 `renderTreeRow`，所以两边同步变化；小面板仍然只保留最里面 3 层树线，外面折叠成 `… `。
+- 行文字改成 pi 的中括号标签风格：`[system]`、`[bash]: cmd`、`[compaction: 12k tokens]`、`[branch summary]: …`、`[model: xxx]`、`[thinking: off]`、`[name: xxx]`；system 行不再带 `system:` 前缀，整行 muted。
+- 活动路径标记：和 pi 一样，活动分支上的节点在文字前加 accent 色的 `•`，一眼能看出当前对话走的是哪条路；非活动分支仍然 dim。
+- 对话框和小面板共用 `renderTreeRow`，所以两边同步变化；小面板仍然只保留最里面 3 层树线，外面折叠成 `…`。
 
 实现说明（2026-09-22，1–5 项）：
 
 - 树线：先看了 pi 0.85.1 `tree-selector.js` 的 `flattenTree` / `render`，规则照搬到新模块 `ui/tree-lines.ts` 的 `treePrefixes`：父节点有多个子节点时子节点带 `├` / `└` 连接符，连接符第二格 `⊟` 表示有子节点、`─` 表示叶子；分叉处缩进 +1 层，分叉后的第一代再 +1 层做视觉分组，单链不缩进；连接符行的后代在该列画 `│`，最后一个兄弟之后改画空白；每层 3 列。多个根时挂在虚拟根下、不画连接符（和 pi 一致）。
 - 数据层：`TreeRow` 去掉 `depth`，`parentId` 改为指向"最近的一个也是行的祖先"（label 这类不显示的条目被跳过），树线全靠 `parentId` 画。`applyTreeFilter` 过滤掉中间节点后把子节点挂到最近保留的祖先上（`rows` 是先序的，一遍算完），过滤后仍是一片合法的森林。
-- 小面板（`ui/panes/tree-pane.ts`）：`renderTreeRow` 抽成共用函数（光标 `› ` + 树线 + `[label]` + 时间 + `role:` + 正文），`capPrefix` 只保留最里面 `MAX_LEVELS`（3）层、更外面的折叠成 `… `；标题右侧不再显示过滤名，只显示 `2/12`。
+- 小面板（`ui/panes/tree-pane.ts`）：`renderTreeRow` 抽成共用函数（光标 `›` + 树线 + `[label]` + 时间 + `role:` + 正文），`capPrefix` 只保留最里面 `MAX_LEVELS`（3）层、更外面的折叠成 `…`；标题右侧不再显示过滤名，只显示 `2/12`。
 - 对话框（`ui/widgets/tree-dialog.ts`，`TreeDialog`）：`a` 打开，占满终端只留 2 列 / 1 行边距；顶部一行是 `搜索:` 输入框（`PromptBar`，本次静态）、`├──┤` 分隔线、中间是不折叠的完整树（光标从面板当前节点开始）、再一条分隔线、底部一行按键提示；标题右侧显示 `3/12 · default`。`frame.ts` 新增 `FRAME_DIVIDER` 哨兵：body 里出现它就画 `├────┤`。`PanelMode` 新增 `tree`（footer 左侧显示 `TREE`，右侧显示对话框的提示）。本次只有 Esc / q 关闭，其他按键一律吞掉。
 - 键位：`tree` scope 删掉 `tree-filter-*` 五个动作（`ActionId`、默认键位、`ACTION_DESCRIPTIONS`、`HELP_GROUPS`、footer 提示一并移除），新增 `tree-open`（默认 `a`，footer 显示 `a Tree`）。`/`、`n`、`N` 是 global 绑定，不能靠删键位去掉，所以 `keymap.ts` 新增 `DISABLED_GLOBAL_ACTIONS`：TREE 聚焦时这三个动作不执行，footer 提示 `search: not available here, press a to open the tree dialog`，? 帮助里也不列出。`state.treeFilter` 保留（对话框过滤下个任务用）。（2026-09-22 撤回：树大了小面板也需要 /，`DISABLED_ACTIONS` 里去掉 `tree` 这一项、`app.ts` 里的"not available here"提示删掉，footer 恢复 `/ Search`；现在 TREE 里的 / 和别的面板一样只打开搜索栏，真正的匹配后面统一做。）
-- 顺手：`PromptBar` 的 pi-tui `Input` 改成 `prompt: ""`，去掉输入框前多余的 `> `（搜索栏之前一直是 `搜索: > `）。
+- 顺手：`PromptBar` 的 pi-tui `Input` 改成 `prompt: ""`，去掉输入框前多余的 `>`（搜索栏之前一直是 `搜索: >`）。
 - 测试：`test/ui.test.ts` 加了 `treePrefixes` / `capPrefix` 的几何测试、`applyTreeFilter` 重新挂父节点、小面板折叠层级而对话框不折叠、`FRAME_DIVIDER`；`test/panel.test.ts` 加了 TREE 里 `/`、`n`、`u` 不起作用且 footer 提示、`a` 打开对话框的布局（搜索行 / 分隔线 / 光标行 / 提示行 / 边距）、其他键被吞、Esc / q 关闭；帮助弹窗测试改为断言不再出现 Filter 和搜索。
 
 ### tree 面板改为折叠大纲（2026-09-22）
 
-背景：小面板照搬 pi /tree 的树线后显得太重，也和 a 打开的对话框重复。跑了本机 7 个会话：6 个是纯线性链，树线一根都画不出来；唯一有分叉的那个 80 行里 57 行在被放弃的旁支上。真正的问题不是树线，而是"分叉一深就全部展开 + 每层 3 列 + `… ` 截断"，折叠才是解法，三角箭头只是换个皮。
+背景：小面板照搬 pi /tree 的树线后显得太重，也和 a 打开的对话框重复。跑了本机 7 个会话：6 个是纯线性链，树线一根都画不出来；唯一有分叉的那个 80 行里 57 行在被放弃的旁支上。真正的问题不是树线，而是"分叉一深就全部展开 + 每层 3 列 + `…` 截断"，折叠才是解法，三角箭头只是换个皮。
 
-- ~~小面板改成三角 + 缩进的折叠大纲：段头（父节点有多个子节点、自己又有后代的节点）左侧画 `▸`（折叠）/ `▾`（展开），没有后代的旁支画 `─`；段内的行每层缩进 2 列，最多四层，更深的以 `… ` 代替；线性对话完全不缩进。~~
+- ~~小面板改成三角 + 缩进的折叠大纲：段头（父节点有多个子节点、自己又有后代的节点）左侧画 `▸`（折叠）/ `▾`（展开），没有后代的旁支画 `─`；段内的行每层缩进 2 列，最多四层，更深的以 `…` 代替；线性对话完全不缩进。~~
 - ~~默认旁支折叠、活动分支展开：打开面板就能看到当前对话，右侧 CONTENT 联动不受影响；换会话时重置，同一会话内打标签等重新加载保留折叠状态。~~
 - ~~z：折叠 / 展开光标所在的分支段。光标在段头上切换；在段内任意一行按下则折叠所在段并把光标移到段头（vim 的 zc）；线性对话的主干上没有可折叠的段，footer 提示 `nothing to fold here`。~~
 - ~~树对话框沿用同一份折叠状态：只列出没被折叠的行，折叠的段头在树线连接符上画 `⊞`（和 pi 一致）。对话框内的 z / j / k 等按键仍归"对话框快捷键"任务。~~
@@ -221,9 +221,9 @@
 实现说明（2026-09-22）：
 
 - 数据层：新增 `data/tree-fold.ts`，纯函数：`treeChildren`（按 parentId 分组，`tree-lines.ts` 也改用它）、`forkChildIds`（分支段起点：父节点有多个子节点的子节点，或多根时的根）、`foldableIds`（起点里自己有后代的才能折叠；和 pi 不同，单根不可折叠——折了整棵树就没了）、`defaultFolded`（不在活动分支上的可折叠行）、`applyTreeFold`（先序一遍隐藏折叠行的后代，不是段头的 id 忽略）、`foldTarget`（z 的目标：自己可折叠就是自己，否则最近的可折叠祖先，主干上没有）。
-- 面板前缀：新增 `ui/tree-outline.ts` 的 `treeOutline`：深度只在可折叠的行下面 +1（单链、死胡同和父节点同深），每层 2 列；三角（或死胡同的 `─`）直接占段头这一行的前两列、不预留空列，段头的正文因此比同层的普通行靠右 2 列，段内的行正好顶在段头正文下面（lazygit 文件树的画法；先试过"按深度预留三角列"，真实会话里段头的同层行和段内的行会落到同一列，看不出层级）；线性对话前缀为空、和之前完全一样；`MAX_DEPTH = 3`（0～3 共四层），更深的行宽度和第 3 层一样、最外面两列换成 `… `。前缀按整棵树算（不是折叠后的可见行），折叠时列不会跳动。
+- 面板前缀：新增 `ui/tree-outline.ts` 的 `treeOutline`：深度只在可折叠的行下面 +1（单链、死胡同和父节点同深），每层 2 列；三角（或死胡同的 `─`）直接占段头这一行的前两列、不预留空列，段头的正文因此比同层的普通行靠右 2 列，段内的行正好顶在段头正文下面（lazygit 文件树的画法；先试过"按深度预留三角列"，真实会话里段头的同层行和段内的行会落到同一列，看不出层级）；线性对话前缀为空、和之前完全一样；`MAX_DEPTH = 3`（0～3 共四层），更深的行宽度和第 3 层一样、最外面两列换成 `…`。前缀按整棵树算（不是折叠后的可见行），折叠时列不会跳动。
 - `ui/panes/tree-pane.ts`：不再画树线，删掉 `MAX_LEVELS` / `capPrefix`；props 增加 `outline`（entryId → 前缀），缩进 dim、三角 muted（旁支整行 dim 时三角仍看得见）。`renderTreeRow` 的 `prefix` 改为调用方已配好色的字符串，对话框传 `theme.fg("dim", 树线)`。
-- `ui/tree-lines.ts`：`treePrefixes(rows, folded)` 第二个参数是折叠集合，折叠的连接符行画 `⊞`，多根时折叠的根在前缀后面补 `⊞ `（照 pi）。
+- `ui/tree-lines.ts`：`treePrefixes(rows, folded)` 第二个参数是折叠集合，折叠的连接符行画 `⊞`，多根时折叠的根在前缀后面补 `⊞`（照 pi）。
 - 面板状态：`PanelState.treeFolded: Set<string>`；`LazyPanel` 里 `tree` 是完整过滤后的树，`visibleTree` 是 `applyTreeFold` 之后面板真正列出的行，光标索引、y / T / Enter、右侧联动都改成看 `visibleTree`；`setTree` / `refreshTreeView` 统一重算可见行和大纲前缀。`loadSelectedSession` 用 `defaultFolded`，`reloadTree` 保留原折叠集合。
 - 键位：`tree` scope 新增 `tree-fold`（默认 `z`），`ACTION_DESCRIPTIONS` / footer（`z Fold`）/ `docs/keybindings.md` 同步。
 - 测试：`test/ui.test.ts` 加了 `tree-fold` 四个函数、`treeOutline` 的几何（预留列、深度上限）、面板画大纲 / 对话框画树线和 `⊞`；`test/panel.test.ts` 加了分叉树上的默认折叠、z 在段头 / 段内 / 主干上的行为、光标跳到段头后右侧高亮跟随、对话框显示 `⊞`。
@@ -378,7 +378,7 @@
 - 多选（`app.ts`）：`toggleSelect` 往 `PanelState.selectedSessionFiles` 里加 / 删光标行；`listSessions` 每次重新拉列表时把已不在列表里的文件从选中里去掉。面板行首改成两列标记：第一列光标 `›`、第二列选中 `•`（光标停在选中行上时显示 `›•`，之前光标会盖住选中标记）；标题右侧先放 `3 selected`，剩下的空间再放位置 / 搜索计数（`sessions-pane.ts` 的 `selectedMeta`）。Esc 的顺序：半截按键 → 当前面板的搜索 → SESSIONS 的选中 → 退出面板。
 - 批量删除：`confirmDeleteSession` 有选中时走 `confirmDeleteSelected`：按列表顺序取选中的行，跳过 pi 当前打开的会话（顺手从选中里去掉），全被跳过时直接报 pi 的那句话；确认框标题 `Delete N sessions?`，右侧列出会话标题（有跳过时前面加 `current session skipped`）。确认后逐个 `deleteSession`，成功的从选中里去掉，失败的留在列表和选中里，footer `N sessions deleted` 或 `deleted 2, 1 failed — <会话>: <原因>`。
 - 单会话动作的拒绝：`refuseMultiSelect` 在选中 ≥ 2 个时让 r / o / y / e / S 报 `<动作>: cannot act on multiple sessions (Esc clears the selection)`；Enter / i / Y 仍作用于光标行（只读或只是打开）。
-- changelog：先查了 pi 0.85.1 的 `handleChangelogCommand`：`getChangelogPath()`（包目录下的 `CHANGELOG.md`）→ `parseChangelog`（按带版本号的 `## ` 标题切段）→ 倒序拼接 → `Markdown` 渲染在聊天区。`parseChangelog` 没从包里导出，`getPackageDir` 导出了（运行时指向正在运行的 pi），所以新增 `data/changelog.ts` 照搬切分规则（顺手认 `
+- changelog：先查了 pi 0.85.1 的 `handleChangelogCommand`：`getChangelogPath()`（包目录下的 `CHANGELOG.md`）→ `parseChangelog`（按带版本号的 `##` 标题切段）→ 倒序拼接 → `Markdown` 渲染在聊天区。`parseChangelog` 没从包里导出，`getPackageDir` 导出了（运行时指向正在运行的 pi），所以新增 `data/changelog.ts` 照搬切分规则（顺手认 `
 `）。和 pi 的差异：pi 倒序是因为聊天区看的是底部（最新的在最下面），弹窗从顶部开始看，保持文件顺序、最新的在最上面；pi 的 `normalizeChangelogLinks`（把相对链接改成 GitHub 地址）没照搬，终端里点不了链接意义不大。
 - 弹窗 `ui/widgets/changelog-dialog.ts`（`ChangelogDialog`）：和树对话框一样占满终端只留 2 列 / 1 行边距，pi-tui `Markdown` 按宽度缓存渲染结果，j / k / ↑ / ↓ 一行，ctrl+d / ctrl+u / PageDown / PageUp 半页，g / G 顶部 / 底部（弹窗里不做 `gg` 多键序列），标题右侧 `1-38/2140`，Esc / q 关闭，再按 `@`（按最终 keymap 判断）由面板关闭；其他键吞掉。`DataSource` 新增可选的 `loadChangelog`，`PanelMode` 加 `changelog`；树对话框里 `@` 被 `DISABLED_ACTIONS` 关掉。
 - 键位：global 新增 `changelog`（默认 `@`），`ACTION_DESCRIPTIONS` / footer（三个面板的提示都在 `quit` 前加了 `@ Changelog`）/ `docs/keybindings.md` 同步。
@@ -397,3 +397,27 @@
 - 凡是调 `ctx.fork` / `ctx.newSession` 这类会话替换 API，**异常会让 pi 直接 `process.exit(1)`**（见上面 fork 那条），所有能提前判断的非法情况都要在 actions 层先拦下。
 - 会话替换后旧 ctx 立刻失效，后续动作只能放进 `withSession` 拿到的新 ctx。
 - 破坏性 / 外发操作（批量删除、share）必须先过 `ui/widgets/confirm-dialog.ts`（CLAUDE.md 第 7 条）。
+
+### 快捷键收尾
+
+1. 看看 /compact 这个命令能不能做进去，我想要的效果是，通过一个快捷键能够压缩选中的对话，压缩完进对话，注意如果压缩过程比较慢，可能需要加载动画或者进度条组件
+2. ? 开启的那个快捷键提示，那个菜单里面的快捷键介绍，可以优化一下顺序，使用频率高的可以放在前面
+3. space 多选的UI效果可以优化一下，目前是在前面加个点，这个还有更好的效果吗？
+4. 目前changelog对话框打开还是比较慢的，可以在底部添加一个加载的提示？例如: xxx对话框打开中....... 可以在这段文字前加一个加载的动画（正方形进度条旋转）
+
+### i18n
+
+项目需要支持多语言模式，目前需要支持得中文和英文，请使用 i18n 框架来处理。
+
+1. 使用 t 函数包裹当前所有UI上的文案, 一些日志打印不用管, 语言显示要统一，不要中文界面里面还有一些英文文案
+2. package.json 添加扫描命令，将文案扫描到对应的json文件中，并且进行翻译，翻译要比较优雅
+3. 默认跟随系统语言即 可，如果是没有提供国际化的语言，请使用英文
+4. 项目目录符合国际化工程的规范就行了
+
+### 鼠标事件
+
+项目目前无法响应鼠标事件，但核心还是键盘操作，所以鼠标只做如下的适配：
+
+1. 鼠标，触控板能够通过滚轮或者三指上下滚动列表
+2. 点击列表中的item能够选中，双击对话能够进入，双击tree能够展开/收起
+3. 点击列表和列表之外的空余的地方，焦点需要切换到对应的面板上
