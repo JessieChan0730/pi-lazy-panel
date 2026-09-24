@@ -14,7 +14,7 @@
  */
 
 import { getMarkdownTheme, type Theme } from "@earendil-works/pi-coding-agent";
-import { Markdown } from "@earendil-works/pi-tui";
+import { Markdown, visibleWidth } from "@earendil-works/pi-tui";
 import { t } from "../../i18n/index.ts";
 import type { ContentBlock, SearchView } from "../../types.ts";
 import { formatTime } from "../../utils/format.ts";
@@ -69,7 +69,9 @@ export function layoutContent(blocks: ContentBlock[], inner: number, theme: Them
 		const headStyle = (s: string) => theme.bold(theme.fg(isUser ? "userMessageText" : "accent", s));
 
 		// 被 tree 选中的消息：左边距变成 › 箭头，头部整行加选中背景，方便一眼定位。
-		const fill = Math.max(0, boxW - 3 - head.length);
+		// fill 必须按可见宽度算：中文标签（你 / AI助手）是全角字符，用 head.length 会算漏，
+		// 导致 ┐ 被推到右边、和下边框对不齐，甚至溢出面板被截成 …。
+		const fill = Math.max(0, boxW - 3 - visibleWidth(head));
 		const headerRaw = borderStyle("┌─") + headStyle(head) + borderStyle("─".repeat(fill) + "┐");
 		starts.set(block.entryId, lines.length);
 		push(isHighlight ? theme.bg("selectedBg", fit(theme.bold(theme.fg("accent", "›")) + headerRaw, inner)) : " " + headerRaw, false);

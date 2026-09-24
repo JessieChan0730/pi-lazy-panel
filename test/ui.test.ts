@@ -23,6 +23,7 @@ import { fit, FRAME_DIVIDER, frame, metaBudget, overlayCentered, sideBySide } fr
 import { hitTest, listVisibleRows, panelGeometry } from "../src/ui/mouse.ts";
 import { scrollOffset, sessionsMeta } from "../src/ui/panes/sessions-pane.ts";
 import { renderTreePane, treeMeta } from "../src/ui/panes/tree-pane.ts";
+import { layoutContent } from "../src/ui/panes/content-pane.ts";
 import { highlightLine, searchMeta } from "../src/ui/search-highlight.ts";
 import { treePrefixes } from "../src/ui/tree-lines.ts";
 import { ELLIPSIS, MARK_FOLDED, MARK_LEAF, MARK_OPEN, MAX_DEPTH, treeOutline } from "../src/ui/tree-outline.ts";
@@ -378,6 +379,27 @@ test("renderTreePane draws the outline with at most MAX_DEPTH levels; the dialog
 	box = dlg.render(80, deep.length + 6).map((l) => stripTerminalSequences(l));
 	assert.ok(box.some((l) => l.includes("└⊞ ") && l.includes("user: n2")), box.join("\n"));
 	assert.ok(!box.some((l) => l.includes("user: n3")));
+});
+
+test("layoutContent keeps the message box square for CJK headers (你 / AI助手 are wide)", () => {
+	// 头部标签在中文界面是全角字符（占 2 列）：盒子上边框的填充必须按可见宽度算，
+	// 否则 ┐ 会被推到右边、和下边框 ┘ 对不齐（宽度算漏时甚至溢出被截成 …）。
+	const inner = 40;
+	initI18n("zh");
+	try {
+		const blocks = [
+			{ entryId: "u", role: "user" as const, timestamp: 0, markdown: "hi" },
+			{ entryId: "a", role: "assistant" as const, timestamp: 0, markdown: "hello" },
+		];
+		const { lines } = layoutContent(blocks, inner, plainTheme as never);
+		// 每个盒子的行（去掉块间空行）都应是同一个可见宽度 inner - 1，上下边框才对齐。
+		for (const l of lines) {
+			if (l === "") continue;
+			assert.equal(visibleWidth(stripTerminalSequences(l)), inner - 1, JSON.stringify(stripTerminalSequences(l)));
+		}
+	} finally {
+		initI18n("en");
+	}
 });
 
 test("TreeDialog search row: idle hint, live query reports, Esc keeps the query and hands the keys back, Enter means nothing", () => {
