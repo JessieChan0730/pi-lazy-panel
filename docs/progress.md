@@ -401,9 +401,10 @@
 ### 快捷键收尾
 
 1. ~~看看 /compact 这个命令能不能做进去，我想要的效果是，通过一个快捷键能够压缩选中的对话，压缩完进对话，注意如果压缩过程比较慢，可能需要加载动画或者进度条组件~~
-2. ? 开启的那个快捷键提示，那个菜单里面的快捷键介绍，可以优化一下顺序，使用频率高的可以放在前面
-3. space 多选的UI效果可以优化一下，目前是在前面加个点，这个还有更好的效果吗？
-4. 目前changelog对话框打开还是比较慢的，可以在底部添加一个加载的提示？例如: xxx对话框打开中....... 可以在这段文字前加一个加载的动画（正方形进度条旋转）
+2. ~~? 开启的那个快捷键提示，那个菜单里面的快捷键介绍，可以优化一下顺序，使用频率高的可以放在前面~~
+3. ~~space 多选的UI效果可以优化一下，目前是在前面加个点，这个还有更好的效果吗？~~
+4. ~~目前changelog对话框打开还是比较慢的，可以在底部添加一个加载的提示？例如: xxx对话框打开中....... 可以在这段文字前加一个加载的动画（正方形进度条旋转）~~
+5. ~~底部提示的键盘太多了，可以只提示一些比较关键的快捷键~~
 
 实现说明（2026-09-24，第 1 项 /compact）：
 
@@ -413,6 +414,14 @@
 - 进度动画：`startFooterSpinner` 用 `ctx.ui.setStatus(EXTENSION_ID, "◰ compacting conversation…")` 每 120ms 轮换一帧旋转的方块（`constants.ts` 的 `SPINNER_FRAMES` / `SPINNER_INTERVAL_MS` / `COMPACTING_STATUS`，任务 #4 可复用），压缩结束（成功或失败）清掉。面板隐藏期间进度写在 pi 自己的 footer 上（和 /tree 分支摘要同一手法，只是加了动画）。
 - 面板（`app.ts` 的 `openCompactInput` / `submitCompact`，和 `openNewSessionInput` 同构）：`c` → 多选 ≥2 时 `refuseMultiSelect("compact")`；否则弹 `ui/widgets/compact-dialog.ts` 的 `Compact` 预设（InputDialog，标题右侧显示会话预览，可留空），回车走 `enter()`（隐藏面板 → 成功关闭 / 失败重显 + footer 报错），空输入传 `undefined`（用 pi 默认指令）。不弹确认框（压缩只追加一条 compaction 条目、不删数据，和 pi 自带 /compact 一致）。
 - 测试：`test/session-actions.test.ts` 加了 3 个（当前会话透传/不透传 customInstructions + spinner 起停、失败清 footer、其他会话先切再压 + 失败 notify）；`test/panel.test.ts` 加了 `c` 的往返（输入框 / 空与带指令 / Esc / 失败留 footer）、把多选拒绝和无 actions 提示补上 `c`。`npm run check` 通过，`npm test` 139 个全过。
+
+实现说明（2026-09-24，第 2 / 3 / 4 / 5 项）：
+
+- **第 2 项（? 帮助按频率排序）**：`?` 帮助里每个 scope 的展示顺序 = `DEFAULT_KEYMAP` 里 key 的书写顺序（`help-overlay.ts` 的 `buildScopeLines` 遍历 `Object.keys`）。所以直接重排 `keymap.ts` 里 global / sessions / tree 三个 scope 的 key 顺序，高频在前：sessions 先 `Enter Resume` 再 j/k、gg/G，然后 n/d/r、s/i、space、c、o/y/Y，最后 J/K 滚动和 e/I/S；global 先 `/` 再切面板、n/N、C/A、? / @ / q；tree 先 `Enter` 再 j/k、gg/G、z/a/T/y。**只影响帮助展示**——键位解析和顺序无关，footer 另有 `FOOTER_HINTS` 顺序，用户自定义键位深合并后照样按这个基础顺序显示。没有新增 ActionId，`ACTION_DESCRIPTIONS` / `HELP_GROUPS` 不动。
+- **第 3 项（多选 UI）**：`sessions-pane.ts` 的 `renderRow` 去掉第二列的选中图标（原来是 `✓`），选中**只靠标题着 accent 色**区分（`titleStyle`；光标行整行反白时标题也着 accent），长列表里一眼能扫出选了哪些。第二列保留一个空格做对齐，line2 缩进不变。`docs/keybindings.md` / `docs/design.md` 的 Space 说明同步。
+- **第 4 项（changelog 加载提示）**：实测慢在 pi-tui `Markdown.render` 渲染整份 changelog（约 5700 行、550KB，同步阻塞），文件读取只要 ~3ms。所以 `changelog-dialog.ts` 加了 loading 态：`openLoading()` 先画空框 + 中间一行居中的 `◰ Loading changelog…`（复用 `SPINNER_FRAMES`），`setContent(md)` 再填内容；`app.ts` 的 `openChangelog` 先 `openLoading()` + 起一个 120ms 的 spinner 定时器（`startChangelogSpinner`，`unref` 防止拖住测试进程）+ `requestRender`，`await load()` 后**再 `await setTimeout(0)` 让加载帧先画出来**（否则两次 requestRender 可能被合并，加载提示看不见），最后 `setContent` + 停 spinner。渲染结果按 `(width, markdown)` 缓存且跨 `close()` 保留，`app.changelogMd` 也缓存了 markdown，所以**第二次 `@` 直接 `setContent` 秒开、不再显示加载**。同步的那次重渲染本身没法转动画（单线程），但提示会在它之前出现。加载中 Esc/q 可取消（`isLoading` 守卫让异步续着的 `setContent` 不会把已关的弹窗重新打开）。`closeChangelog` / `dispose` 都会停 spinner。
+- **第 5 项（footer 精简）**：`keymap.ts` 的 `FOOTER_HINTS` 砍到每个面板只留核心键——sessions：`/ 搜索 · Tab 切面板 · C/A 范围 · Enter · d · r · n · ? · q`；tree：`/ · Tab · Enter · z · a · ? · q`；content：`/ · Tab · gg · G · ? · q`。长尾（排序 / 信息 / 压缩 / fork / clone / 复制回复 / 导出 / 导入 / 分享 / changelog）只进 `?`。footer 本来就按宽度截断，这里是把"半高频"的一串直接从常驻提示里拿掉。
+- 测试：`test/panel.test.ts` 的多选测试断言 `•` → `✓`（`›✓beta` / ` ✓alpha`），changelog 测试改为先断言"加载中弹窗（`Loading changelog` + 还没内容）"、`await flush()` 后再断言内容和 `j/k scroll` 提示；帮助 / footer 的既有测试都是按存在性断言，重排后照常通过。`npm run check` 通过，`npm test` 139 个全过。
 
 ### i18n
 

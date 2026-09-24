@@ -49,12 +49,18 @@ Source of truth: `src/config/keymap.ts`. Override any binding in
 | ~~`A`~~         | ~~List scope: All~~                        |
 | ~~`?`~~         | ~~Help overlay for the focused pane (`?`/`Esc`/`q` close, `j`/`k` scroll)~~ |
 | ~~`q` / `Ctrl+c`~~ | ~~Quit the panel~~                      |
-| ~~`@`~~         | ~~pi's changelog (`/changelog`) in a big box: `j` `k` `↑` `↓` scroll, `Ctrl+d` / `Ctrl+u` half a page, `g` / `G` top / bottom, `Esc` / `q` / `@` close. Newest version first (pi's own `/changelog` puts it last). Not available inside the tree dialog~~ |
+| ~~`@`~~         | ~~pi's changelog (`/changelog`) in a big box: `j` `k` `↑` `↓` scroll, `Ctrl+d` / `Ctrl+u` half a page, `g` / `G` top / bottom, `Esc` / `q` / `@` close. Rendering the whole file is slow, so the box first shows a rotating-square `◰ Loading changelog…` line centered in the middle, then the content (cached, so a second `@` is instant). Newest version first (pi's own `/changelog` puts it last). Not available inside the tree dialog~~ |
 | ~~`Esc`~~       | ~~Discard pending keys → clear the focused pane's search → clear the SESSIONS multi-selection → quit~~ |
 | ~~`/`~~         | ~~Search the focused pane (see below): the bar at the bottom searches as you type, `Enter` keeps the query, `Esc` cancels~~ |
 | ~~`n` / `N`~~   | ~~Next / previous match of the focused pane's search, wrapping around. While a search is active they win over a pane binding of the same key (`n` is *new session* in SESSIONS only without a search)~~ |
 
 `C` and `A` are one-way: pressing `A` while already on *All* does nothing.
+
+The `?` overlay lists every binding, ordered by how often it is used (most
+common first, e.g. `Enter` before the vim navigation). The footer at the
+bottom only hints the handful of key shortcuts per pane; the long tail (sort /
+info / compact / fork / clone / export / import / share / changelog) lives in
+`?` only.
 
 ## Search (`/`)
 
@@ -111,7 +117,7 @@ matches instead of `n` starting a new session.
 | ~~`o`~~       | ~~Fork (`/fork`): a centered selector lists the session's user messages (cursor on the last one, like pi's own `/fork`; `j` / `k` move, long lists scroll), `Enter` picks one and a *Fork session?* Yes / No box confirms (`Esc` / No goes back to the selector). The fork starts **before** that message and pi restores its text into the editor. Sessions other than the open one are switched to first; a session with no user message reports *No messages to fork from*~~ |
 | ~~`y`~~       | ~~Clone (`/clone`): a *Clone session?* Yes / No box confirms (cursor on No), then the active branch is copied to a new session file and pi opens it~~ |
 | ~~`Y`~~       | ~~Copy the last assistant reply to the clipboard (`/copy`): only its text parts, skipping thinking and tool calls; the panel stays open and the footer reports it (*copied last reply*, or *no assistant reply to copy*)~~ |
-| ~~`Space`~~   | ~~Toggle multi-select: the row gets a `•` in the second marker column and the header starts with `3 selected`. With a selection `d` deletes all of them after one *Delete N sessions?* confirmation (the session pi has open is skipped; the ones that fail stay listed and selected, the first error goes to the footer), while `r` `o` `y` `e` `S` refuse (*cannot act on multiple sessions*). `Esc` clears the selection before it quits~~ |
+| ~~`Space`~~   | ~~Toggle multi-select: no marker glyph — the selected row's title is tinted (accent) so it stands out in a long list — and the header starts with `3 selected`. With a selection `d` deletes all of them after one *Delete N sessions?* confirmation (the session pi has open is skipped; the ones that fail stay listed and selected, the first error goes to the footer), while `r` `o` `y` `e` `S` refuse (*cannot act on multiple sessions*). `Esc` clears the selection before it quits~~ |
 | ~~`e`~~       | ~~Export (`/export`): a centered *Export as* menu picks **HTML** (the whole tree, rendered by pi's own `pi --export`) or **JSONL** (the active branch, re-importable), then an *Export to* box is pre-filled with pi's default path (`pi-session-<file>.html` / `session-<time>.jsonl` in pi's working directory). Relative paths and `~` work on every platform; a folder (existing, or typed with a trailing `/`) gets the default file name inside. `Esc` in the box goes back to the menu; an existing file asks *Overwrite file?* first. Works for any session, not only the open one; the panel stays open and the footer says where the file went~~ |
 | ~~`I`~~       | ~~Import (`/import`): a centered box asks for a session `.jsonl` (relative to pi's working directory, `~` allowed), an *Import and switch to it?* Yes / No box confirms, then the file is copied into the current session folder (a `-1` suffix on a name clash) and pi switches to it; the panel closes. A missing / empty / non-pi file is reported in the footer and nothing is copied~~ |
 | ~~`S`~~       | ~~Share (`/share`): an *Upload as secret gist?* Yes / No box confirms (cursor on No), then the session is rendered to HTML and uploaded with `gh gist create --public=false`; the pi.dev viewer link is copied to the clipboard and shown in the footer. Needs the GitHub CLI logged in (pi's wording otherwise); pi's Radius upload is not available to extensions~~ |
