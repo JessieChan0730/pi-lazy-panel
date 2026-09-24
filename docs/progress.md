@@ -400,10 +400,19 @@
 
 ### 快捷键收尾
 
-1. 看看 /compact 这个命令能不能做进去，我想要的效果是，通过一个快捷键能够压缩选中的对话，压缩完进对话，注意如果压缩过程比较慢，可能需要加载动画或者进度条组件
+1. ~~看看 /compact 这个命令能不能做进去，我想要的效果是，通过一个快捷键能够压缩选中的对话，压缩完进对话，注意如果压缩过程比较慢，可能需要加载动画或者进度条组件~~
 2. ? 开启的那个快捷键提示，那个菜单里面的快捷键介绍，可以优化一下顺序，使用频率高的可以放在前面
 3. space 多选的UI效果可以优化一下，目前是在前面加个点，这个还有更好的效果吗？
 4. 目前changelog对话框打开还是比较慢的，可以在底部添加一个加载的提示？例如: xxx对话框打开中....... 可以在这段文字前加一个加载的动画（正方形进度条旋转）
+
+实现说明（2026-09-24，第 1 项 /compact）：
+
+- 先查了 pi 0.85.1：扩展 ctx 暴露 `ctx.compact({ customInstructions?, onComplete, onError })`（`extensions/types.d.ts`，fire-and-forget，结果走回调），底层 `session.compact`（`agent-session.js`）会先 `await this.abort()` 再对**当前会话的活动分支**做一次 LLM 摘要压缩，没 model / 会话太小 / 已压缩会抛错。因为只作用于当前会话，压缩其他会话必须先切过去——正好对应"压缩完进对话"。
+- 键位：SESSIONS 面板新增 `session-compact`（默认 `c`；`C` 是全局 scope-current，小写空闲、助记 compact）。`ActionId` / `PanelMode`（`compact`）/ `EnterOutcome`（`compacted`）/ `ACTION_DESCRIPTIONS` / `FOOTER_HINTS`（排在 `i Info` 后）/ `footer.ts` 的 `SHORT`（`Compact`）/ `docs/keybindings.md` / `docs/design.md` 同步。
+- actions（`actions/session-actions.ts` 的 `compactSession`）：光标会话就是当前会话时直接压缩，返回 `compacted`；其他会话走 `resumeSession(..., { withSession })`，在 pi 给的新 ctx 上压缩（切换后旧 ctx 失效、面板已被 pi 收掉，失败只能 `next.ui.notify`，和 `restoreNode` 一致）。`runCompaction` 把 fire-and-forget 的 `ctx.compact` 包成 promise（onComplete → resolve、onError → reject）。
+- 进度动画：`startFooterSpinner` 用 `ctx.ui.setStatus(EXTENSION_ID, "◰ compacting conversation…")` 每 120ms 轮换一帧旋转的方块（`constants.ts` 的 `SPINNER_FRAMES` / `SPINNER_INTERVAL_MS` / `COMPACTING_STATUS`，任务 #4 可复用），压缩结束（成功或失败）清掉。面板隐藏期间进度写在 pi 自己的 footer 上（和 /tree 分支摘要同一手法，只是加了动画）。
+- 面板（`app.ts` 的 `openCompactInput` / `submitCompact`，和 `openNewSessionInput` 同构）：`c` → 多选 ≥2 时 `refuseMultiSelect("compact")`；否则弹 `ui/widgets/compact-dialog.ts` 的 `Compact` 预设（InputDialog，标题右侧显示会话预览，可留空），回车走 `enter()`（隐藏面板 → 成功关闭 / 失败重显 + footer 报错），空输入传 `undefined`（用 pi 默认指令）。不弹确认框（压缩只追加一条 compaction 条目、不删数据，和 pi 自带 /compact 一致）。
+- 测试：`test/session-actions.test.ts` 加了 3 个（当前会话透传/不透传 customInstructions + spinner 起停、失败清 footer、其他会话先切再压 + 失败 notify）；`test/panel.test.ts` 加了 `c` 的往返（输入框 / 空与带指令 / Esc / 失败留 footer）、把多选拒绝和无 actions 提示补上 `c`。`npm run check` 通过，`npm test` 139 个全过。
 
 ### i18n
 

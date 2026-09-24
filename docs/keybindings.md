@@ -117,6 +117,7 @@ matches instead of `n` starting a new session.
 | ~~`S`~~       | ~~Share (`/share`): an *Upload as secret gist?* Yes / No box confirms (cursor on No), then the session is rendered to HTML and uploaded with `gh gist create --public=false`; the pi.dev viewer link is copied to the clipboard and shown in the footer. Needs the GitHub CLI logged in (pi's wording otherwise); pi's Radius upload is not available to extensions~~ |
 | ~~`s`~~       | ~~Cycle sort: recent (last update) → created → title (by the title shown — name, else first-message preview — A–Z, empty sessions last) → threaded (forks indented under their parent) → …; the header shows the current one, the cursor follows its session~~ |
 | ~~`i`~~       | ~~Session info in a centered box (what `/session` shows: name, model, messages, tokens, cost, created / updated, path, id); `y` copies the whole text, `Esc` / `q` close~~ |
+| ~~`c`~~       | ~~Compact (`/compact`): a centered *Compact* box asks for optional focus instructions (`Enter` compact, `Esc` cancel, empty uses pi's default). The cursor session's active branch is compacted, then pi opens it — sessions other than the one already open are switched to first (that is the *enter the conversation* part). pi's own footer shows a rotating spinner while the model summarizes; the panel closes on success, and a failure (no model, session too small, already compacted) stays in the footer. `c` refuses while several sessions are selected~~ |
 
 ## Tree pane
 
