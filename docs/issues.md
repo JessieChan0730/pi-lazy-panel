@@ -43,3 +43,10 @@
 - 现象：`test/session-actions.test.ts` 的 `deleteSession: a trash command that removes the file counts as trash` 在 Windows 上失败（期望 `trash`，实际 `unlink`），改动前的代码上同样失败，其他平台应当正常。
 - 原因：测试用一个 `trash.cmd` 包装脚本假扮 trash，但 Node 在 Windows 上不再允许不开 shell 直接 `spawnSync` 一个 `.cmd`（CVE-2024-27980 之后会报 EINVAL），于是回退到了 unlink。功能本身不受影响：Windows 上通常也没有 `trash` 命令，本来就是 unlink。
 - 备选方案（暂不处理）：`DeleteOptions.trashCommand` 改成和导出 / 分享一样的 `{ command, args }`（`session-actions.ts` 的 `CommandSpec`），测试传 `node 假脚本.cjs`，就不需要 .cmd 了。
+
+### ~~鼠标事件只在 fullscreen TUI 模式下生效（2026-09-24）~~（同日解决：regular 模式下插件自己开鼠标）
+
+- 现象：最初的 `handleMouse` 只在 pi 以 `--tui-mode fullscreen` 运行时才被调用；regular（默认）模式下鼠标完全没反应。
+- 原因：pi 的 regular 模式用 `TuiMainScreen`，不开启终端鼠标追踪，也没有 `handleMouse`，把鼠标交给终端模拟器；只有 fullscreen 的 `TuiAltScreen` 才开鼠标并派发给（含 overlay 的）组件。
+- 处理：`index.ts` 打开面板时按 `tui.mode` 分流——fullscreen 继续靠 pi 派发到 `handleMouse`；regular 模式由插件自己写 `\x1b[?1000h\x1b[?1006h` 打开 SGR 鼠标上报，用 `tui.addInputListener` 截获原始序列，`ui/mouse-input.ts` 的 `parseSgrMouseChunk` + `MouseTracker` 解析成 `TuiMouseEvent` 再喂给 `panel.handleMouse`，关闭时写 `\x1b[?1000l\x1b[?1006l` 恢复。两种模式现在都能用。
+- 残留说明：需要终端支持 SGR 鼠标（1006，现代终端基本都支持）；面板打开期间终端自己的选中 / 滚动被接管，关闭后恢复。快速触控板滚动时终端会把多条 wheel 上报合并进一次读入，`parseSgrMouseChunk` 会拆开逐条处理。

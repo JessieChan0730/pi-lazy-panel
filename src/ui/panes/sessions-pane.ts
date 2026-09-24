@@ -24,6 +24,8 @@ import { highlightLine, matchStyle, searchMeta } from "../search-highlight.ts";
 export interface SessionsPaneProps {
 	rows: SessionRow[];
 	cursor: number;
+	/** First visible row; defaults to a cursor-centered window when omitted (keyboard). */
+	first?: number;
 	focused: boolean;
 	scope: ListScope;
 	sort: SessionSortMode;
@@ -35,18 +37,20 @@ export interface SessionsPaneProps {
 	theme: Theme;
 }
 
-const ROW_HEIGHT = 2;
+/** Each session takes two lines; the tree / mouse hit-test share this constant. */
+export const SESSIONS_ROW_HEIGHT = 2;
 
 export function renderSessionsPane(p: SessionsPaneProps, width: number, height: number): string[] {
 	const { theme } = p;
 	const inner = width - 2;
-	const visibleRows = Math.max(1, Math.floor((height - 2) / ROW_HEIGHT));
+	const visibleRows = Math.max(1, Math.floor((height - 2) / SESSIONS_ROW_HEIGHT));
 	const body: string[] = [];
 
 	if (p.rows.length === 0) {
 		body.push(theme.fg("muted", ` ${t("pane.sessionsEmpty")}`));
 	} else {
-		const first = scrollOffset(p.cursor, p.rows.length, visibleRows);
+		// 滚轮滚动时用给定的 first（不动光标）；否则按光标居中。
+		const first = clampFirst(p.first ?? scrollOffset(p.cursor, p.rows.length, visibleRows), p.rows.length, visibleRows);
 		for (let i = first; i < Math.min(p.rows.length, first + visibleRows); i++) {
 			const row = p.rows[i]!;
 			const isCursor = i === p.cursor;
@@ -150,4 +154,9 @@ export function scrollOffset(cursor: number, total: number, visible: number): nu
 	if (total <= visible) return 0;
 	const half = Math.floor(visible / 2);
 	return Math.min(Math.max(0, cursor - half), total - visible);
+}
+
+/** Clamp a first-visible index to a valid window start (0 .. last possible window). */
+export function clampFirst(first: number, total: number, visible: number): number {
+	return Math.max(0, Math.min(first, Math.max(0, total - visible)));
 }

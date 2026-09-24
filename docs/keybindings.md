@@ -183,3 +183,16 @@ Only scrolling and searching; copying a message is done from the tree pane (`y`)
 | ~~`j` `k` `↑` `↓`~~ | ~~Scroll~~        |
 | ~~`gg` / `G`~~  | ~~Top / bottom~~      |
 | ~~`/`~~         | ~~Search the rendered message text (words only, no qualifiers); the matching line is scrolled to the top, `n` / `N` step through the hits~~ |
+
+## 鼠标
+
+核心仍是键盘，鼠标只做轻量适配。regular（默认）和 fullscreen 两种 TUI 模式都支持：fullscreen
+由 pi 把事件派给面板，regular 模式插件自己打开 SGR 鼠标上报（需要终端支持 SGR，现代终端基本都行；
+面板打开期间终端自己的选中 / 滚动被接管，关闭后恢复）。见 `docs/issues.md`。
+
+| 操作                | 行为                                                       |
+| ------------------- | ---------------------------------------------------------- |
+| 滚轮 / 三指上下      | 滚动指针所在面板的视图（列表只滚动、不移动选中项；CONTENT 按行滚动），不改变焦点 |
+| 单击                | 焦点切到指针所在面板；点在列表项上时同时把光标移到该项           |
+| 双击 SESSIONS       | 进入该会话（等价于 `Enter` / resume）                      |
+| 双击 TREE           | 折叠 / 展开光标所在分支（等价于 `z`）                       |

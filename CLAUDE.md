@@ -59,6 +59,8 @@ src/
 ├── ui/                       # 渲染层：pi-tui Component。不做 I/O，不调用 pi 会话 API
 │   ├── app.ts                # 根组件 LazyPanel + PanelState；数据通过 DataSource 接口注入；/ 搜索的流程（原位置、实时跳转、n/N、折叠展开）也在这里
 │   ├── frame.ts              # 纯函数：画边框（FRAME_DIVIDER 哨兵行画 ├──┤）、左右拼列、按可见宽度补齐/截断、居中叠加弹窗（overlayCentered）、弹窗宽度（dialogWidth）
+│   ├── mouse.ts              # 纯函数：verticalSplit / panelGeometry（面板列/行切分）、listVisibleRows（每个列表可见行数）、hitTest（单元格 (x,y) → 面板 + 列表行号，吃 render 用的首行偏移，SESSIONS 每行 2 行、TREE 每行 1 行）。render 和鼠标共用，保证画的位置=点的位置
+│   ├── mouse-input.ts        # 纯函数：regular 模式下 pi 不开鼠标，插件自己开 SGR 上报（ENABLE/DISABLE_MOUSE）；parseSgrMouseChunk 解析原始序列（批量拆条），MouseTracker 把按下/释放/滚轮变成 TuiMouseEvent（同格点击、双击计数、只认左键），index.ts 用它把鼠标喂给 handleMouse。见 docs/issues.md
 │   ├── search-highlight.ts   # 纯函数：搜索命中的高亮（highlightLine 在画好的整行上按可见列叠加样式，照 pi 全屏搜索的做法，前后颜色 / 光标背景不断；matchStyle 其他匹配下划线、当前匹配反色；searchMeta 标题的 2/7 matches）
 │   ├── tree-lines.ts         # 纯函数：按 parentId 算 pi /tree 风格的树线前缀（treePrefixes，折叠的段头画 ⊞），只给树对话框用
 │   ├── tree-outline.ts       # 纯函数：TREE 面板的折叠大纲前缀（treeOutline）：段头画 ▸/▾、没有后代的旁支画 ─，段内每层缩进 2 列、最多 4 层、更深的以 … 代替；三角直接占段头行首两列、不预留空列（lazygit 文件树的画法），线性对话完全不缩进

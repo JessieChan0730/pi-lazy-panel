@@ -20,6 +20,7 @@ import {
 } from "../src/data/tree-fold.ts";
 import type { TreeRow } from "../src/types.ts";
 import { fit, FRAME_DIVIDER, frame, metaBudget, overlayCentered, sideBySide } from "../src/ui/frame.ts";
+import { hitTest, listVisibleRows, panelGeometry } from "../src/ui/mouse.ts";
 import { scrollOffset, sessionsMeta } from "../src/ui/panes/sessions-pane.ts";
 import { renderTreePane, treeMeta } from "../src/ui/panes/tree-pane.ts";
 import { highlightLine, searchMeta } from "../src/ui/search-highlight.ts";
@@ -477,4 +478,58 @@ test("searchMeta: position / count, count alone off the matches, no matches; sho
 	assert.equal(searchMeta(0, 7, 3), "7");
 	assert.equal(searchMeta(0, 0, 40), "no matches");
 	assert.equal(searchMeta(0, 0, 4), "0/0");
+});
+
+// -------------------------------------------------------------------------
+// Mouse hit-testing (src/ui/mouse.ts) — geometry must match render()
+// -------------------------------------------------------------------------
+
+test("panelGeometry splits the viewport the same way render() does", () => {
+	// width 100 · height 20 · ratio 0.25: left column 25, sessions 9 / tree 10, footer 1.
+	assert.deepEqual(panelGeometry(100, 20, 0.25), { leftW: 25, rightW: 75, bodyH: 19, sessionsH: 9, treeH: 10 });
+	// leftW never drops below 24; a wide terminal grows it with the ratio.
+	assert.equal(panelGeometry(60, 20, 0.25).leftW, 24);
+	assert.equal(panelGeometry(200, 20, 0.25).leftW, 50);
+});
+
+test("listVisibleRows counts list rows per pane (sessions 2 lines each, tree 1)", () => {
+	// height 20 → sessions pane 9 rows (7 body → 3 items), tree pane 10 rows (8 body → 8 items)
+	assert.deepEqual(listVisibleRows(20), { sessions: 3, tree: 8 });
+});
+
+function hit(x: number, y: number, over: Partial<Parameters<typeof hitTest>[0]> = {}) {
+	return hitTest({ width: 100, height: 20, ratio: 0.25, x, y, sessionsFirst: 0, sessionsTotal: 5, treeFirst: 0, treeTotal: 4, ...over });
+}
+
+test("hitTest maps sessions cells (2 lines/row) to row indices, borders / leftover blanks to none", () => {
+	assert.deepEqual(hit(2, 1), { pane: "sessions", row: 0 });
+	assert.deepEqual(hit(2, 3), { pane: "sessions", row: 1 });
+	assert.deepEqual(hit(2, 5), { pane: "sessions", row: 2 });
+	assert.deepEqual(hit(2, 7), { pane: "sessions", row: undefined }, "leftover half-row below the last visible item");
+	assert.deepEqual(hit(2, 0), { pane: "sessions", row: undefined }, "top border");
+	assert.deepEqual(hit(2, 8), { pane: "sessions", row: undefined }, "bottom border");
+});
+
+test("hitTest offsets rows by the pane's first visible row (scrolled window)", () => {
+	// window starts at index 2 → the three visible rows are 2, 3, 4.
+	assert.deepEqual(hit(2, 1, { sessionsFirst: 2 }), { pane: "sessions", row: 2 });
+	assert.deepEqual(hit(2, 3, { sessionsFirst: 2 }), { pane: "sessions", row: 3 });
+	assert.deepEqual(hit(2, 5, { sessionsFirst: 2 }), { pane: "sessions", row: 4 });
+});
+
+test("hitTest maps tree cells (1 line/row) and stops past the last row", () => {
+	assert.deepEqual(hit(2, 10), { pane: "tree", row: 0 });
+	assert.deepEqual(hit(2, 11), { pane: "tree", row: 1 });
+	assert.deepEqual(hit(2, 13), { pane: "tree", row: 3 });
+	assert.deepEqual(hit(2, 14), { pane: "tree", row: undefined }, "past the 4th (last) row");
+	assert.deepEqual(hit(2, 9), { pane: "tree", row: undefined }, "top border");
+	assert.deepEqual(hit(2, 18), { pane: "tree", row: undefined }, "bottom border");
+});
+
+test("hitTest maps the right column to content, and the footer / outside to nothing", () => {
+	assert.deepEqual(hit(50, 5), { pane: "content", row: undefined });
+	assert.deepEqual(hit(25, 10), { pane: "content", row: undefined }, "first column of the right pane");
+	assert.equal(hit(50, 19), undefined, "footer row");
+	assert.equal(hit(100, 5), undefined, "past the right edge");
+	assert.equal(hit(-1, 5), undefined, "before the left edge");
 });
