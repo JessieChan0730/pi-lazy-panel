@@ -89,9 +89,9 @@ import type {
 	TreeRow,
 } from "../types.ts";
 import { fit, sideBySide } from "./frame.ts";
-import { hitTest, type MouseTarget, panelGeometry } from "./mouse.ts";
+import { hitTest, listVisibleRows, type MouseTarget, panelGeometry } from "./mouse.ts";
 import { type ContentLayout, layoutContent, maxScroll, renderContentPane } from "./panes/content-pane.ts";
-import { renderSessionsPane } from "./panes/sessions-pane.ts";
+import { clampFirst, renderSessionsPane, scrollOffset } from "./panes/sessions-pane.ts";
 import { renderTreePane } from "./panes/tree-pane.ts";
 import { type OutlinePrefix, treeOutline } from "./tree-outline.ts";
 import { ChangelogDialog } from "./widgets/changelog-dialog.ts";
@@ -157,6 +157,13 @@ export interface PanelState {
 	/** Whether the `?` overlay is open, and its scroll offset. */
 	helpOpen: boolean;
 	helpScroll: number;
+	/**
+	 * Wheel-scroll offset (first visible row) for the two list panes; null means
+	 * "follow the cursor" (the keyboard default that centers the cursor). The
+	 * wheel sets a number to scroll the view without moving the selection; any
+	 * cursor move clears it back to null.
+	 */
+	listScroll: { sessions: number | null; tree: number | null };
 }
 
 export function createInitialState(overrides: Partial<PanelState> = {}): PanelState {
@@ -173,6 +180,7 @@ export function createInitialState(overrides: Partial<PanelState> = {}): PanelSt
 		treeFolded: new Set(),
 		helpOpen: false,
 		helpScroll: 0,
+		listScroll: { sessions: null, tree: null },
 		...overrides,
 	};
 }
@@ -808,30 +816,50 @@ export class LazyPanel implements Component, Focusable {
 		);
 	}
 
-	/** Map an event to the pane / row under the pointer, using the same geometry as render(). */
+	/** Map an event to the pane / row under the pointer, using the same window offsets as render(). */
 	private hitTarget(event: TuiMouseEvent): MouseTarget | undefined {
+		const height = Math.max(8, this.o.getHeight());
+		const visible = listVisibleRows(height);
 		return hitTest({
 			width: event.width,
-			height: Math.max(8, this.o.getHeight()),
+			height,
 			ratio: this.ratio,
 			x: event.x,
 			y: event.y,
-			sessionsCursor: this.state.cursor.sessions,
+			sessionsFirst: this.listFirst("sessions", visible.sessions),
 			sessionsTotal: this.sessions.length,
-			treeCursor: this.state.cursor.tree,
+			treeFirst: this.listFirst("tree", visible.tree),
 			treeTotal: this.visibleTree.length,
 		});
 	}
 
-	/** Wheel: scroll the pane under the pointer without changing focus (click owns focus). */
+	/** First visible row of a list pane: the wheel offset when set, else the cursor-centered window; always clamped. */
+	private listFirst(pane: "sessions" | "tree", visible: number): number {
+		const total = pane === "sessions" ? this.sessions.length : this.visibleTree.length;
+		const override = this.state.listScroll[pane];
+		const raw = override ?? scrollOffset(this.state.cursor[pane], total, visible);
+		return clampFirst(raw, total, visible);
+	}
+
+	/** Wheel: scroll the pane under the pointer without changing focus or the selection (click owns those). */
 	private handleWheel(event: TuiMouseEvent): TuiMouseEventResult {
 		const delta = event.wheelDelta ?? 0;
 		if (delta === 0) return { handled: true };
 		const target = this.hitTarget(event);
-		if (target?.pane === "sessions") this.setSessionsCursor(this.state.cursor.sessions + delta);
-		else if (target?.pane === "tree") this.setTreeCursor(this.state.cursor.tree + delta);
+		if (target?.pane === "sessions") this.scrollList("sessions", delta);
+		else if (target?.pane === "tree") this.scrollList("tree", delta);
 		else if (target?.pane === "content") this.scrollContent(delta);
 		return { handled: true };
+	}
+
+	/** Scroll a list pane's viewport by `delta` rows, leaving the selection where it is (wheel only). */
+	private scrollList(pane: "sessions" | "tree", delta: number): void {
+		const visible = listVisibleRows(Math.max(8, this.o.getHeight()))[pane];
+		const total = pane === "sessions" ? this.sessions.length : this.visibleTree.length;
+		const next = clampFirst(this.listFirst(pane, visible) + delta, total, visible);
+		if (next === this.state.listScroll[pane]) return;
+		this.state.listScroll[pane] = next;
+		this.o.requestRender();
 	}
 
 	/** Click: focus the pane under the pointer + select the row; double-click enters (sessions) / folds (tree). */
@@ -1001,8 +1029,13 @@ export class LazyPanel implements Component, Focusable {
 
 	/** Move the sessions cursor (clamped) and reload TREE + CONTENT for the session it lands on. */
 	private setSessionsCursor(index: number): void {
+		// 光标一动就取消滚轮的独立滚动，重新按光标居中。
+		this.state.listScroll.sessions = null;
 		const next = clamp(index, 0, Math.max(0, this.sessions.length - 1));
-		if (next === this.state.cursor.sessions) return;
+		if (next === this.state.cursor.sessions) {
+			this.o.requestRender();
+			return;
+		}
 		this.state.cursor.sessions = next;
 		this.o.requestRender();
 		void this.scheduleSessionLoad();
@@ -1010,8 +1043,12 @@ export class LazyPanel implements Component, Focusable {
 
 	/** Move the tree cursor (clamped, an index into the visible rows) and make the content pane follow. */
 	private setTreeCursor(index: number): void {
+		this.state.listScroll.tree = null;
 		const next = clamp(index, 0, Math.max(0, this.visibleTree.length - 1));
-		if (next === this.state.cursor.tree) return;
+		if (next === this.state.cursor.tree) {
+			this.o.requestRender();
+			return;
+		}
 		this.state.cursor.tree = next;
 		this.o.requestRender();
 		void this.syncContentToTree();
@@ -2695,12 +2732,15 @@ export class LazyPanel implements Component, Focusable {
 		const selectedSession = this.sessions[this.state.cursor.sessions];
 		const sessionsSearch = this.searchView("sessions");
 		const treeSearch = this.searchView("tree");
+		// 列表窗口的首行：滚轮滚动时用独立偏移，否则按光标居中（和 hitTarget 一致）。
+		const visibleRows = listVisibleRows(height);
 
 		const left = [
 			...renderSessionsPane(
 				{
 					rows: this.sessions,
 					cursor: this.state.cursor.sessions,
+					first: this.listFirst("sessions", visibleRows.sessions),
 					focused: this.state.focus === "sessions",
 					scope: this.state.scope,
 					sort: this.state.sort,
@@ -2717,6 +2757,7 @@ export class LazyPanel implements Component, Focusable {
 					rows: this.visibleTree,
 					outline: this.treeOutline,
 					cursor: this.state.cursor.tree,
+					first: this.listFirst("tree", visibleRows.tree),
 					focused: this.state.focus === "tree",
 					filter: this.state.treeFilter,
 					emptyMessage: this.emptyMessage(selectedSession),

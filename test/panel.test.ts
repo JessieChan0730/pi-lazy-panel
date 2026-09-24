@@ -3066,27 +3066,48 @@ test("clicking a border / blank cell still focuses that pane but keeps the curso
 	h.panel.dispose();
 });
 
-test("wheel scrolls the pane under the pointer without stealing focus", async () => {
-	const h = makeLoadedPanel();
+test("wheel scrolls the list viewport without moving the selection or stealing focus", async () => {
+	const h = makeLoadedPanel(); // 5 sessions, height 20 → 3 visible rows, so max first = 2
 	await h.panel.load();
 	await settle();
 	assert.equal(h.panel.state.focus, "sessions");
-
-	// wheel down over the sessions pane moves its cursor by the delta
-	h.panel.handleMouse(mouseEvent("wheel", 2, 3, { wheelDelta: 2 }));
-	assert.equal(h.panel.state.cursor.sessions, 2);
-	await settle();
-
-	// wheel up clamps at the top
-	h.panel.handleMouse(mouseEvent("wheel", 2, 3, { wheelDelta: -5 }));
 	assert.equal(h.panel.state.cursor.sessions, 0);
-	await settle();
+	const treeCallsBefore = h.treeCalls.length;
 
-	// wheel over the tree pane moves the tree cursor, focus stays on sessions
-	const before = h.panel.state.cursor.tree;
-	h.panel.handleMouse(mouseEvent("wheel", 2, 12, { wheelDelta: -1 }));
+	// wheel down scrolls the viewport (first visible row) but leaves the selection and focus alone
+	h.panel.handleMouse(mouseEvent("wheel", 2, 3, { wheelDelta: 2 }));
+	assert.equal(h.panel.state.listScroll.sessions, 2, "viewport scrolled down");
+	assert.equal(h.panel.state.cursor.sessions, 0, "selection did not move");
+	assert.equal(h.panel.state.focus, "sessions", "focus unchanged");
+	await settle();
+	assert.equal(h.treeCalls.length, treeCallsBefore, "no session reload — the cursor never moved");
+
+	// wheel down again clamps at the bottom of the list
+	h.panel.handleMouse(mouseEvent("wheel", 2, 3, { wheelDelta: 5 }));
+	assert.equal(h.panel.state.listScroll.sessions, 2, "clamped at the last window");
+
+	// wheel back up
+	h.panel.handleMouse(mouseEvent("wheel", 2, 3, { wheelDelta: -1 }));
+	assert.equal(h.panel.state.listScroll.sessions, 1);
+
+	// a keyboard move re-centers on the cursor: the wheel override is cleared
+	h.panel.handleInput("j");
+	assert.equal(h.panel.state.cursor.sessions, 1);
+	assert.equal(h.panel.state.listScroll.sessions, null, "cursor move clears the wheel offset");
+	await settle();
+	h.panel.dispose();
+});
+
+test("wheel over the tree pane never moves the tree selection (content stays put)", async () => {
+	const h = makeLoadedPanel();
+	await h.panel.load();
+	await settle();
+	const cursor = h.panel.state.cursor.tree;
+	const highlight = h.panel.state.contentHighlight;
+	h.panel.handleMouse(mouseEvent("wheel", 2, 12, { wheelDelta: 1 })); // tree pane body
 	assert.equal(h.panel.state.focus, "sessions", "wheel never changes focus");
-	assert.notEqual(h.panel.state.cursor.tree, before + 99); // moved (up), not stuck
+	assert.equal(h.panel.state.cursor.tree, cursor, "tree selection unchanged");
+	assert.equal(h.panel.state.contentHighlight, highlight, "content highlight unchanged");
 	h.panel.dispose();
 });
 

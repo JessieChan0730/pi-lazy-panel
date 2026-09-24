@@ -33,7 +33,7 @@ import { formatTime } from "../../utils/format.ts";
 import { fit, frame, metaBudget } from "../frame.ts";
 import { highlightLine, matchStyle, type RowHighlight, searchMeta } from "../search-highlight.ts";
 import { type OutlinePrefix, treeOutline } from "../tree-outline.ts";
-import { scrollOffset } from "./sessions-pane.ts";
+import { clampFirst, scrollOffset } from "./sessions-pane.ts";
 
 export interface TreePaneProps {
 	/** Rows to list (folded branches already hidden). */
@@ -41,6 +41,8 @@ export interface TreePaneProps {
 	/** Outline prefix per entry id (see ../tree-outline.ts); derived from `rows` alone when omitted. */
 	outline?: ReadonlyMap<string, OutlinePrefix>;
 	cursor: number;
+	/** First visible row; defaults to a cursor-centered window when omitted (keyboard). */
+	first?: number;
 	focused: boolean;
 	/** Active tree filter (set in the tree dialog); shown in the header when it is not the default. */
 	filter?: TreeFilter;
@@ -65,7 +67,8 @@ export function renderTreePane(p: TreePaneProps, width: number, height: number):
 		body.push(theme.fg("muted", ` ${p.emptyMessage ?? t("pane.treeEmpty")}`));
 	} else {
 		const outline = p.outline ?? treeOutline(p.rows, new Set());
-		const first = scrollOffset(p.cursor, p.rows.length, visible);
+		// 滚轮滚动时用给定的 first（不动光标）；否则按光标居中。
+		const first = clampFirst(p.first ?? scrollOffset(p.cursor, p.rows.length, visible), p.rows.length, visible);
 		for (let i = first; i < Math.min(p.rows.length, first + visible); i++) {
 			const row = p.rows[i]!;
 			const search = p.search;
