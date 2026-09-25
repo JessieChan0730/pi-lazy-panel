@@ -1,11 +1,36 @@
-# Default key bindings
+# 快捷键与配置
 
-Source of truth: `src/config/keymap.ts`. Override any binding in
-`~/.pi/agent/lazy-panel.json` under `keymap.<scope>.<action-id>` (scopes:
-`global`, `sessions`, `tree`, `content`, `tree-dialog`). Action ids are the
-`ActionId` union in `src/types.ts`.
+默认键位的唯一真实来源是 `src/config/keymap.ts`。可在 `~/.pi/agent/lazy-panel.json` 的 `keymap.<scope>.<action-id>` 下覆盖任意键位（scope：`global`、`sessions`、`tree`、`content`、`tree-dialog`）。动作 id 就是 `src/types.ts` 里的 `ActionId` 联合类型。
 
-## Customising keys
+## 配置文件
+
+配置文件位于 `~/.pi/agent/lazy-panel.json`，所有字段均为可选，缺省时使用内置默认值：
+
+```json
+{
+  "locale": "zh",
+  "defaultScope": "all",
+  "defaultSort": "recent",
+  "leftColumnRatio": 0.25,
+  "keymap": {
+    "global":   { "help": "F1", "scope-all": ["A", "ctrl+space"] },
+    "sessions": { "session-delete": "ctrl+d", "session-share": null }
+  }
+}
+```
+
+| 字段 | 说明 | 可选值 / 范围 | 默认 |
+| --- | --- | --- | --- |
+| `locale` | UI 语言 | `"en"` / `"zh"` | 跟随系统语言 |
+| `defaultScope` | 打开时的会话范围 | `"current-folder"` / `"all"` | `"current-folder"` |
+| `defaultSort` | 会话列表排序 | `"recent"` / `"created"` / `"title"` / `"threaded"` | `"recent"` |
+| `leftColumnRatio` | 左侧列宽占比 | `0.15` ~ `0.6` | `0.25` |
+| `keymap` | 自定义快捷键（见下） | 按 scope 分组 | 内置键位 |
+
+- 非法的 `locale` / `defaultScope` / `defaultSort` 会退回默认值，越界的 `leftColumnRatio` 也会被忽略，并在面板打开时于 footer 提示。
+- `locale` 缺省时按系统语言自动检测（见 `src/i18n/index.ts`）。
+
+## 自定义快捷键
 
 ```json
 {
@@ -16,183 +41,132 @@ Source of truth: `src/config/keymap.ts`. Override any binding in
 }
 ```
 
-- A value is one chord or an array of chords. It **replaces** the default for
-  that action (it does not add to it). `null` unbinds the action.
-- Chord syntax (`src/config/keys.ts`):
-  - single key: `j`, `?`, `/`, `1`, `tab`, `enter`, `escape`, `space`, `up`, `pageDown`, `f1`
-  - modifiers: `ctrl+d`, `shift+tab`, `alt+x`, `ctrl+shift+p` (any order)
-  - an uppercase letter is shorthand for shift: `G` = `shift+g`
-  - multi-key sequence: `gg`, `yy` (verbatim), or space separated `ctrl+w h`
-- Pane bindings shadow global ones for the same key (e.g. `n` is *new session*
-  in the sessions pane but *next match* elsewhere). `h` / `l` are not shadowed
-  by any default pane binding, so pane switching works the same everywhere.
-- The tree dialog resolves `tree-dialog` first, then `tree`, then `global`: its
-  own keys (`d` `t` `u` `l` `a` `q`) shadow the pane's and the global ones
-  (`a` filters instead of opening, `l` is the labeled filter instead of *next
-  pane*, `q` closes the dialog instead of quitting), everything else is the
-  tree pane's binding.
-- Invalid chords or unknown scopes are skipped and reported in the footer when
-  the panel opens.
-- Multi-key sequences wait up to 1 s for the next key; `Esc` discards a
-  half-typed sequence.
-- The pane header shows the jump key bound to `focus-<pane>` (`[1] SESSIONS`),
-  so rebinding it updates the title too.
+- 一个值是**一个 chord** 或 **chord 数组**。它**替换**该动作的默认键位（不是追加），`null` 表示解绑该动作。
+- **配置名称就是动作 id**（下面每张表格中间那一列），把它放到对应 scope 下即可，例如给 SESSIONS 的删除换成 `ctrl+d`：`{ "keymap": { "sessions": { "session-delete": "ctrl+d" } } }`。每个面板小节的 scope 见其标题：全局→`global`、SESSIONS→`sessions`、TREE→`tree`、CONTENT→`content`、树对话框→`tree-dialog`（表格里标注了非本 scope 的例外）。
 
-## Global
+- Chord 语法（`src/config/keys.ts`）：
+  - 单键：`j`、`?`、`/`、`1`、`tab`、`enter`、`escape`、`space`、`up`、`pageDown`、`f1`
+  - 修饰键：`ctrl+d`、`shift+tab`、`alt+x`、`ctrl+shift+p`（顺序任意）
+  - 大写字母是 shift 的简写：`G` = `shift+g`
+  - 多键序列：`gg`、`yy`（原样连写），或空格分隔的 `ctrl+w h`
+- 面板键位会遮蔽同一个键的全局键位（例如 `n` 在 SESSIONS 面板是「新建会话」，在其它面板是「下一个匹配」）。`h` / `l` 没有被任何默认面板键位遮蔽，所以切换面板在哪里都一样。
+- 树对话框按 `tree-dialog` → `tree` → `global` 顺序解析：它自己的键（`d` `t` `u` `l` `a` `q`）遮蔽面板与全局键位（`a` 变成过滤而不是打开对话框，`l` 变成「只看有标签」过滤而不是「下一个面板」，`q` 变成关闭对话框而不是退出），其余都沿用树面板的键位。
+- 无效的 chord 或未知 scope 会被跳过，并在面板打开时显示在 footer。
+- 多键序列最多等待下一个键 1 秒；`Esc` 丢弃打了一半的序列。
+- 面板标题显示绑定到 `focus-<pane>` 的跳转键（`[1] SESSIONS`），所以重绑它标题也会跟着变。
 
-| Key         | Action                                     |
-| ----------- | ------------------------------------------ |
-| ~~`l` / `Tab`~~ | ~~Focus next pane~~                        |
-| ~~`h`~~         | ~~Focus previous pane~~                    |
-| ~~`1` `2` `3`~~ | ~~Focus SESSIONS / TREE / CONTENT directly~~ |
-| ~~`C`~~         | ~~List scope: Current folder~~             |
-| ~~`A`~~         | ~~List scope: All~~                        |
-| ~~`?`~~         | ~~Help overlay for the focused pane (`?`/`Esc`/`q` close, `j`/`k` scroll)~~ |
-| ~~`q` / `Ctrl+c`~~ | ~~Quit the panel~~                      |
-| ~~`@`~~         | ~~pi's changelog (`/changelog`) in a big box: `j` `k` `↑` `↓` scroll, `Ctrl+d` / `Ctrl+u` half a page, `g` / `G` top / bottom, `Esc` / `q` / `@` close. Rendering the whole file is slow, so the box first shows a rotating-square `◰ Loading changelog…` line centered in the middle, then the content (cached, so a second `@` is instant). Newest version first (pi's own `/changelog` puts it last). Not available inside the tree dialog~~ |
-| ~~`Esc`~~       | ~~Discard pending keys → clear the focused pane's search → clear the SESSIONS multi-selection → quit~~ |
-| ~~`/`~~         | ~~Search the focused pane (see below): the bar at the bottom searches as you type, `Enter` keeps the query, `Esc` cancels~~ |
-| ~~`n` / `N`~~   | ~~Next / previous match of the focused pane's search, wrapping around. While a search is active they win over a pane binding of the same key (`n` is *new session* in SESSIONS only without a search)~~ |
+## 全局快捷键
 
-`C` and `A` are one-way: pressing `A` while already on *All* does nothing.
+| 键 | 配置名称 | 操作 |
+| --- | --- | --- |
+| `l` / `Tab` | `focus-next` | 聚焦下一个面板 |
+| `h` | `focus-prev` | 聚焦上一个面板 |
+| `1` `2` `3` | `focus-sessions` / `focus-tree` / `focus-content` | 直接聚焦 SESSIONS / TREE / CONTENT |
+| `C` | `scope-current` | 列表范围：当前文件夹（Current folder） |
+| `A` | `scope-all` | 列表范围：全部（All） |
+| `?` | `help` | 当前面板的快捷键帮助（`?` / `Esc` / `q` 关闭，`j` / `k` 滚动） |
+| `q` / `Ctrl+c` | `quit` | 退出面板 |
+| `@` | `changelog` | pi 的 changelog（`/changelog`）大弹窗：`j` `k` `↑` `↓` 滚动，`Ctrl+d` / `Ctrl+u` 半页，`g` / `G` 顶部 / 底部，`Esc` / `q` / `@` 关闭。整份文件渲染较慢，弹窗先在中间显示旋转方块 `◰ Loading changelog…`，随后显示内容（有缓存，第二次按 `@` 瞬间打开）。最新版本在最上面（pi 自己的 `/changelog` 放在最后）。树对话框里不可用 |
+| `Esc` | —（内置，不可配置） | 依次：丢弃未完成的按键 → 清除当前面板的搜索 → 清除 SESSIONS 的多选 → 退出 |
+| `/` | `search` | 搜索当前面板（见下）：底部搜索栏边输入边搜，`Enter` 保留关键字，`Esc` 取消 |
+| `n` / `N` | `search-next` / `search-prev` | 当前面板搜索的下一个 / 上一个匹配，循环回绕。搜索生效时它们优先于同名的面板键位（`n` 只有在 SESSIONS 且没有搜索时才是「新建会话」） |
 
-The `?` overlay lists every binding, ordered by how often it is used (most
-common first, e.g. `Enter` before the vim navigation). The footer at the
-bottom only hints the handful of key shortcuts per pane; the long tail (sort /
-info / compact / fork / clone / export / import / share / changelog) lives in
-`?` only.
+`C` 和 `A` 是单向的：已经在 *All* 时再按 `A` 无效。
 
-## Search (`/`)
+`?` 帮助弹窗列出全部键位，按使用频率排序（最常用的在前，如 `Enter` 排在 vim 移动键之前）。底部 footer 只提示每个面板的少数几个键；长尾（排序 / 信息 / 压缩 / 分叉 / 克隆 / 导出 / 导入 / 分享 / changelog）只在 `?` 里能看到。
 
-lazygit-style, per pane: the rows are never filtered, the cursor jumps between
-the matches. `/` opens `搜索:` at the bottom for the focused pane; every
-keystroke jumps to the first match at or after where the cursor was (wrapping
-to the first one), and puts the cursor back when nothing matches. `Enter`
-keeps the query and hands the keys back to the pane, `Esc` in the bar drops
-it and restores the cursor (and, in TREE, the folds). Afterwards the pane
-header shows `2/7 matches` (`7 matches` while the cursor is off them, `no
-matches` for none), the footer shows the query with `n next  N prev  Esc
-clear`, and `n` / `N` step through the matches wrapping at both ends. `Esc`
-in the pane ends its search. Each pane keeps its own query, so switching panes
-does not lose it; only the focused pane's search is stepped through, though
-the other panes keep their hits painted. Matching text is highlighted; the
-current match (the one the cursor is on) is inverted so it stands apart from
-the other hits.
+## 搜索（`/`）
 
-Words are matched case-insensitively and all must appear, and a bare word only
-looks at what names a row (session name / preview, tree label / text, content
-text); the model, path, role and dates need their `key:value` qualifier (the
-last one of a kind wins, unknown keys and unparsable dates are searched as
-words, a qualifier a pane has no field for is ignored):
+lazygit 风格，每个面板各记各的：列表行永不过滤，光标在匹配之间跳转。`/` 在底部打开当前面板的 `搜索:` 栏；每敲一个键都跳到「光标位置或其之后的第一个匹配」（到底则回绕到第一个），没有匹配时把光标放回原位。`Enter` 保留关键字并把按键交回面板，搜索栏里的 `Esc` 丢弃关键字并恢复光标（在 TREE 里还恢复折叠）。之后面板标题显示 `2/7 matches`（光标不在匹配上时显示 `7 matches`，无匹配显示 `no matches`），footer 显示关键字和 `n next  N prev  Esc clear`，`n` / `N` 在匹配间步进、两端回绕。面板里的 `Esc` 结束该面板的搜索。每个面板保留自己的关键字，所以切换面板不会丢失；只有当前聚焦面板的搜索会被 `n` / `N` 步进，其它面板的命中仍保持高亮。命中文字会高亮；当前匹配（光标所在的那个）反色，以便和其它命中区分。
 
-| Pane     | Words are looked for in                                   | Qualifiers                                                                  |
-| -------- | --------------------------------------------------------- | --------------------------------------------------------------------------- |
-| SESSIONS | name and first-message preview (the row's title); the model and the working directory never match a bare word | `name:` (name only), `model:` (model only), `path:` (working directory, full path or the `~/…` form), `after:` / `before:` (last update, `YYYY-MM-DD`); `tag:` is ignored |
-| TREE     | label and text; folded rows count too. The role never matches a bare word (unlike `/tree`) | `tag:` (labels only), `role:` (`user` / `assistant` / `system` / `tool`), `after:` / `before:` (entry time); `name:` `model:` `path:` are ignored |
-| CONTENT  | the rendered text lines of the messages (box headers are skipped); the hit is scrolled to the top of the pane | none (qualifiers are dropped, only the words are searched) |
+关键字大小写不敏感、且每个词都必须出现。裸词（不带限定词）只匹配「命名一行的内容」（会话名 / 预览、树节点 label / 正文、内容正文）；模型、路径、角色、日期都需要用 `key:value` 限定词（同类限定词以最后一个为准，未知 key 和无法解析的日期当作裸词搜索，某个面板没有的字段对应的限定词被忽略）：
 
-Jumping to a TREE match inside a folded branch unfolds it, and the content
-pane follows the cursor as usual. The tree dialog (`a`) has its own search
-row that *filters* the tree instead; the two do not interact.
+| 面板 | 裸词匹配的字段 | 限定词 |
+| --- | --- | --- |
+| SESSIONS | 会话名和首条消息预览（行的标题）；模型和工作目录不参与裸词匹配 | `name:`（仅会话名）、`model:`（仅模型）、`path:`（工作目录，完整路径或 `~/…` 写法）、`after:` / `before:`（最后更新，`YYYY-MM-DD`）；`tag:` 被忽略 |
+| TREE | label 和正文；折叠的行也算。角色不参与裸词匹配（与 `/tree` 不同） | `tag:`（仅 label）、`role:`（`user` / `assistant` / `system` / `tool`）、`after:` / `before:`（节点时间）；`name:` `model:` `path:` 被忽略 |
+| CONTENT | 消息渲染后的正文行（跳过消息框头部）；命中会被滚到面板顶部 | 无（限定词被丢弃，只搜裸词） |
 
-## Sessions pane
+跳到折叠分支里的 TREE 匹配会展开它，右侧 CONTENT 照常跟随光标。树对话框（`a`）有自己的搜索行，它是**过滤**而不是跳转，两者互不影响。
 
-The panel opens with the cursor on the session pi currently has open (so
-TREE / CONTENT show the current conversation); a brand-new session that is
-not listed yet leaves the cursor on the first row. `C` / `A` still start at
-the top after switching scope. `/` searches the name and the first-message
-preview, `model:` / `path:` reach the model and the working directory
-(see *Search* above); while that search is active `n` / `N` step through the
-matches instead of `n` starting a new session.
+## SESSIONS 面板
 
-| Key           | Action                                          |
-| ------------- | ----------------------------------------------- |
-| ~~`j` `k` `↑` `↓`~~ | ~~Move cursor~~                           |
-| ~~`gg` / `G`~~ | ~~Top / bottom~~                               |
-| ~~`J` / `K`~~ | ~~Scroll the content pane~~                     |
-| ~~`Enter`~~   | ~~Resume session: pi switches to it and the panel closes; a failure (file missing, switch cancelled) stays in the footer~~ |
-| ~~`d`~~       | ~~Delete: a centered *Delete session?* box asks Yes / No (cursor on No, `y` / `n` pick directly, `Enter` confirms the highlighted entry, `Esc` cancels). Like pi's `/resume` the file goes to the system trash via the `trash` CLI when available, else it is unlinked (the footer says which); the session pi currently has open is refused without asking. The list reloads, the cursor is clamped and TREE / CONTENT follow~~ |
-| ~~`r`~~       | ~~Rename in a centered box pre-filled with the current name (`Enter` save, `Esc` cancel, empty removes the name; same as `/name` / ctrl+r in `/resume`). The list reloads with the cursor still on the session~~ |
-| ~~`n`~~       | ~~New session (`/new`): a centered *New session* box asks for a name (`Enter` create, `Esc` cancel, **empty starts it unnamed** — the `[name]` argument of `/name` is simply left unset). pi switches to the new session and the panel closes~~ |
-| ~~`o`~~       | ~~Fork (`/fork`): a centered selector lists the session's user messages (cursor on the last one, like pi's own `/fork`; `j` / `k` move, long lists scroll), `Enter` picks one and a *Fork session?* Yes / No box confirms (`Esc` / No goes back to the selector). The fork starts **before** that message and pi restores its text into the editor. Sessions other than the open one are switched to first; a session with no user message reports *No messages to fork from*~~ |
-| ~~`y`~~       | ~~Clone (`/clone`): a *Clone session?* Yes / No box confirms (cursor on No), then the active branch is copied to a new session file and pi opens it~~ |
-| ~~`Y`~~       | ~~Copy the last assistant reply to the clipboard (`/copy`): only its text parts, skipping thinking and tool calls; the panel stays open and the footer reports it (*copied last reply*, or *no assistant reply to copy*)~~ |
-| ~~`Space`~~   | ~~Toggle multi-select: no marker glyph — the selected row's title is tinted (accent) so it stands out in a long list — and the header starts with `3 selected`. With a selection `d` deletes all of them after one *Delete N sessions?* confirmation (the session pi has open is skipped; the ones that fail stay listed and selected, the first error goes to the footer), while `r` `o` `y` `e` `S` refuse (*cannot act on multiple sessions*). `Esc` clears the selection before it quits~~ |
-| ~~`e`~~       | ~~Export (`/export`): a centered *Export as* menu picks **HTML** (the whole tree, rendered by pi's own `pi --export`) or **JSONL** (the active branch, re-importable), then an *Export to* box is pre-filled with pi's default path (`pi-session-<file>.html` / `session-<time>.jsonl` in pi's working directory). Relative paths and `~` work on every platform; a folder (existing, or typed with a trailing `/`) gets the default file name inside. `Esc` in the box goes back to the menu; an existing file asks *Overwrite file?* first. Works for any session, not only the open one; the panel stays open and the footer says where the file went~~ |
-| ~~`I`~~       | ~~Import (`/import`): a centered box asks for a session `.jsonl` (relative to pi's working directory, `~` allowed), an *Import and switch to it?* Yes / No box confirms, then the file is copied into the current session folder (a `-1` suffix on a name clash) and pi switches to it; the panel closes. A missing / empty / non-pi file is reported in the footer and nothing is copied~~ |
-| ~~`S`~~       | ~~Share (`/share`): an *Upload as secret gist?* Yes / No box confirms (cursor on No), then the session is rendered to HTML and uploaded with `gh gist create --public=false`; the pi.dev viewer link is copied to the clipboard and shown in the footer. Needs the GitHub CLI logged in (pi's wording otherwise); pi's Radius upload is not available to extensions~~ |
-| ~~`s`~~       | ~~Cycle sort: recent (last update) → created → title (by the title shown — name, else first-message preview — A–Z, empty sessions last) → threaded (forks indented under their parent) → …; the header shows the current one, the cursor follows its session~~ |
-| ~~`i`~~       | ~~Session info in a centered box (what `/session` shows: name, model, messages, tokens, cost, created / updated, path, id); `y` copies the whole text, `Esc` / `q` close~~ |
-| ~~`c`~~       | ~~Compact (`/compact`): a centered *Compact* box asks for optional focus instructions (`Enter` compact, `Esc` cancel, empty uses pi's default). The cursor session's active branch is compacted, then pi opens it — sessions other than the one already open are switched to first (that is the *enter the conversation* part). pi's own footer shows a rotating spinner while the model summarizes; the panel closes on success, and a failure (no model, session too small, already compacted) stays in the footer. `c` refuses while several sessions are selected~~ |
+面板打开时光标落在 pi 当前打开的会话上（因此 TREE / CONTENT 显示当前对话）；一个尚未列出的全新会话则把光标停在第一行。`C` / `A` 切换范围后仍从顶部开始。`/` 搜索会话名和首条消息预览，`model:` / `path:` 触及模型和工作目录（见上文*搜索*）；该搜索生效期间 `n` / `N` 步进匹配，而不是 `n` 新建会话。
 
-## Tree pane
+| 键 | 配置名称 | 操作 |
+| --- | --- | --- |
+| `j` `k` `↑` `↓` | `move-down` / `move-up` | 移动光标 |
+| `gg` / `G` | `go-top` / `go-bottom` | 顶部 / 底部 |
+| `J` / `K` | `scroll-content-down` / `scroll-content-up` | 滚动右侧 CONTENT 面板 |
+| `Enter` | `session-resume` | 恢复会话：pi 切换过去、面板关闭；失败（文件缺失、切换取消）停留在 footer |
+| `d` | `session-delete` | 删除：居中的 *Delete session?* 框问 Yes / No（光标停在 No，`y` / `n` 直接选，`Enter` 确认高亮项，`Esc` 取消）。和 pi 的 `/resume` 一样，有 `trash` CLI 时移入系统回收站，否则直接 unlink（footer 说明用了哪种）；pi 当前打开的会话会被拒绝、不询问。列表重新加载，光标夹回范围内，TREE / CONTENT 跟随 |
+| `r` | `session-rename` | 在预填当前名字的居中框里改名（`Enter` 保存，`Esc` 取消，空值清除名字；等同 `/name` 或 `/resume` 里的 ctrl+r）。列表重新加载，光标仍停在该会话 |
+| `n` | `session-new` | 新建会话（`/new`）：居中的 *New session* 框询问名字（`Enter` 创建，`Esc` 取消，**留空则以未命名启动** —— `/name` 的 `[name]` 参数不设置）。pi 切换到新会话、面板关闭 |
+| `o` | `session-fork` | 分叉（`/fork`）：居中选择器列出会话的用户消息（光标停在最后一条，和 pi 自带 `/fork` 一致；`j` / `k` 移动，长列表可滚动），`Enter` 选中后 *Fork session?* Yes / No 框确认（`Esc` / No 退回选择器）。分叉从那条消息**之前**开始，pi 把它的文本填回编辑器。非当前会话会先切过去；没有用户消息时提示 *No messages to fork from* |
+| `y` | `session-clone` | 克隆（`/clone`）：*Clone session?* Yes / No 框确认（光标停在 No），随后把活动分支复制到新会话文件、pi 打开它 |
+| `Y` | `session-copy-last-reply` | 复制最后一条 assistant 回复到剪贴板（`/copy`）：只取其文本片段，跳过思考和工具调用；面板保持打开，footer 报告结果（*copied last reply* 或 *no assistant reply to copy*） |
+| `Space` | `session-toggle-select` | 切换多选：不画标记字形 —— 选中行的标题着色（accent），在长列表里凸显 —— 标题以 `3 selected` 开头。有选中时 `d` 在一次 *Delete N sessions?* 确认后删除全部（跳过 pi 打开的会话；失败的仍列出并保持选中，第一条错误进 footer），而 `r` `o` `y` `e` `S` 拒绝（*cannot act on multiple sessions*）。`Esc` 先清空选中、再按才退出 |
+| `e` | `session-export` | 导出（`/export`）：居中 *Export as* 菜单选 **HTML**（整棵树，由 pi 自己的 `pi --export` 渲染）或 **JSONL**（活动分支，可重新导入），然后 *Export to* 框预填 pi 的默认路径（pi 工作目录下的 `pi-session-<file>.html` / `session-<time>.jsonl`）。相对路径和 `~` 在所有平台通用；目录（已存在，或以 `/` 结尾输入）会在里面用默认文件名。框里 `Esc` 退回菜单；已存在的文件先问 *Overwrite file?*。任意会话都能导出，不只当前会话；面板保持打开，footer 说明文件去向 |
+| `I` | `session-import` | 导入（`/import`）：居中框询问一个会话 `.jsonl`（相对 pi 工作目录，允许 `~`），*Import and switch to it?* Yes / No 框确认，随后文件被复制进当前会话目录（重名加 `-1` 后缀）、pi 切换过去、面板关闭。缺失 / 空 / 非 pi 文件会在 footer 报告，不复制任何东西 |
+| `S` | `session-share` | 分享（`/share`）：*Upload as secret gist?* Yes / No 框确认（光标停在 No），随后会话渲染为 HTML 并用 `gh gist create --public=false` 上传；pi.dev 查看链接复制到剪贴板并显示在 footer。需要已登录的 GitHub CLI（否则用 pi 的措辞提示）；pi 的 Radius 上传对扩展不可用 |
+| `s` | `session-sort` | 循环排序：recent（最后更新）→ created（创建时间）→ title（按显示的标题 —— 有名字用名字，否则用首条消息预览 —— A–Z，空会话排最后）→ threaded（分叉缩进挂在父会话下）→ …；标题显示当前排序，光标跟随其会话 |
+| `i` | `session-info` | 会话信息居中框（即 `/session` 展示的：名称、模型、消息数、token、费用、创建 / 更新、路径、id）；`y` 复制全部文本，`Esc` / `q` 关闭 |
+| `c` | `session-compact` | 压缩（`/compact`）：居中 *Compact* 框询问可选的聚焦指令（`Enter` 压缩，`Esc` 取消，留空用 pi 默认）。压缩光标会话的活动分支后 pi 打开它 —— 非当前会话会先切过去（这就是「进入对话」）。压缩期间 pi 自己的 footer 显示旋转 spinner；成功后面板关闭，失败（无模型、会话太小、已压缩）停留在 footer。选中多个会话时 `c` 拒绝 |
 
-The pane shows the tree as a folded outline: `▸` a folded side branch, `▾` an
-open one, `─` an alternative that was never continued; rows inside a branch
-are indented two columns per level (four levels at most, `… ` beyond). Side
-branches start folded, the active branch open. The filters live in the tree
-dialog (`a`), which draws the same rows with pi-style guide lines and has its
-own live search row that narrows the list. `/` in the pane is the jumping
-search of *Search* above (label / text, `tag:` for labels, `role:` for the role; a match
-inside a folded branch is unfolded). A filter chosen in
-the dialog stays on: the pane lists the same filtered tree and its header says
-so (`2/12 · user-only`); the panel opens with pi's own `treeFilterMode`
-setting (the filter `/tree` starts with).
+## TREE 面板
 
-| Key             | Action                                              |
-| --------------- | --------------------------------------------------- |
-| ~~`j` `k` `↑` `↓`~~ | ~~Move cursor~~                                 |
-| ~~`gg` / `G`~~  | ~~Top / bottom~~                                    |
-| ~~`Enter`~~     | ~~Restore to node, like `/tree`: a centered menu asks *No summary / Summarize / Summarize with custom prompt* (`j`/`k`/`↑`/`↓` move, `Enter` pick, `Esc` back to the tree); the custom prompt is a one-line input (`Enter` summarize, `Esc` back to the menu). Switches to that session first when needed. No menu when the node already is the leaf (Enter just closes the panel) or pi's `branchSummary.skipPrompt` is on~~ |
-| ~~`z`~~         | ~~Fold / unfold the branch under the cursor: on a `▸` / `▾` row it toggles, anywhere inside a branch it folds that branch and jumps to its head (vim's `zc`); the trunk of a linear conversation has nothing to fold~~ |
-| ~~`y`~~         | ~~Copy node text (full text, like `Ctrl+x` in `/tree`)~~ |
-| ~~`T`~~         | ~~Add / edit label in a centered dialog, like lazygit's commit popup (`Enter` save, `Esc` cancel, empty removes; same as `Shift+T` in `/tree`)~~ |
-| ~~`a`~~         | ~~Open the tree dialog: the whole tree in a big box (search row on top, key hints at the bottom), same fold state as the pane; see below for its keys~~ |
+面板把树显示为折叠大纲：`▸` 折叠的旁支，`▾` 展开的旁支，`─` 从未继续的旁支；分支内的行每层缩进两列（最多四层，更深以 `… ` 代替）。旁支默认折叠，活动分支展开。过滤住在树对话框（`a`）里，对话框用 pi 风格的引导线画同样的行，并有自己的实时搜索行来收窄列表。面板里的 `/` 是上文*搜索*的跳转式搜索（label / 正文，`tag:` 匹配 label，`role:` 匹配角色；折叠分支里的匹配会被展开）。在对话框里选的过滤会保留：面板列出同样过滤后的树，标题也标出（`2/12 · user-only`）；面板打开时采用 pi 自己的 `treeFilterMode` 设置（`/tree` 启动时的过滤）。
 
-## Tree dialog (`a` from the tree pane)
+| 键 | 配置名称 | 操作 |
+| --- | --- | --- |
+| `j` `k` `↑` `↓` | `move-down` / `move-up` | 移动光标 |
+| `gg` / `G` | `go-top` / `go-bottom` | 顶部 / 底部 |
+| `Enter` | `tree-restore` | 恢复到节点，和 `/tree` 一样：居中菜单问 *No summary / Summarize / Summarize with custom prompt*（`j`/`k`/`↑`/`↓` 移动，`Enter` 选，`Esc` 退回树）；自定义提示是单行输入（`Enter` 摘要，`Esc` 退回菜单）。需要时先切换到该会话。节点本身就是叶子（`Enter` 直接关闭面板）或 pi 的 `branchSummary.skipPrompt` 开启时不弹菜单 |
+| `z` | `tree-fold` | 折叠 / 展开光标所在分支：在 `▸` / `▾` 行上切换，在分支内任意行则折叠该分支并跳到段头（vim 的 `zc`）；线性对话的主干没有可折叠的段 |
+| `y` | `tree-copy` | 复制节点文本（完整文本，等同 `/tree` 里的 `Ctrl+x`） |
+| `T` | `tree-label` | 在居中对话框里添加 / 编辑 label，类似 lazygit 的 commit 弹窗（`Enter` 保存，`Esc` 取消，空值删除；等同 `/tree` 里的 `Shift+T`） |
+| `a` | `tree-open` | 打开树对话框：整棵树的大弹窗（顶部搜索行，底部键位提示），和面板共享折叠状态；键位见下 |
 
-The whole tree in a big box: a search row on top, the rows in the middle
-(pi-style guide lines, a folded row shows `⊞` on its connector), key hints at
-the bottom (the footer repeats them, so there is no `?` help inside). The
-dialog has its own cursor; the pane's cursor moves to it when the dialog
-closes. Keys are resolved with the `tree-dialog` scope first, then the tree
-pane's bindings, then the global ones, so `j` `k`, `gg` `G`, `Enter`, `y`,
-`T`, `z` and `/` are the pane's keys (and follow a rebinding of those) while
-the dialog's own keys live under `keymap."tree-dialog"`. Pane switching (`h`
-`Tab` `1`..`3`), the list scope (`C` `A`), `n` `N`, `?`, `@` and quitting the panel
-(`Ctrl+c`) do nothing here.
+## 树对话框（在 TREE 面板按 `a`）
 
-| Key             | Action                                              |
-| --------------- | --------------------------------------------------- |
-| ~~`j` `k` `↑` `↓`~~ | ~~Move the dialog's cursor~~                    |
-| ~~`gg` / `G`~~  | ~~Top / bottom~~                                    |
-| ~~`/`~~         | ~~Focus the search row; typing filters the rows live, like `/tree`: every word must appear in the row's label / text (case-insensitive), `tag:x` narrows to labels, `role:user` to the role, `after:2026-09-01` / `before:2026-09-20` to dates. `Esc` hands the keys back to the list and keeps the query (the rows stay narrowed); `/` again edits it, deleting the text clears it. `Enter` means nothing in the search row. While a query is active every match is shown (folds are cleared, like `/tree`); the folds come back once the query is empty or the dialog closes~~ |
-| ~~`Enter`~~     | ~~Restore to the row, exactly like the pane (summary menu included)~~ |
-| ~~`y`~~         | ~~Copy the row's text~~                             |
-| ~~`T`~~         | ~~Add / edit the row's label (the Label dialog opens over the tree dialog)~~ |
-| ~~`z`~~         | ~~Fold / unfold the branch under the cursor (same rule and same fold state as the pane)~~ |
-| ~~`d` `t` `u` `l` `a`~~ | ~~Filter: default (hide bookkeeping) / no tool results / user only / labeled only / all; `t` `u` `l` `a` toggle back to default when pressed again (pi's `Ctrl+d/t/u/l/a`). The tree is reloaded, folds are cleared, and the pane shows the same filter afterwards~~ |
-| ~~`Esc` / `q`~~ | ~~Close (on the list): the pane's cursor lands on the dialog's row (unfolding what hides it) and the content pane follows. In the search row `Esc` only leaves the row and `q` is just a letter~~ |
+整棵树的大弹窗：顶部搜索行，中间是行（pi 风格引导线，折叠的行在连接处显示 `⊞`），底部键位提示（footer 也重复它们，所以对话框内没有 `?` 帮助）。对话框有自己的光标；关闭时面板光标移到它上面。按键先用 `tree-dialog` scope，再树面板的键位，最后全局的，所以 `j` `k`、`gg` `G`、`Enter`、`y`、`T`、`z` 和 `/` 是面板的键（并跟随它们的重绑），而对话框自己的键在 `keymap."tree-dialog"` 下。切换面板（`h` `Tab` `1`..`3`）、列表范围（`C` `A`）、`n` `N`、`?`、`@` 和退出面板（`Ctrl+c`）在这里都无效。
 
-## Content pane (read-only)
+下表「配置名称」后括号标出它属于哪个 scope（要改这些键就在对应 scope 下改）：过滤键和关闭键在 `tree-dialog`，移动 / 恢复 / 复制 / 标签 / 折叠沿用 `tree`，搜索沿用 `global`。
 
-Only scrolling and searching; copying a message is done from the tree pane (`y`).
+| 键 | 配置名称（scope） | 操作 |
+| --- | --- | --- |
+| `j` `k` `↑` `↓` | `move-down` / `move-up`（tree） | 移动对话框的光标 |
+| `gg` / `G` | `go-top` / `go-bottom`（tree） | 顶部 / 底部 |
+| `/` | `search`（global） | 聚焦搜索行；输入实时过滤行，和 `/tree` 一样：每个词都要出现在行的 label / 正文里（大小写不敏感），`tag:x` 收窄到 label，`role:user` 到角色，`after:2026-09-01` / `before:2026-09-20` 到日期。`Esc` 把按键交回列表并保留关键字（行保持收窄）；再按 `/` 编辑它，删光文本即清除。搜索行里 `Enter` 无含义。关键字生效时全部匹配都显示（折叠被清除，和 `/tree` 一样）；关键字清空或关闭对话框后折叠恢复 |
+| `Enter` | `tree-restore`（tree） | 恢复到该行，和面板完全一样（含摘要菜单） |
+| `y` | `tree-copy`（tree） | 复制该行的文本 |
+| `T` | `tree-label`（tree） | 添加 / 编辑该行的 label（Label 对话框叠在树对话框上面） |
+| `z` | `tree-fold`（tree） | 折叠 / 展开光标所在分支（规则和折叠状态与面板相同） |
+| `d` `t` `u` `l` `a` | `tree-filter-default` / `tree-filter-no-tools` / `tree-filter-user` / `tree-filter-labeled` / `tree-filter-all`（tree-dialog） | 过滤：default（隐藏记账信息）/ 无工具结果 / 只看 user / 只看有 label / 全部；`t` `u` `l` `a` 再按一次回到 default（对应 pi 的 `Ctrl+d/t/u/l/a`）。树被重新加载、折叠被清除，面板随后显示同样的过滤 |
+| `Esc` / `q` | `tree-dialog-close`（tree-dialog；`Esc` 内置不可配置） | 关闭（在列表上）：面板光标落到对话框的行上（展开挡住它的折叠），CONTENT 跟随。在搜索行里 `Esc` 只离开搜索行，`q` 只是一个字母 |
 
-| Key             | Action                |
-| --------------- | --------------------- |
-| ~~`j` `k` `↑` `↓`~~ | ~~Scroll~~        |
-| ~~`gg` / `G`~~  | ~~Top / bottom~~      |
-| ~~`/`~~         | ~~Search the rendered message text (words only, no qualifiers); the matching line is scrolled to the top, `n` / `N` step through the hits~~ |
+## CONTENT 面板（只读）
+
+只有滚动和搜索；复制消息在 TREE 面板做（`y`）。
+
+| 键 | 配置名称 | 操作 |
+| --- | --- | --- |
+| `j` `k` `↑` `↓` | `move-down` / `move-up` | 滚动 |
+| `gg` / `G` | `go-top` / `go-bottom` | 顶部 / 底部 |
+| `/` | `search`（global） | 搜索渲染后的消息正文（只搜裸词，无限定词）；匹配行被滚到顶部，`n` / `N` 步进命中 |
 
 ## 鼠标
 
-核心仍是键盘，鼠标只做轻量适配。regular（默认）和 fullscreen 两种 TUI 模式都支持：fullscreen
-由 pi 把事件派给面板，regular 模式插件自己打开 SGR 鼠标上报（需要终端支持 SGR，现代终端基本都行；
-面板打开期间终端自己的选中 / 滚动被接管，关闭后恢复）。见 `docs/issues.md`。
+核心仍是键盘，鼠标只做轻量适配。regular（默认）和 fullscreen 两种 TUI 模式都支持：fullscreen 由 pi 把事件派给面板，regular 模式插件自己打开 SGR 鼠标上报（需要终端支持 SGR，现代终端基本都行；面板打开期间终端自己的选中 / 滚动被接管，关闭后恢复）。见 `docs/issues.md`。
 
-| 操作                | 行为                                                       |
-| ------------------- | ---------------------------------------------------------- |
-| 滚轮 / 三指上下      | 滚动指针所在面板的视图（列表只滚动、不移动选中项；CONTENT 按行滚动），不改变焦点 |
-| 单击                | 焦点切到指针所在面板；点在列表项上时同时把光标移到该项           |
-| 双击 SESSIONS       | 进入该会话（等价于 `Enter` / resume）                      |
-| 双击 TREE           | 折叠 / 展开光标所在分支（等价于 `z`）                       |
+| 操作 | 行为 |
+| --- | --- |
+| 滚轮 / 三指上下 | 滚动指针所在面板的视图（列表只滚动、不移动选中项；CONTENT 按行滚动），不改变焦点 |
+| 单击 | 焦点切到指针所在面板；点在列表项上时同时把光标移到该项 |
+| 双击 SESSIONS | 进入该会话（等价于 `Enter` / resume） |
+| 双击 TREE | 折叠 / 展开光标所在分支（等价于 `z`） |
+
+
+
+
+
