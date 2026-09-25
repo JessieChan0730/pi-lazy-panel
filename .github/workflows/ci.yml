@@ -1,0 +1,40 @@
+name: CI
+
+# 任何人给此仓库开 PR（目标 main）时跑一遍检查；push 到 main 时也跑一遍兜底。
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# 同一 PR / 分支的新 push 取消上一次还没跑完的检查，省 CI 时间。
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # fetch-depth: 0 拿到完整历史，才能算 PR 的 base..head 提交范围 + 逐条检查提交消息
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # eslint / typecheck / 全部测试 / i18n keys 整项目跑；
+      # commit messages 逐个查 PR 的提交，i18n 写死文案只查 PR 改动过的代码文件。
+      - name: Run checks
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: npm run ci
