@@ -95,6 +95,11 @@ The config file lives at `~/.pi/agent/lazy-panel.json`. Every field is optional 
 
 `keymap` is grouped by `scope` (`global` / `sessions` / `tree` / `content` / `tree-dialog`); the key is an action id and the value is one or more chords (e.g. `"ctrl+d"`, `["A", "ctrl+space"]`). A user-provided binding **replaces the action's default entirely**, and `null` unbinds it. See [docs/keybindings.md](./docs/keybindings.md) for the full list of action ids and keybindings.
 
+## Next steps
+
+- Add a settings panel
+- Add multiple themes / custom themes
+
 ## Contributing
 
 Contributions are welcome — see [CONTRIBUTING.md](./CONTRIBUTING.md) for the local setup, coding conventions and commit/PR flow.

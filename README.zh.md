@@ -95,6 +95,11 @@ npm run i18n:check     # 中英文案对齐
 
 `keymap` 按 `scope`（`global` / `sessions` / `tree` / `content` / `tree-dialog`）分组，键为动作 id、值为一个或多个 chord（如 `"ctrl+d"`、`["A", "ctrl+space"]`）；用户提供的键位**整体替换**该动作的默认值，`null` 表示解绑。完整的动作 id 与键位说明见 [docs/keybindings.zh.md](./docs/keybindings.zh.md)。
 
+## 下一步计划
+
+- 添加设置面板
+- 添加多主题 / 自定义主题
+
 ## 贡献
 
 欢迎贡献代码——本地环境、代码规范与提交 / PR 流程见 [CONTRIBUTING.zh.md](./CONTRIBUTING.zh.md)。
