@@ -5,6 +5,7 @@
  */
 
 import type { KEY_SCOPES, PANE_IDS, SESSION_SORT_MODES } from "./constants.ts";
+import type { Locale } from "./i18n/index.ts";
 
 // ---------------------------------------------------------------------------
 // Panes / focus
@@ -337,6 +338,8 @@ export type UserPaneKeymap = Partial<Record<ActionId, KeyChord | KeyChord[] | nu
 /** Shape of `~/.pi/agent/lazy-panel.json`. All fields optional. */
 export interface UserConfig {
 	keymap?: Partial<Record<KeyScope, UserPaneKeymap>>;
+	/** UI 语言（"en" / "zh"）；缺省时按系统语言自动检测。 */
+	locale?: Locale;
 	defaultScope?: ListScope;
 	defaultSort?: SessionSortMode;
 	leftColumnRatio?: number;

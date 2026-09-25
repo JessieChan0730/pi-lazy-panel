@@ -6,6 +6,7 @@
  *
  * 用户配置示例（所有字段可选）：
  * {
+ *   "locale": "zh",
  *   "defaultScope": "all",
  *   "keymap": {
  *     "global":   { "help": "F1", "scope-all": ["A", "ctrl+space"] },
@@ -13,17 +14,21 @@
  *   }
  * }
  * 同一个 action 的用户键位会整体替换默认键位；值为 null 表示解绑。
+ * locale 缺省时按系统语言自动检测（见 i18n/index.ts）。
  */
 
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { CONFIG_FILE_NAME, KEY_SCOPES, SESSION_SORT_MODES } from "../constants.ts";
+import { type Locale, SUPPORTED_LOCALES } from "../i18n/index.ts";
 import type { ActionId, KeyChord, Keymap, KeyScope, PaneKeymap, SessionSortMode, UserConfig, UserPaneKeymap } from "../types.ts";
 import { DEFAULT_KEYMAP } from "./keymap.ts";
 
 /** Fully resolved configuration used at runtime. */
 export interface ResolvedConfig {
 	keymap: Keymap;
+	/** UI 语言；缺省（未在用户配置里指定）时按系统语言自动检测。 */
+	locale?: Locale;
 	defaultScope: NonNullable<UserConfig["defaultScope"]>;
 	defaultSort: NonNullable<UserConfig["defaultSort"]>;
 	leftColumnRatio: number;
@@ -70,6 +75,16 @@ export function resolveConfig(user: unknown): ResolvedConfig {
 	}
 	const u = user as UserConfig;
 
+	// locale 只接受我们发布的语言（en / zh），非法值退回系统语言检测（不写入 locale）。
+	let locale: Locale | undefined;
+	if (u.locale !== undefined) {
+		if ((SUPPORTED_LOCALES as readonly string[]).includes(u.locale as string)) {
+			locale = u.locale;
+		} else {
+			warnings.push(`config: unknown locale "${String(u.locale)}"`);
+		}
+	}
+
 	const defaultScope =
 		u.defaultScope === "all" || u.defaultScope === "current-folder" ? u.defaultScope : DEFAULT_CONFIG.defaultScope;
 	if (u.defaultScope !== undefined && defaultScope !== u.defaultScope) warnings.push(`config: unknown defaultScope "${String(u.defaultScope)}"`);
@@ -89,7 +104,8 @@ export function resolveConfig(user: unknown): ResolvedConfig {
 	}
 
 	const keymap = mergeKeymap(DEFAULT_KEYMAP, u.keymap, warnings);
-	return { keymap, defaultScope, defaultSort, leftColumnRatio, warnings };
+	// locale 未指定时不写入该键（exactOptionalPropertyTypes），运行时按系统语言。
+	return { keymap, defaultScope, defaultSort, leftColumnRatio, warnings, ...(locale !== undefined ? { locale } : {}) };
 }
 
 /**
