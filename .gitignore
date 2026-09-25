@@ -6,3 +6,7 @@ Thumbs.db
 *.log
 .env
 .env.*
+
+# Internal working docs — kept locally, not tracked
+docs/progress.md
+docs/issues.md
