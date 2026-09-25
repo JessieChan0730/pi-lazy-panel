@@ -1,11 +1,38 @@
-# Default key bindings
+**English** | [中文](./keybindings.zh.md)
 
-Source of truth: `src/config/keymap.ts`. Override any binding in
-`~/.pi/agent/lazy-panel.json` under `keymap.<scope>.<action-id>` (scopes:
-`global`, `sessions`, `tree`, `content`, `tree-dialog`). Action ids are the
-`ActionId` union in `src/types.ts`.
+# Keybindings & configuration
 
-## Customising keys
+The single source of truth for the default keys is `src/config/keymap.ts`. You can override any binding under `keymap.<scope>.<action-id>` in `~/.pi/agent/lazy-panel.json` (scopes: `global`, `sessions`, `tree`, `content`, `tree-dialog`). An action id is exactly a member of the `ActionId` union in `src/types.ts`.
+
+## Configuration
+
+The config file lives at `~/.pi/agent/lazy-panel.json`. Every field is optional and falls back to a built-in default when omitted:
+
+```json
+{
+  "locale": "zh",
+  "defaultScope": "all",
+  "defaultSort": "recent",
+  "leftColumnRatio": 0.25,
+  "keymap": {
+    "global":   { "help": "F1", "scope-all": ["A", "ctrl+space"] },
+    "sessions": { "session-delete": "ctrl+d", "session-share": null }
+  }
+}
+```
+
+| Field | Description | Values / range | Default |
+| --- | --- | --- | --- |
+| `locale` | UI language | `"en"` / `"zh"` | follows system language |
+| `defaultScope` | session scope on open | `"current-folder"` / `"all"` | `"current-folder"` |
+| `defaultSort` | session list ordering | `"recent"` / `"created"` / `"title"` / `"threaded"` | `"recent"` |
+| `leftColumnRatio` | left column width ratio | `0.15` ~ `0.6` | `0.25` |
+| `keymap` | custom keybindings (see below) | grouped by scope | built-in keys |
+
+- Invalid `locale` / `defaultScope` / `defaultSort` fall back to the default, an out-of-range `leftColumnRatio` is ignored too, and the panel reports it in the footer when it opens.
+- When `locale` is omitted it is auto-detected from the system language (see `src/i18n/index.ts`).
+
+## Custom keybindings
 
 ```json
 {
@@ -16,183 +43,130 @@ Source of truth: `src/config/keymap.ts`. Override any binding in
 }
 ```
 
-- A value is one chord or an array of chords. It **replaces** the default for
-  that action (it does not add to it). `null` unbinds the action.
+- A value is **one chord** or an **array of chords**. It **replaces** the action's default binding (it does not append), and `null` unbinds the action.
+- **The config name is the action id** (the middle column in each table below); just place it under the matching scope — e.g. to change SESSIONS delete to `ctrl+d`: `{ "keymap": { "sessions": { "session-delete": "ctrl+d" } } }`. Each pane section's scope is in its heading: global → `global`, SESSIONS → `sessions`, TREE → `tree`, CONTENT → `content`, tree dialog → `tree-dialog` (the tables note the exceptions that belong to another scope).
+
 - Chord syntax (`src/config/keys.ts`):
-  - single key: `j`, `?`, `/`, `1`, `tab`, `enter`, `escape`, `space`, `up`, `pageDown`, `f1`
-  - modifiers: `ctrl+d`, `shift+tab`, `alt+x`, `ctrl+shift+p` (any order)
-  - an uppercase letter is shorthand for shift: `G` = `shift+g`
-  - multi-key sequence: `gg`, `yy` (verbatim), or space separated `ctrl+w h`
-- Pane bindings shadow global ones for the same key (e.g. `n` is *new session*
-  in the sessions pane but *next match* elsewhere). `h` / `l` are not shadowed
-  by any default pane binding, so pane switching works the same everywhere.
-- The tree dialog resolves `tree-dialog` first, then `tree`, then `global`: its
-  own keys (`d` `t` `u` `l` `a` `q`) shadow the pane's and the global ones
-  (`a` filters instead of opening, `l` is the labeled filter instead of *next
-  pane*, `q` closes the dialog instead of quitting), everything else is the
-  tree pane's binding.
-- Invalid chords or unknown scopes are skipped and reported in the footer when
-  the panel opens.
-- Multi-key sequences wait up to 1 s for the next key; `Esc` discards a
-  half-typed sequence.
-- The pane header shows the jump key bound to `focus-<pane>` (`[1] SESSIONS`),
-  so rebinding it updates the title too.
+  - Single key: `j`, `?`, `/`, `1`, `tab`, `enter`, `escape`, `space`, `up`, `pageDown`, `f1`
+  - Modifiers: `ctrl+d`, `shift+tab`, `alt+x`, `ctrl+shift+p` (any order)
+  - An uppercase letter is shorthand for shift: `G` = `shift+g`
+  - Multi-key sequences: `gg`, `yy` (written back-to-back), or space-separated `ctrl+w h`
+- Pane bindings shadow the global binding of the same key (e.g. `n` is "new session" in the SESSIONS pane and "next match" elsewhere). `h` / `l` are not shadowed by any default pane binding, so switching panes works the same everywhere.
+- The tree dialog resolves in the order `tree-dialog` → `tree` → `global`: its own keys (`d` `t` `u` `l` `a` `q`) shadow the pane and global bindings (`a` becomes filter instead of open-dialog, `l` becomes the "labeled-only" filter instead of "next pane", `q` becomes close-dialog instead of quit); everything else follows the tree pane's bindings.
+- An invalid chord or unknown scope is skipped and shown in the footer when the panel opens.
+- A multi-key sequence waits at most 1 second for the next key; `Esc` discards a half-typed sequence.
+- The pane title shows the jump key bound to `focus-<pane>` (`[1] SESSIONS`), so rebinding it changes the title too.
 
-## Global
+## Global keybindings
 
-| Key         | Action                                     |
-| ----------- | ------------------------------------------ |
-| ~~`l` / `Tab`~~ | ~~Focus next pane~~                        |
-| ~~`h`~~         | ~~Focus previous pane~~                    |
-| ~~`1` `2` `3`~~ | ~~Focus SESSIONS / TREE / CONTENT directly~~ |
-| ~~`C`~~         | ~~List scope: Current folder~~             |
-| ~~`A`~~         | ~~List scope: All~~                        |
-| ~~`?`~~         | ~~Help overlay for the focused pane (`?`/`Esc`/`q` close, `j`/`k` scroll)~~ |
-| ~~`q` / `Ctrl+c`~~ | ~~Quit the panel~~                      |
-| ~~`@`~~         | ~~pi's changelog (`/changelog`) in a big box: `j` `k` `↑` `↓` scroll, `Ctrl+d` / `Ctrl+u` half a page, `g` / `G` top / bottom, `Esc` / `q` / `@` close. Rendering the whole file is slow, so the box first shows a rotating-square `◰ Loading changelog…` line centered in the middle, then the content (cached, so a second `@` is instant). Newest version first (pi's own `/changelog` puts it last). Not available inside the tree dialog~~ |
-| ~~`Esc`~~       | ~~Discard pending keys → clear the focused pane's search → clear the SESSIONS multi-selection → quit~~ |
-| ~~`/`~~         | ~~Search the focused pane (see below): the bar at the bottom searches as you type, `Enter` keeps the query, `Esc` cancels~~ |
-| ~~`n` / `N`~~   | ~~Next / previous match of the focused pane's search, wrapping around. While a search is active they win over a pane binding of the same key (`n` is *new session* in SESSIONS only without a search)~~ |
+| Key | Config name | Action |
+| --- | --- | --- |
+| `l` / `Tab` | `focus-next` | Focus the next pane |
+| `h` | `focus-prev` | Focus the previous pane |
+| `1` `2` `3` | `focus-sessions` / `focus-tree` / `focus-content` | Focus SESSIONS / TREE / CONTENT directly |
+| `C` | `scope-current` | List scope: current folder |
+| `A` | `scope-all` | List scope: all |
+| `?` | `help` | Shortcut help for the current pane (`?` / `Esc` / `q` closes, `j` / `k` scrolls) |
+| `q` / `Ctrl+c` | `quit` | Quit the panel |
+| `@` | `changelog` | pi's changelog (`/changelog`) as a large popup: `j` `k` `↑` `↓` scroll, `Ctrl+d` / `Ctrl+u` half-page, `g` / `G` top / bottom, `Esc` / `q` / `@` close. The whole file renders slowly, so the popup first shows a spinning square `◰ Loading changelog…` in the center, then the content (cached, so a second `@` opens instantly). The newest version is on top (pi's own `/changelog` puts it last). Not available inside the tree dialog |
+| `Esc` | — (built-in, not configurable) | In order: discard an unfinished keystroke → clear the current pane's search → clear the SESSIONS multi-selection → quit |
+| `/` | `search` | Search the current pane (see below): the bottom search bar searches as you type, `Enter` keeps the keyword, `Esc` cancels |
+| `n` / `N` | `search-next` / `search-prev` | Next / previous match of the current pane's search, wrapping around. While a search is active they take priority over the pane binding of the same key (`n` is "new session" only in SESSIONS when there is no search) |
 
-`C` and `A` are one-way: pressing `A` while already on *All* does nothing.
+`C` and `A` are one-way: pressing `A` again when already in *All* does nothing.
 
-The `?` overlay lists every binding, ordered by how often it is used (most
-common first, e.g. `Enter` before the vim navigation). The footer at the
-bottom only hints the handful of key shortcuts per pane; the long tail (sort /
-info / compact / fork / clone / export / import / share / changelog) lives in
-`?` only.
+The `?` help popup lists every binding, sorted by frequency of use (the most common first, e.g. `Enter` before the vim movement keys). The footer only hints at a few keys per pane; the long tail (sort / info / compact / fork / clone / export / import / share / changelog) is only visible in `?`.
 
 ## Search (`/`)
 
-lazygit-style, per pane: the rows are never filtered, the cursor jumps between
-the matches. `/` opens `搜索:` at the bottom for the focused pane; every
-keystroke jumps to the first match at or after where the cursor was (wrapping
-to the first one), and puts the cursor back when nothing matches. `Enter`
-keeps the query and hands the keys back to the pane, `Esc` in the bar drops
-it and restores the cursor (and, in TREE, the folds). Afterwards the pane
-header shows `2/7 matches` (`7 matches` while the cursor is off them, `no
-matches` for none), the footer shows the query with `n next  N prev  Esc
-clear`, and `n` / `N` step through the matches wrapping at both ends. `Esc`
-in the pane ends its search. Each pane keeps its own query, so switching panes
-does not lose it; only the focused pane's search is stepped through, though
-the other panes keep their hits painted. Matching text is highlighted; the
-current match (the one the cursor is on) is inverted so it stands apart from
-the other hits.
+lazygit-style, tracked per pane: list rows are never filtered, the cursor jumps between matches. `/` opens the current pane's `Search:` bar at the bottom; every keystroke jumps to "the first match at or after the cursor" (wrapping to the first when it hits the end), and puts the cursor back where it was when there is no match. `Enter` keeps the keyword and hands keystrokes back to the pane; `Esc` in the search bar discards the keyword and restores the cursor (also restoring the fold state in TREE). Afterwards the pane title shows `2/7 matches` (`7 matches` when the cursor is not on a match, `no matches` when there is none), the footer shows the keyword and `n next  N prev  Esc clear`, and `n` / `N` step through matches, wrapping at both ends. `Esc` in the pane ends that pane's search. Each pane keeps its own keyword, so switching panes does not lose it; only the currently focused pane's search is stepped by `n` / `N`, while the other panes' hits stay highlighted. Matched text is highlighted; the current match (the one under the cursor) is inverted to distinguish it from the other hits.
 
-Words are matched case-insensitively and all must appear, and a bare word only
-looks at what names a row (session name / preview, tree label / text, content
-text); the model, path, role and dates need their `key:value` qualifier (the
-last one of a kind wins, unknown keys and unparsable dates are searched as
-words, a qualifier a pane has no field for is ignored):
+Keywords are case-insensitive and every word must appear. A bare word (with no qualifier) only matches "what names a row" (session name / preview, tree node label / body, content body); model, path, role and date all need a `key:value` qualifier (the last of a duplicate qualifier wins, an unknown key and an unparseable date are searched as bare words, and a qualifier for a field a pane does not have is ignored):
 
-| Pane     | Words are looked for in                                   | Qualifiers                                                                  |
-| -------- | --------------------------------------------------------- | --------------------------------------------------------------------------- |
-| SESSIONS | name and first-message preview (the row's title); the model and the working directory never match a bare word | `name:` (name only), `model:` (model only), `path:` (working directory, full path or the `~/…` form), `after:` / `before:` (last update, `YYYY-MM-DD`); `tag:` is ignored |
-| TREE     | label and text; folded rows count too. The role never matches a bare word (unlike `/tree`) | `tag:` (labels only), `role:` (`user` / `assistant` / `system` / `tool`), `after:` / `before:` (entry time); `name:` `model:` `path:` are ignored |
-| CONTENT  | the rendered text lines of the messages (box headers are skipped); the hit is scrolled to the top of the pane | none (qualifiers are dropped, only the words are searched) |
+| Pane | Fields a bare word matches | Qualifiers |
+| --- | --- | --- |
+| SESSIONS | Session name and first-message preview (the row's title); model and working directory do not participate in bare-word matching | `name:` (name only), `model:` (model only), `path:` (working directory, full path or `~/…` form), `after:` / `before:` (last updated, `YYYY-MM-DD`); `tag:` is ignored |
+| TREE | Label and body; folded rows count too. Role does not participate in bare-word matching (unlike `/tree`) | `tag:` (label only), `role:` (`user` / `assistant` / `system` / `tool`), `after:` / `before:` (node time); `name:` `model:` `path:` are ignored |
+| CONTENT | The rendered message body lines (skipping the message-box header); a hit is scrolled to the top of the pane | none (qualifiers are dropped, only bare words are searched) |
 
-Jumping to a TREE match inside a folded branch unfolds it, and the content
-pane follows the cursor as usual. The tree dialog (`a`) has its own search
-row that *filters* the tree instead; the two do not interact.
+Jumping to a TREE match inside a folded branch expands it, and CONTENT on the right follows the cursor as usual. The tree dialog (`a`) has its own search row, which **filters** rather than jumps; the two are independent.
 
-## Sessions pane
+## SESSIONS pane
 
-The panel opens with the cursor on the session pi currently has open (so
-TREE / CONTENT show the current conversation); a brand-new session that is
-not listed yet leaves the cursor on the first row. `C` / `A` still start at
-the top after switching scope. `/` searches the name and the first-message
-preview, `model:` / `path:` reach the model and the working directory
-(see *Search* above); while that search is active `n` / `N` step through the
-matches instead of `n` starting a new session.
+When the panel opens, the cursor lands on the session pi currently has open (so TREE / CONTENT show the current conversation); a brand-new session that is not listed yet leaves the cursor on the first row. After toggling scope with `C` / `A` it still starts from the top. `/` searches the session name and the first-message preview, while `model:` / `path:` reach the model and working directory (see *Search* above); while that search is active `n` / `N` step through matches rather than `n` creating a new session.
 
-| Key           | Action                                          |
-| ------------- | ----------------------------------------------- |
-| ~~`j` `k` `↑` `↓`~~ | ~~Move cursor~~                           |
-| ~~`gg` / `G`~~ | ~~Top / bottom~~                               |
-| ~~`J` / `K`~~ | ~~Scroll the content pane~~                     |
-| ~~`Enter`~~   | ~~Resume session: pi switches to it and the panel closes; a failure (file missing, switch cancelled) stays in the footer~~ |
-| ~~`d`~~       | ~~Delete: a centered *Delete session?* box asks Yes / No (cursor on No, `y` / `n` pick directly, `Enter` confirms the highlighted entry, `Esc` cancels). Like pi's `/resume` the file goes to the system trash via the `trash` CLI when available, else it is unlinked (the footer says which); the session pi currently has open is refused without asking. The list reloads, the cursor is clamped and TREE / CONTENT follow~~ |
-| ~~`r`~~       | ~~Rename in a centered box pre-filled with the current name (`Enter` save, `Esc` cancel, empty removes the name; same as `/name` / ctrl+r in `/resume`). The list reloads with the cursor still on the session~~ |
-| ~~`n`~~       | ~~New session (`/new`): a centered *New session* box asks for a name (`Enter` create, `Esc` cancel, **empty starts it unnamed** — the `[name]` argument of `/name` is simply left unset). pi switches to the new session and the panel closes~~ |
-| ~~`o`~~       | ~~Fork (`/fork`): a centered selector lists the session's user messages (cursor on the last one, like pi's own `/fork`; `j` / `k` move, long lists scroll), `Enter` picks one and a *Fork session?* Yes / No box confirms (`Esc` / No goes back to the selector). The fork starts **before** that message and pi restores its text into the editor. Sessions other than the open one are switched to first; a session with no user message reports *No messages to fork from*~~ |
-| ~~`y`~~       | ~~Clone (`/clone`): a *Clone session?* Yes / No box confirms (cursor on No), then the active branch is copied to a new session file and pi opens it~~ |
-| ~~`Y`~~       | ~~Copy the last assistant reply to the clipboard (`/copy`): only its text parts, skipping thinking and tool calls; the panel stays open and the footer reports it (*copied last reply*, or *no assistant reply to copy*)~~ |
-| ~~`Space`~~   | ~~Toggle multi-select: no marker glyph — the selected row's title is tinted (accent) so it stands out in a long list — and the header starts with `3 selected`. With a selection `d` deletes all of them after one *Delete N sessions?* confirmation (the session pi has open is skipped; the ones that fail stay listed and selected, the first error goes to the footer), while `r` `o` `y` `e` `S` refuse (*cannot act on multiple sessions*). `Esc` clears the selection before it quits~~ |
-| ~~`e`~~       | ~~Export (`/export`): a centered *Export as* menu picks **HTML** (the whole tree, rendered by pi's own `pi --export`) or **JSONL** (the active branch, re-importable), then an *Export to* box is pre-filled with pi's default path (`pi-session-<file>.html` / `session-<time>.jsonl` in pi's working directory). Relative paths and `~` work on every platform; a folder (existing, or typed with a trailing `/`) gets the default file name inside. `Esc` in the box goes back to the menu; an existing file asks *Overwrite file?* first. Works for any session, not only the open one; the panel stays open and the footer says where the file went~~ |
-| ~~`I`~~       | ~~Import (`/import`): a centered box asks for a session `.jsonl` (relative to pi's working directory, `~` allowed), an *Import and switch to it?* Yes / No box confirms, then the file is copied into the current session folder (a `-1` suffix on a name clash) and pi switches to it; the panel closes. A missing / empty / non-pi file is reported in the footer and nothing is copied~~ |
-| ~~`S`~~       | ~~Share (`/share`): an *Upload as secret gist?* Yes / No box confirms (cursor on No), then the session is rendered to HTML and uploaded with `gh gist create --public=false`; the pi.dev viewer link is copied to the clipboard and shown in the footer. Needs the GitHub CLI logged in (pi's wording otherwise); pi's Radius upload is not available to extensions~~ |
-| ~~`s`~~       | ~~Cycle sort: recent (last update) → created → title (by the title shown — name, else first-message preview — A–Z, empty sessions last) → threaded (forks indented under their parent) → …; the header shows the current one, the cursor follows its session~~ |
-| ~~`i`~~       | ~~Session info in a centered box (what `/session` shows: name, model, messages, tokens, cost, created / updated, path, id); `y` copies the whole text, `Esc` / `q` close~~ |
-| ~~`c`~~       | ~~Compact (`/compact`): a centered *Compact* box asks for optional focus instructions (`Enter` compact, `Esc` cancel, empty uses pi's default). The cursor session's active branch is compacted, then pi opens it — sessions other than the one already open are switched to first (that is the *enter the conversation* part). pi's own footer shows a rotating spinner while the model summarizes; the panel closes on success, and a failure (no model, session too small, already compacted) stays in the footer. `c` refuses while several sessions are selected~~ |
+| Key | Config name | Action |
+| --- | --- | --- |
+| `j` `k` `↑` `↓` | `move-down` / `move-up` | Move the cursor |
+| `gg` / `G` | `go-top` / `go-bottom` | Top / bottom |
+| `J` / `K` | `scroll-content-down` / `scroll-content-up` | Scroll the CONTENT pane on the right |
+| `Enter` | `session-resume` | Resume the session: pi switches to it and the panel closes; on failure (missing file, switch cancelled) it stays with a footer message |
+| `d` | `session-delete` | Delete: a centered *Delete session?* box asks Yes / No (cursor on No, `y` / `n` selects directly, `Enter` confirms the highlighted item, `Esc` cancels). Like pi's `/resume`, it moves to the system trash when the `trash` CLI exists, otherwise it unlinks directly (the footer says which); the session pi has open is refused without asking. The list reloads, the cursor is clamped back into range, and TREE / CONTENT follow |
+| `r` | `session-rename` | Rename in a centered box prefilled with the current name (`Enter` saves, `Esc` cancels, an empty value clears the name; equivalent to `/name` or ctrl+r in `/resume`). The list reloads and the cursor stays on that session |
+| `n` | `session-new` | New session (`/new`): a centered *New session* box asks for a name (`Enter` creates, `Esc` cancels, **leaving it empty starts an unnamed session** — the `[name]` argument of `/name` is not set). pi switches to the new session and the panel closes |
+| `o` | `session-fork` | Fork (`/fork`): a centered picker lists the session's user messages (cursor on the last one, matching pi's own `/fork`; `j` / `k` move, long lists scroll), and after `Enter` a *Fork session?* Yes / No box confirms (`Esc` / No returns to the picker). The fork starts **before** that message, and pi refills its text into the editor. A non-current session is switched to first; when there is no user message it reports *No messages to fork from* |
+| `y` | `session-clone` | Clone (`/clone`): a *Clone session?* Yes / No box confirms (cursor on No), then the active branch is copied to a new session file and pi opens it |
+| `Y` | `session-copy-last-reply` | Copy the last assistant reply to the clipboard (`/copy`): only its text fragments, skipping thinking and tool calls; the panel stays open and the footer reports the result (*copied last reply* or *no assistant reply to copy*) |
+| `Space` | `session-toggle-select` | Toggle multi-select: no marker glyph is drawn — a selected row's title is colored (accent) to stand out in a long list — and the title starts with `3 selected`. With a selection, `d` deletes them all after a single *Delete N sessions?* confirmation (skipping the session pi has open; failures stay listed and selected, the first error goes to the footer), while `r` `o` `y` `e` `S` refuse (*cannot act on multiple sessions*). `Esc` clears the selection first and only quits on the next press |
+| `e` | `session-export` | Export (`/export`): a centered *Export as* menu picks **HTML** (the whole tree, rendered by pi's own `pi --export`) or **JSONL** (the active branch, re-importable), then an *Export to* box prefilled with pi's default path (`pi-session-<file>.html` / `session-<time>.jsonl` under pi's working directory). Relative paths and `~` work on all platforms; a directory (existing, or an input ending in `/`) uses the default filename inside it. `Esc` in the box returns to the menu; an existing file first asks *Overwrite file?*. Any session can be exported, not just the current one; the panel stays open and the footer says where the file went |
+| `I` | `session-import` | Import (`/import`): a centered box asks for a session `.jsonl` (relative to pi's working directory, `~` allowed), an *Import and switch to it?* Yes / No box confirms, then the file is copied into the current session directory (a name clash gets a `-1` suffix), pi switches to it, and the panel closes. A missing / empty / non-pi file is reported in the footer and nothing is copied |
+| `S` | `session-share` | Share (`/share`): an *Upload as secret gist?* Yes / No box confirms (cursor on No), then the session is rendered to HTML and uploaded with `gh gist create --public=false`; the pi.dev view link is copied to the clipboard and shown in the footer. Requires a logged-in GitHub CLI (otherwise it warns in pi's wording); pi's Radius upload is not available to extensions |
+| `s` | `session-sort` | Cycle the sort: recent (last updated) → created (creation time) → title (by the displayed title — the name if present, otherwise the first-message preview — A–Z, empty sessions last) → threaded (forks indented under their parent) → …; the title shows the current sort and the cursor follows its session |
+| `i` | `session-info` | The centered session-info box (what `/session` shows: name, model, message count, tokens, cost, created / updated, path, id); `y` copies all the text, `Esc` / `q` closes |
+| `c` | `session-compact` | Compact (`/compact`): a centered *Compact* box asks for an optional focus instruction (`Enter` compacts, `Esc` cancels, empty uses pi's default). After compacting the active branch of the session under the cursor, pi opens it — a non-current session is switched to first (that is "entering the conversation"). During compaction pi's own footer shows a spinner; on success the panel closes, on failure (no model, session too small, already compacted) it stays with a footer message. `c` refuses when multiple sessions are selected |
 
-## Tree pane
+## TREE pane
 
-The pane shows the tree as a folded outline: `▸` a folded side branch, `▾` an
-open one, `─` an alternative that was never continued; rows inside a branch
-are indented two columns per level (four levels at most, `… ` beyond). Side
-branches start folded, the active branch open. The filters live in the tree
-dialog (`a`), which draws the same rows with pi-style guide lines and has its
-own live search row that narrows the list. `/` in the pane is the jumping
-search of *Search* above (label / text, `tag:` for labels, `role:` for the role; a match
-inside a folded branch is unfolded). A filter chosen in
-the dialog stays on: the pane lists the same filtered tree and its header says
-so (`2/12 · user-only`); the panel opens with pi's own `treeFilterMode`
-setting (the filter `/tree` starts with).
+The pane shows the tree as a collapsible outline: `▸` a folded side branch, `▾` an expanded side branch, `─` a side branch that was never continued; rows within a branch indent two columns per level (up to four levels, deeper ones replaced by `… `). Side branches are folded by default and the active branch is expanded. Filtering lives in the tree dialog (`a`), which draws the same rows with pi-style guide lines and has its own live search row to narrow the list. `/` in the pane is the jump-style search from *Search* above (label / body, `tag:` matches the label, `role:` matches the role; a match inside a folded branch is expanded). A filter chosen in the dialog is kept: the pane lists the same filtered tree and marks it in the title (`2/12 · user-only`); when the panel opens it adopts pi's own `treeFilterMode` setting (the filter `/tree` starts with).
 
-| Key             | Action                                              |
-| --------------- | --------------------------------------------------- |
-| ~~`j` `k` `↑` `↓`~~ | ~~Move cursor~~                                 |
-| ~~`gg` / `G`~~  | ~~Top / bottom~~                                    |
-| ~~`Enter`~~     | ~~Restore to node, like `/tree`: a centered menu asks *No summary / Summarize / Summarize with custom prompt* (`j`/`k`/`↑`/`↓` move, `Enter` pick, `Esc` back to the tree); the custom prompt is a one-line input (`Enter` summarize, `Esc` back to the menu). Switches to that session first when needed. No menu when the node already is the leaf (Enter just closes the panel) or pi's `branchSummary.skipPrompt` is on~~ |
-| ~~`z`~~         | ~~Fold / unfold the branch under the cursor: on a `▸` / `▾` row it toggles, anywhere inside a branch it folds that branch and jumps to its head (vim's `zc`); the trunk of a linear conversation has nothing to fold~~ |
-| ~~`y`~~         | ~~Copy node text (full text, like `Ctrl+x` in `/tree`)~~ |
-| ~~`T`~~         | ~~Add / edit label in a centered dialog, like lazygit's commit popup (`Enter` save, `Esc` cancel, empty removes; same as `Shift+T` in `/tree`)~~ |
-| ~~`a`~~         | ~~Open the tree dialog: the whole tree in a big box (search row on top, key hints at the bottom), same fold state as the pane; see below for its keys~~ |
+| Key | Config name | Action |
+| --- | --- | --- |
+| `j` `k` `↑` `↓` | `move-down` / `move-up` | Move the cursor |
+| `gg` / `G` | `go-top` / `go-bottom` | Top / bottom |
+| `Enter` | `tree-restore` | Restore to the node, like `/tree`: a centered menu asks *No summary / Summarize / Summarize with custom prompt* (`j`/`k`/`↑`/`↓` move, `Enter` selects, `Esc` returns to the tree); the custom prompt is a single-line input (`Enter` summarizes, `Esc` returns to the menu). Switches to the session first if needed. No menu appears when the node is itself a leaf (`Enter` just closes the panel) or when pi's `branchSummary.skipPrompt` is on |
+| `z` | `tree-fold` | Fold / unfold the branch under the cursor: toggles on a `▸` / `▾` row, and on any row inside a branch folds that branch and jumps to its head (vim's `zc`); the trunk of a linear conversation has no foldable section |
+| `y` | `tree-copy` | Copy the node text (the full text, equivalent to `Ctrl+x` in `/tree`) |
+| `T` | `tree-label` | Add / edit a label in a centered dialog, like lazygit's commit popup (`Enter` saves, `Esc` cancels, an empty value deletes it; equivalent to `Shift+T` in `/tree`) |
+| `a` | `tree-open` | Open the tree dialog: a large popup of the whole tree (search row on top, key hints at the bottom) that shares fold state with the pane; keys below |
 
-## Tree dialog (`a` from the tree pane)
+## Tree dialog (press `a` in the TREE pane)
 
-The whole tree in a big box: a search row on top, the rows in the middle
-(pi-style guide lines, a folded row shows `⊞` on its connector), key hints at
-the bottom (the footer repeats them, so there is no `?` help inside). The
-dialog has its own cursor; the pane's cursor moves to it when the dialog
-closes. Keys are resolved with the `tree-dialog` scope first, then the tree
-pane's bindings, then the global ones, so `j` `k`, `gg` `G`, `Enter`, `y`,
-`T`, `z` and `/` are the pane's keys (and follow a rebinding of those) while
-the dialog's own keys live under `keymap."tree-dialog"`. Pane switching (`h`
-`Tab` `1`..`3`), the list scope (`C` `A`), `n` `N`, `?`, `@` and quitting the panel
-(`Ctrl+c`) do nothing here.
+A large popup of the whole tree: a search row on top, rows in the middle (pi-style guide lines, a folded row shows `⊞` at the junction), key hints at the bottom (the footer repeats them, so there is no `?` help inside the dialog). The dialog has its own cursor; on close the pane cursor moves onto it. Keys resolve `tree-dialog` scope first, then the tree pane's, then global, so `j` `k`, `gg` `G`, `Enter`, `y`, `T`, `z` and `/` are the pane's keys (and follow their rebindings), while the dialog's own keys are under `keymap."tree-dialog"`. Switching panes (`h` `Tab` `1`..`3`), list scope (`C` `A`), `n` `N`, `?`, `@` and quitting the panel (`Ctrl+c`) all do nothing here.
 
-| Key             | Action                                              |
-| --------------- | --------------------------------------------------- |
-| ~~`j` `k` `↑` `↓`~~ | ~~Move the dialog's cursor~~                    |
-| ~~`gg` / `G`~~  | ~~Top / bottom~~                                    |
-| ~~`/`~~         | ~~Focus the search row; typing filters the rows live, like `/tree`: every word must appear in the row's label / text (case-insensitive), `tag:x` narrows to labels, `role:user` to the role, `after:2026-09-01` / `before:2026-09-20` to dates. `Esc` hands the keys back to the list and keeps the query (the rows stay narrowed); `/` again edits it, deleting the text clears it. `Enter` means nothing in the search row. While a query is active every match is shown (folds are cleared, like `/tree`); the folds come back once the query is empty or the dialog closes~~ |
-| ~~`Enter`~~     | ~~Restore to the row, exactly like the pane (summary menu included)~~ |
-| ~~`y`~~         | ~~Copy the row's text~~                             |
-| ~~`T`~~         | ~~Add / edit the row's label (the Label dialog opens over the tree dialog)~~ |
-| ~~`z`~~         | ~~Fold / unfold the branch under the cursor (same rule and same fold state as the pane)~~ |
-| ~~`d` `t` `u` `l` `a`~~ | ~~Filter: default (hide bookkeeping) / no tool results / user only / labeled only / all; `t` `u` `l` `a` toggle back to default when pressed again (pi's `Ctrl+d/t/u/l/a`). The tree is reloaded, folds are cleared, and the pane shows the same filter afterwards~~ |
-| ~~`Esc` / `q`~~ | ~~Close (on the list): the pane's cursor lands on the dialog's row (unfolding what hides it) and the content pane follows. In the search row `Esc` only leaves the row and `q` is just a letter~~ |
+In the table below the parenthesis after "Config name" marks which scope it belongs to (change these keys under that scope): the filter keys and the close key are in `tree-dialog`, while move / restore / copy / label / fold follow `tree` and search follows `global`.
 
-## Content pane (read-only)
+| Key | Config name (scope) | Action |
+| --- | --- | --- |
+| `j` `k` `↑` `↓` | `move-down` / `move-up` (tree) | Move the dialog's cursor |
+| `gg` / `G` | `go-top` / `go-bottom` (tree) | Top / bottom |
+| `/` | `search` (global) | Focus the search row; typing filters rows live, like `/tree`: every word must appear in the row's label / body (case-insensitive), `tag:x` narrows to the label, `role:user` to the role, `after:2026-09-01` / `before:2026-09-20` to the date. `Esc` hands keystrokes back to the list and keeps the keyword (rows stay narrowed); press `/` again to edit it, and deleting all the text clears it. `Enter` in the search row has no meaning. While a keyword is active all matches are shown (folds are cleared, like `/tree`); once the keyword is cleared or the dialog is closed the fold state is restored |
+| `Enter` | `tree-restore` (tree) | Restore to that row, exactly like the pane (including the summary menu) |
+| `y` | `tree-copy` (tree) | Copy that row's text |
+| `T` | `tree-label` (tree) | Add / edit that row's label (the Label dialog stacks over the tree dialog) |
+| `z` | `tree-fold` (tree) | Fold / unfold the branch under the cursor (same rules and fold state as the pane) |
+| `d` `t` `u` `l` `a` | `tree-filter-default` / `tree-filter-no-tools` / `tree-filter-user` / `tree-filter-labeled` / `tree-filter-all` (tree-dialog) | Filter: default (hide accounting info) / no tool results / user only / labeled only / all; pressing `t` `u` `l` `a` again returns to default (matching pi's `Ctrl+d/t/u/l/a`). The tree is reloaded and folds are cleared, and the pane then shows the same filter |
+| `Esc` / `q` | `tree-dialog-close` (tree-dialog; `Esc` is built-in and not configurable) | Close (while on the list): the pane cursor lands on the dialog's row (expanding the fold that hides it), and CONTENT follows. In the search row `Esc` only leaves the search row, and `q` is just a letter |
 
-Only scrolling and searching; copying a message is done from the tree pane (`y`).
+## CONTENT pane (read-only)
 
-| Key             | Action                |
-| --------------- | --------------------- |
-| ~~`j` `k` `↑` `↓`~~ | ~~Scroll~~        |
-| ~~`gg` / `G`~~  | ~~Top / bottom~~      |
-| ~~`/`~~         | ~~Search the rendered message text (words only, no qualifiers); the matching line is scrolled to the top, `n` / `N` step through the hits~~ |
+Only scrolling and search; copying a message is done in the TREE pane (`y`).
 
-## 鼠标
+| Key | Config name | Action |
+| --- | --- | --- |
+| `j` `k` `↑` `↓` | `move-down` / `move-up` | Scroll |
+| `gg` / `G` | `go-top` / `go-bottom` | Top / bottom |
+| `/` | `search` (global) | Search the rendered message body (bare words only, no qualifiers); a matching line is scrolled to the top and `n` / `N` step through hits |
 
-核心仍是键盘，鼠标只做轻量适配。regular（默认）和 fullscreen 两种 TUI 模式都支持：fullscreen
-由 pi 把事件派给面板，regular 模式插件自己打开 SGR 鼠标上报（需要终端支持 SGR，现代终端基本都行；
-面板打开期间终端自己的选中 / 滚动被接管，关闭后恢复）。见 `docs/issues.md`。
+## Mouse
 
-| 操作                | 行为                                                       |
-| ------------------- | ---------------------------------------------------------- |
-| 滚轮 / 三指上下      | 滚动指针所在面板的视图（列表只滚动、不移动选中项；CONTENT 按行滚动），不改变焦点 |
-| 单击                | 焦点切到指针所在面板；点在列表项上时同时把光标移到该项           |
-| 双击 SESSIONS       | 进入该会话（等价于 `Enter` / resume）                      |
-| 双击 TREE           | 折叠 / 展开光标所在分支（等价于 `z`）                       |
+The core is still the keyboard; the mouse is only lightly supported. Both regular (default) and fullscreen TUI modes are supported: in fullscreen pi dispatches events to the panel, while in regular mode the plugin turns on SGR mouse reporting itself (needs a terminal that supports SGR, which virtually all modern terminals do; while the panel is open the terminal's own selection / scrolling is taken over, and restored on close). See `docs/issues.md`.
+
+| Action | Behavior |
+| --- | --- |
+| Wheel / three-finger up-down | Scroll the view of the pane under the pointer (a list only scrolls, it does not move the selection; CONTENT scrolls by line), without changing focus |
+| Single click | Focus moves to the pane under the pointer; clicking a list item also moves the cursor to it |
+| Double-click SESSIONS | Enter that session (equivalent to `Enter` / resume) |
+| Double-click TREE | Fold / unfold the branch under the cursor (equivalent to `z`) |
+
+
+
