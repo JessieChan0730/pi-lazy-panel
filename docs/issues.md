@@ -57,3 +57,11 @@
 - 原因：pi 的 regular 模式用 `TuiMainScreen`，不开启终端鼠标追踪，也没有 `handleMouse`，把鼠标交给终端模拟器；只有 fullscreen 的 `TuiAltScreen` 才开鼠标并派发给（含 overlay 的）组件。
 - 处理：`index.ts` 打开面板时按 `tui.mode` 分流——fullscreen 继续靠 pi 派发到 `handleMouse`；regular 模式由插件自己写 `\x1b[?1000h\x1b[?1006h` 打开 SGR 鼠标上报，用 `tui.addInputListener` 截获原始序列，`ui/mouse-input.ts` 的 `parseSgrMouseChunk` + `MouseTracker` 解析成 `TuiMouseEvent` 再喂给 `panel.handleMouse`，关闭时写 `\x1b[?1000l\x1b[?1006l` 恢复。两种模式现在都能用。
 - 残留说明：需要终端支持 SGR 鼠标（1006，现代终端基本都支持）；面板打开期间终端自己的选中 / 滚动被接管，关闭后恢复。快速触控板滚动时终端会把多条 wheel 上报合并进一次读入，`parseSgrMouseChunk` 会拆开逐条处理。
+
+### 自定义功能键（F1–F12）在 kitty 键盘协议下不生效（2026-09-25）
+
+- 现象：把某个动作的键位在 `~/.pi/agent/lazy-panel.json` 里自定义成 `F1` 后，footer 提示确实变成 `F1`（说明配置读到了、`chordLabel` 标签解析正常），但按 F1 没反应；换成普通字母键（如 `p`）立刻生效。用户实测：**退出 herdr（终端不再开 kitty 键盘协议）后 F1 就正常了**。
+- 根因：不在本插件，在依赖 `@earendil-works/pi-tui` 的按键匹配（`dist/keys.js`）。`matchesKey` 里 F1–F12 的分支只认传统转义序列 `\x1bOP` / `\x1b[11~` / `\x1b[[A`（`matchesLegacySequence`），**没有 kitty 那一路**（对比方向键 / Home / PageUp 都是 `legacy || matchesKittySequence` 两条路都走）；兜底的 `parseKey` → `formatParsedKey` 把码位翻成键名时也**没有 f1–f12 分支**，`KITTY_FUNCTIONAL_KEY_EQUIVALENTS` 同样没映射 F 键码位（57364+）。所以 kitty 键盘协议激活时，F1 以 CSI-u 序列（如 `\x1b[57364u`）到达，pi-tui 匹配不上 → 无反应。herdr 会开 kitty 协议，退出后终端回退到传统序列，F1 就能被 `\x1bOP` 匹配上。
+- 佐证：`test/keymap.test.ts` 里 `resolveKeys(..., ["\x1bOP"])` → help 的用例是过的，说明传统序列下功能键匹配本来没问题，问题只在 kitty 协议下。我们自己的 `src/config/keys.ts` 的 `matchesKeyId` 兜底只 `decodeKittyPrintable` 单字符可打印键（`keyId.length === 1`），功能键（"f1" 长度 2）走不到这个兜底。
+- 影响：普通字母 / 数字 / 符号 / `ctrl+x` / `alt+x` 等自定义键位都正常，只有功能键在 kitty 协议终端（如 herdr）里失灵。
+- 备选方案（暂不处理）：在本插件 `matchesKeyId` 里加一段 kitty CSI-u 兜底——自己解析序列，把码位 57364–57375 映射成 `f1`–`f12`（含修饰位），绕开 pi-tui 的盲区；**不能改 / vendor node_modules**（依赖须留 `peerDependencies`）。或等 pi-tui 给功能键补上 kitty 分支。
