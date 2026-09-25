@@ -1,0 +1,65 @@
+name: Release
+
+# 推送 vX.Y.Z 形式的 tag 时触发：先跑把关检查，通过后同时发布 npm 包和 GitHub Release。
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write   # 创建 GitHub Release 需要写权限
+  id-token: write   # npm --provenance（供应链证明）需要 OIDC token
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # 拉全历史 + tag，gh release --generate-notes 才能和上一个 tag 做差异
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          # 写入使用 NODE_AUTH_TOKEN 的 .npmrc，token 发布才生效
+          registry-url: https://registry.npmjs.org
+
+      - name: Install dependencies
+        run: npm ci
+
+      # tag（去掉开头的 v）必须和 package.json 的 version 一致，否则拒绝发布
+      - name: Verify tag matches package.json version
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          TAG_VERSION=${GITHUB_REF_NAME#v}
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::tag $GITHUB_REF_NAME 与 package.json 版本 $PKG_VERSION 不一致"
+            exit 1
+          fi
+
+      # 发布前跑和 pre-push 同一批把关检查
+      # （提交消息 / 改动文件那两项针对 PR，对 tag 构建没意义，这里不跑）
+      - name: Lint
+        run: npm run lint
+      - name: Typecheck
+        run: npm run check
+      - name: i18n check
+        run: npm run i18n:check
+      - name: Test
+        run: npm test
+
+      # 发布到 npm；NPM_TOKEN 是 Automation 类型 token，可绕过 2FA
+      - name: Publish to npm
+        run: npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # 用同一个 tag 建 GitHub Release，发布说明按上一个 tag 的提交自动生成
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --title "pi-lazy-panel $GITHUB_REF_NAME" --generate-notes
