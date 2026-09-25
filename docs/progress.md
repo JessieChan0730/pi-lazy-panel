@@ -40,7 +40,7 @@
 
 - ~~完成 session tree context 的 j/k 方向键的上下移动~~
 - ~~完成 session tree context 的 gg 和 G 的滚动到顶部和底部的快捷键操作~~
-- ~~完成 session  J/K 移动右侧 context 的快捷键的功能~~
+- ~~完成 session J/K 移动右侧 context 的快捷键的功能~~
 
 注意:
 
@@ -438,7 +438,7 @@
 - 目录规范：翻译放 `src/i18n/locales/{en,zh}.json`（英文是基准语言 / source of truth），用 `fs` 读（不走 JSON import，省掉 NodeNext + verbatimModuleSyntax 的坑，也让运行时和扫描脚本读同一份格式）。`files` 里的 `src` 已经覆盖，随包发布。
 - 文案改造：约定**不在模块顶层用 `t()` 计算 `export const`**（会在 import 期求值，可能早于 `initI18n`），需要文案的地方一律写成函数、渲染时才 `t()`。因此 `config/keymap.ts` 的 `ACTION_DESCRIPTIONS` / `HELP_GROUPS` / `SCOPE_TITLES` / `PANE_TITLES` / `TREE_DIALOG_HINT_TEXT` 改成 `actionDescription()` / `helpGroupText()` / `scopeTitle()` / `paneTitleText()` / `treeDialogHintText()`；各 widget 预设的标题 / 提示（label/rename/new/import/fork/restore/export/confirm/session-info/changelog/tree-dialog、`search-bar` 的 `searchLabel()`）都由 const 改成函数；`footer` 的 SHORT / mode 名、三个面板的空态 / 计数 / 角色前缀（`user:`→`t("role.user")`）/ `YOU`·`ASSISTANT`、`sessions-pane` 的 scope / sort 标签、`search-highlight` 的 `searchMeta`、`app.ts` 里全部 `setStatus(...)`（含插值 `{{error}}` / 复数 `count`）都走 `t()`。`index.ts` 在注册命令前 `initI18n()`，命令描述和 `ctx.ui.notify` 的 "TUI only" 也本地化。搜索标签从写死的 `搜索:` 改成随语言（en `Search:` / zh `搜索:`）。
 - 未本地化的部分（有意保留）：`actions/` 层抛出的技术性 Error 文本（如 `session file not found`、pi 原样措辞的 `Cannot delete the currently active session` / `GitHub CLI (gh) is not installed…`）——它们要么是诊断信息、要么刻意对齐 pi；面板把它们包在已翻译的 `xxx failed: {{error}}` 前缀里显示。会话里的 `role:` 搜索限定词、tree 的 kind 判断等数据层逻辑仍用英文标识符。
-- 扫描命令：`npm run i18n:scan`（写）/ `npm run i18n:check`（只读，CI 用）→ `scripts/i18n-scan.mjs`。扫描 `src` 里所有静态 `t("…")` 的 key，和两份 json 对齐：报告①代码用到但 en 缺失②en 有 zh 缺（需翻译）③没被用到的孤儿（动态 `t(\`ns.${x}\`)` 记下前缀 `ns`、跳过该命名空间避免误报）；写模式把缺失 key 以空串补进两份并按字母排序（译文由人 / AI 补），`--check` 有问题时退出码非 0。翻译本身这次由 AI 一次性补齐，无需联网 / API。
+- 扫描命令：`npm run i18n:scan`（写）/ `npm run i18n:check`（只读，CI 用）→ `scripts/i18n-scan.mjs`。扫描 `src` 里所有静态 `t("…")` 的 key，和两份 json 对齐：报告①代码用到但 en 缺失②en 有 zh 缺（需翻译）③没被用到的孤儿（动态 `t(\`ns.${x}\`)`记下前缀`ns`、跳过该命名空间避免误报）；写模式把缺失 key 以空串补进两份并按字母排序（译文由人 / AI 补），`--check` 有问题时退出码非 0。翻译本身这次由 AI 一次性补齐，无需联网 / API。
 - 测试：新增 `test/i18n.test.ts`（detectLocale / normalizeLocale / 初始化 / 插值 / 复数 / 缺失回退）。既有测试统一在文件顶部 `initI18n("en")`，断言仍按英文界面；用到的标题 / 提示常量改为在测试里调用对应函数取值（所见即所测），写死的 `搜索:` 断言改成 `Search:`（并用带冒号的 `Search:` 和 footer 里不带冒号的 `Search` 提示区分）。`npm run check` + `npm test`（140 个）+ `npm run i18n:check` 全过。
 - 已知小问题：会话信息弹窗的标签列改成按可见宽度对齐（中文标签宽度不一），值仍换行不截断；`role.*` 只翻译显示前缀，不影响 `role:` 搜索。
 
@@ -481,3 +481,26 @@
 实现说明（2026-09-24）：
 
 - **footer 右下角显示插件版本号**：`index.ts` 新增 `extensionVersion()`，用 `import.meta.url` + `fileURLToPath` 解析出本插件 `package.json`（跨平台，读不到就返回空串、不显示），打开面板时读一次经 `LazyPanelOptions.version` 注入。`footer.ts` 的 `renderFooter` 加 `version?` prop：muted 弱化的 `v0.1.0` 靠右对齐，先按其宽度 + 2 列留白扣掉预算再排按键提示，`left` 和版本号之间用空格撑开、整体 `fit` 到宽度（放不下时优先保留左侧提示）。只在常规 / 弹窗 footer 显示，搜索状态行不占。version 为空时输出和改动前逐字节一致（既有 footer 测试不受影响）。`npm run check` + `npm test` 通过（`deleteSession trash` 那条与本改动无关，在本机 clean tree 上也失败）。
+
+### 项目质量提高
+
+为了提高项目代码质量，完善人员合作，我希望push代码的时候能做如下检查，如果不通过请阻止代码提交：
+
+1. ~~添加 eslint，限制代码风格，主要是缩进，函数名，不能定义未使用的变量，删除未导入的包等等~~
+2. ~~typecheck ，需要检查通过~~
+3. ~~单元测试和测试用例必须全部通过~~
+4. ~~国际化（这个只检查提交的代码文件中）是否包含未添加国际化的非英文字符串，注意注释和日志不算（目前应该只能这么检查吧）~~
+5. ~~提交消息是否符合格式，符合约定式提交规范~~
+
+~~每次 push 前检查，如果不通过，拒绝此次 push~~
+
+实现说明（2026-09-25）：
+
+- 钩子：husky（`.husky/pre-push`、`.husky/commit-msg`）。`npm install` 的 `prepare` 跑 `scripts/install-hooks.mjs` 装 hooks（设 `core.hooksPath=.husky/_`）；pi 从 git 安装插件时用的是 `npm install --omit=dev`（查了 pi 源码的 `getGitDependencyInstallArgs`），那时没有 husky，脚本静默跳过，不会让 pi 安装失败。
+- pre-push（`scripts/pre-push.mjs`）六项检查并行跑、最后汇总，任何一项失败 push 就被拒绝（`git push --no-verify` 可跳过）：commit messages（commitlint 逐个查要推的提交）/ eslint（整个项目，i18n 规则除外）/ i18n text（**只查本次推送改动过的代码文件**）/ i18n keys（原有的 `i18n:check`）/ typecheck / tests（dot reporter）。"要推的提交" = 本地 sha 能到达、任何远端分支都还没有的提交（`git rev-list <sha> --not --remotes`），合并已推过的 main 不会重复查老提交。本机一次完整检查约 8 秒。
+- commit-msg：额外在 commit 时就用 commitlint 查一次（`@commitlint/config-conventional`，Merge / Revert 自动跳过），比 push 时才发现要改历史省事；push 前仍会再查一遍兜底。没加"必须英文"的规则：`fix(i18n): use "AI助手" …` 这种引用中文界面文案的合法消息会被误伤。
+- ESLint 10 flat config（`eslint.config.js`）：`@eslint/js` recommended + typescript-eslint recommended（不开类型检查，快）+ `@stylistic` 的 customize 预设（tab 缩进、双引号、分号、多行尾逗号、1tbs……）。只收紧项目已经在遵守的写法：逐条试过候选规则的违规数，零违规的才收；和现有写法不一致的微调（三元值缩进 offset、二元运算符放行尾而 `? :` / 类型 `| &` 放行首、字符串含双引号时允许单引号），`no-control-regex` 关掉（终端 UI 要匹配 `\x1b`）。另外按 CLAUDE.md 加了：顶级函数不许写成箭头函数（`no-restricted-syntax`）、命名规范（函数 / 变量 / 参数 camelCase、常量可 UPPER_CASE、类型 PascalCase，属性名不限）、本地导入必须带 `.ts`、`consistent-type-imports`。未使用的 import 用 `eslint-plugin-unused-imports`，`npm run lint:fix` 会直接删掉。
+- i18n 规则：本地插件 `scripts/eslint-plugin-i18n.mjs` 的 `i18n/no-hardcoded-text`，只对 `src` 开：字符串 / 模板字符串里出现非拉丁字母（中日韩、西里尔等）或全角标点就报错；注释天然不查，`console.*` 日志、类型位置、import 路径、对象键名、正则不算；界面符号（› • ▸ ◰ …）是 Common 字符不受影响。做成 ESLint 规则的好处是编辑器里实时提示、误报可以用 `eslint-disable-next-line` 放行。`npm run lint` 对整个 src 生效（现有代码是干净的），pre-push 按要求只拿它查改动过的文件。
+- 顺手修的：为了让 lint 通过删了几处真正未使用的代码（`sessions-pane.ts` 的 `line1Raw`、`tree-lines.ts` 的 `LEVEL_WIDTH`、`help-overlay.ts` 一次无用赋值）、一个顶级箭头函数（测试里）、两个多余的文件末尾空行；抛出的包装错误带上 `cause`。
+- 为了让"测试必须全过"在 Windows 上可用：修掉原有的 Windows 失败用例（`DeleteOptions.trashCommand` 改成 `trash: CommandSpec`，测试传 `node 假脚本.cjs`，见 issues.md）；并修了一个真实的定时器泄漏——`runCommand` 用 spawn 的 `timeout` 选项，命令不存在（ENOENT）时 Node 不发 exit、定时器不清，进程白挂 60 秒（gh 没装时在 pi 里也一样），改成自己计时、结束时清掉。测试总耗时从 71 秒降到约 8 秒。
+- 测试：新增 `test/lint.test.ts`（i18n 规则的报 / 不报场景、只作用于 src）。`npm run lint` + `npm run check` + `npm test`（173 个）+ `npm run i18n:check` 全过；pre-push 用 `git commit-tree` 造的悬空提交（不动任何分支）验证过：坏消息 + 写死中文时拒绝、合法时放行，commit-msg 钩子同样验证过。

@@ -39,12 +39,16 @@ npm run install:pi     # pi install .，把本目录以本地路径注册到 ~/.
 npm run uninstall:pi   # pi remove .，从 pi 中移除
 npm run i18n:scan      # 扫描 src 里的 t("…") key，和 src/i18n/locales/{en,zh}.json 对齐（缺失的以空串补进去、按字母排序），报告缺失 / 需翻译 / 孤儿
 npm run i18n:check     # 同上但只读不写，有不一致时退出码非 0（CI 用）
+npm run lint           # ESLint（eslint.config.js）：@stylistic 预设（tab 缩进等）、命名规范、未使用变量 / import、顶级函数不用箭头函数、本地导入带 .ts、src 里不许写死非英文文案
+npm run lint:fix       # 自动修复能修的（缩进、引号、未使用的 import……）
 ```
+
+- git hooks（husky，`npm install` 时由 `prepare` 自动安装）：commit 时 `.husky/commit-msg` 用 commitlint 检查约定式提交；push 前 `.husky/pre-push` → `scripts/pre-push.mjs` 并行跑 提交消息 / eslint / i18n 写死文案（只查本次推送改动的代码文件）/ i18n:check / tsc / 全部测试，任何一项失败就拒绝 push（紧急时 `git push --no-verify`）。
 
 - 运行单个测试文件：`node --import tsx --test test/ui.test.ts`
 - 按名称过滤：`node --import tsx --test --test-name-pattern="frame" test/ui.test.ts`
 - 没有构建步骤：pi 直接加载 `src/index.ts`（见 `package.json` 的 `pi.extensions`）。`install:pi` 注册的是目录路径，改完代码后重启 pi 或在 pi 里输入 `/reload` 即为最新代码。
-- 没有 linter，`.editorconfig`（tab 缩进、LF）是格式规范。
+- 格式规范是 `.editorconfig`（tab 缩进、LF）+ `eslint.config.js`，提交前跑 `npm run lint`。
 - pi 扩展 API 文档在安装后的 `node_modules/@earendil-works/pi-coding-agent/docs/{extensions,tui,session-format}.md`，涉及 pi / pi-tui API 时先查文档，不要猜。
 
 ## 项目目录结构
@@ -109,7 +113,14 @@ src/
     └── paths.ts              # 用户输入的路径：去引号、~ 用 os.homedir() 展开（Windows 也能用）、相对路径按 cwd 解析
 
 scripts/
-└── i18n-scan.mjs             # 扫描 t("…") key 并和 locales 对齐（i18n:scan 写 / i18n:check 只读）
+├── i18n-scan.mjs             # 扫描 t("…") key 并和 locales 对齐（i18n:scan 写 / i18n:check 只读）
+├── eslint-plugin-i18n.mjs    # 本地 ESLint 规则 i18n/no-hardcoded-text：src 里的字符串出现非拉丁字母 / 全角标点就报错（注释、console 日志、类型、键名、import 路径不算）
+├── install-hooks.mjs         # npm prepare：装 husky hooks；没有 husky（pi 用 --omit=dev 安装 git 来源插件时）静默跳过
+└── pre-push.mjs              # pre-push 检查：算出要推的提交和改动文件，并行跑六项检查并汇总，失败退出码 1
+
+eslint.config.js              # ESLint flat config
+commitlint.config.js          # 约定式提交（@commitlint/config-conventional）
+.husky/                       # pre-push、commit-msg 两个钩子（_/ 是 husky 生成的，已被忽略）
 
 test/
 ├── smoke.test.ts             # 键位表、搜索解析的冒烟测试
@@ -121,6 +132,7 @@ test/
 ├── changelog.test.ts         # parseChangelog 的切分 / 跳过无版本段、文件缺失
 ├── search.test.ts            # parseSearchQuery 的限定词解析、matchTreeRow / matchSessionRow / matchesTokens 的匹配规则、findMatchRanges
 ├── i18n.test.ts              # 语言检测 / 初始化 / 插值 / 复数 / 缺失回退（initI18n / detectLocale / normalizeLocale / t）
+├── lint.test.ts              # i18n/no-hardcoded-text 规则：报 / 不报的场景、只作用于 src
 └── ui.test.ts                # 格式化、frame 几何、树过滤 / 折叠、TreeDialog 搜索行、highlightLine / searchMeta
 
 docs/keybindings.md           # 默认快捷键表，新增 ActionId 时同步更新
@@ -149,6 +161,7 @@ AGENTS.md                     # 仅指向本文件，规则统一在这里维护
 11. 更新 design, progress, keybindings 这些文档，提交消息固定为 `chore(doc): update doc by $progress` 后面 $变量 根据实际修改的文档来定
 12. 新增功能一定要考虑跨平台，不要使用某些特定平台的特性，比如路径使用`~/` 这个在 windows下是会报错的。
 13. 所有 UI 文案走 `src/i18n` 的 `t()`，中英两份 `src/i18n/locales/{en,zh}.json` 同步维护（英文是基准）；**不要在模块顶层用 `t()` 计算 `export const`**（import 期求值会早于 `initI18n`），需要文案的地方写成函数、渲染时才调用。改完跑 `npm run i18n:check` 确认对齐。i18next 放 `dependencies`（第 6 条只约束那三个 pi 包，不影响新增普通依赖）。
+14. 完成任务前跑 `npm run lint`、`npm run check`、`npm test`、`npm run i18n:check` 确认全过——push 时 pre-push 钩子会检查同样的内容，不过就推不上去；不要用 `--no-verify` 绕过。
 
 ## 重要文档
 

@@ -45,7 +45,7 @@
 - 原因：扩展 API 只有 `AgentSession.exportToHtml`（只能导出当前会话，ctx 上也没开放），包的 `exports` 只开放入口，渲染 HTML 的 `exportFromFile` 引不到，所以插件调用 pi 公开的 CLI `pi --export <file> <out>`，它本来就是为"任意会话文件"准备的、不带运行时状态。Radius 要 pi 的 `modelRuntime` 取凭据，扩展拿不到。
 - 备选方案（暂不处理）：pi 以后在 ctx 上开放导出 / 分享时改用官方 API；或者对当前会话单独走 pi 自带的 `/export`（需要扩展能触发内置命令，目前不行）。
 
-### Windows 上 `deleteSession` 的假 trash 测试失败（2026-09-24 发现，原有问题）
+### ~~Windows 上 `deleteSession` 的假 trash 测试失败（2026-09-24 发现，原有问题）~~（2026-09-25 解决：`DeleteOptions.trash` 改成 `CommandSpec`，测试传 `node 假脚本.cjs`，不再需要 .cmd）
 
 - 现象：`test/session-actions.test.ts` 的 `deleteSession: a trash command that removes the file counts as trash` 在 Windows 上失败（期望 `trash`，实际 `unlink`），改动前的代码上同样失败，其他平台应当正常。
 - 原因：测试用一个 `trash.cmd` 包装脚本假扮 trash，但 Node 在 Windows 上不再允许不开 shell 直接 `spawnSync` 一个 `.cmd`（CVE-2024-27980 之后会报 EINVAL），于是回退到了 unlink。功能本身不受影响：Windows 上通常也没有 `trash` 命令，本来就是 unlink。
