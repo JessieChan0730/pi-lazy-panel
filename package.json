@@ -15,11 +15,11 @@
 	"license": "MIT",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/JessieChan0730/PiLazyPanel.git"
+		"url": "git+https://github.com/JessieChan0730/pi-lazy-panel.git"
 	},
-	"homepage": "https://github.com/JessieChan0730/PiLazyPanel#readme",
+	"homepage": "https://github.com/JessieChan0730/pi-lazy-panel#readme",
 	"bugs": {
-		"url": "https://github.com/JessieChan0730/PiLazyPanel/issues"
+		"url": "https://github.com/JessieChan0730/pi-lazy-panel/issues"
 	},
 	"files": [
 		"index.ts",

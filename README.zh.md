@@ -12,7 +12,7 @@ pi-lazy-panel 是 [pi](https://pi.dev) 会话和会话树管理的面板，提�
 
 ## 界面预览
 
-![pi-lazy-panel 界面预览](https://raw.githubusercontent.com/JessieChan0730/PiLazyPanel/HEAD/assets/readme/preview-zh.png)
+![pi-lazy-panel 界面预览](https://raw.githubusercontent.com/JessieChan0730/pi-lazy-panel/HEAD/assets/readme/preview-zh.png)
 
 ## 特点
 

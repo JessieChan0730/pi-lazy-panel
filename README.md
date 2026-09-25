@@ -12,7 +12,7 @@ The everyday session operations (new / resume / fork / clone / rename / delete /
 
 ## Preview
 
-![pi-lazy-panel preview](https://raw.githubusercontent.com/JessieChan0730/PiLazyPanel/HEAD/assets/readme/preview-en.png)
+![pi-lazy-panel preview](https://raw.githubusercontent.com/JessieChan0730/pi-lazy-panel/HEAD/assets/readme/preview-en.png)
 
 ## Features
 
