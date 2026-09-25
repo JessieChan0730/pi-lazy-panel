@@ -98,7 +98,6 @@ function renderRow(row: SessionRow, inner: number, isCursor: boolean, p: Session
 	const rightW = visibleWidth(date) + 1;
 	const titleW = Math.max(1, inner - visibleWidth(marker) - visibleWidth(indent) - rightW);
 	const titleText = truncateToWidth(title || emptyTitle, titleW, "…", true);
-	const line1Raw = `${marker}${indent}${titleText} ${date}`;
 
 	// line 2: model · cwd · N msgs
 	const details = [row.model ?? "", shortenPath(row.cwd), t("pane.msgs", { count: row.messageCount })].filter(Boolean).join(" · ");

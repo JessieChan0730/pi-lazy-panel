@@ -73,7 +73,7 @@ function topBorder(o: FrameOptions, inner: number): string {
 	const titleW = visibleWidth(title);
 	const metaW = visibleWidth(meta);
 	// "┌─ TITLE ───── meta ─┐"
-	let fill = inner - 1 - titleW - metaW - (meta ? 1 : 0);
+	const fill = inner - 1 - titleW - metaW - (meta ? 1 : 0);
 	if (fill < 0) {
 		// Not enough room: drop meta, then clip title.
 		const t = truncateToWidth(title, Math.max(0, inner - 2), "…", false);

@@ -37,7 +37,9 @@ test("parseSgrMouseChunk splits a batched trackpad-scroll chunk, rejects mixed c
 	assert.equal(parseSgrMouseChunk(""), undefined);
 });
 
-const size = () => ({ width: 100, height: 20 });
+function size() {
+	return { width: 100, height: 20 };
+}
 
 test("MouseTracker turns wheel reports into wheel events (delta sign, size, modifiers)", () => {
 	const t = new MouseTracker({ size, wheelScrollLines: 3 });

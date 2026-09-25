@@ -84,8 +84,8 @@ export async function resumeSession(ctx: ResumeContext, sessionFile: string, opt
 export const CURRENT_SESSION_DELETE_ERROR = "Cannot delete the currently active session";
 
 export interface DeleteOptions {
-	/** Command tried before falling back to `unlink` (default `trash`; tests pass a name that does not exist). */
-	trashCommand?: string;
+	/** Command tried before falling back to `unlink` (default `trash`; tests pass `node fake.cjs` or one that does not exist). */
+	trash?: CommandSpec;
 }
 
 /**
@@ -103,7 +103,8 @@ export async function deleteSession(ctx: SessionContext, sessionFile: string, op
 	if (!existsSync(sessionFile)) throw new Error(`session file not found: ${sessionFile}`);
 	// 文件名以 - 开头时要用 -- 隔开，否则会被 trash 当成选项。
 	const trashArgs = sessionFile.startsWith("-") ? ["--", sessionFile] : [sessionFile];
-	const trash = spawnSync(options.trashCommand ?? "trash", trashArgs, { encoding: "utf-8" });
+	const trashSpec = options.trash ?? { command: "trash", args: [] };
+	const trash = spawnSync(trashSpec.command, [...trashSpec.args, ...trashArgs], { encoding: "utf-8" });
 	// trash 报告成功，或者文件已经不在了，都算进了回收站。
 	if (trash.status === 0 || !existsSync(sessionFile)) return "trash";
 	try {
@@ -112,7 +113,7 @@ export async function deleteSession(ctx: SessionContext, sessionFile: string, op
 	} catch (err) {
 		const hint = trashErrorHint(trash);
 		const message = err instanceof Error ? err.message : String(err);
-		throw new Error(hint ? `${message} (${hint})` : message);
+		throw new Error(hint ? `${message} (${hint})` : message, { cause: err });
 	}
 }
 
@@ -388,10 +389,14 @@ function runCommand(spec: CommandSpec, args: string[], timeoutMs: number): Promi
 		const finish = (result: RunResult): void => {
 			if (settled) return;
 			settled = true;
+			clearTimeout(timer);
 			done(result);
 		};
 		// stdin 必须关掉：子进程继承 pi 的终端会抢走按键。
-		const child = spawn(spec.command, [...spec.args, ...args], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true, timeout: timeoutMs });
+		const child = spawn(spec.command, [...spec.args, ...args], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+		// 超时自己计时、结束时清掉：spawn 的 timeout 选项只在 exit 时清定时器，命令不存在（ENOENT）时
+		// 没有 exit，定时器会白白挂满整个超时（gh 没装时进程多挂 60 秒，测试也因此多等一分钟）。
+		const timer = setTimeout(() => child.kill(), timeoutMs);
 		child.stdout.on("data", (chunk) => (stdout += String(chunk)));
 		child.stderr.on("data", (chunk) => (stderr += String(chunk)));
 		child.on("error", (error) => finish({ code: null, stdout, stderr, error }));

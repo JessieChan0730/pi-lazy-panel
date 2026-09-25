@@ -391,7 +391,7 @@ test("compactSession in another session: switch first, then compact with the rep
 });
 
 /** A `trash` command that certainly does not exist, so the tests never touch the real system trash. */
-const NO_TRASH = { trashCommand: "lazy-panel-no-such-trash-command" };
+const NO_TRASH = { trash: { command: "lazy-panel-no-such-trash-command", args: [] } };
 
 test("deleteSession: refuses the current session, falls back to unlink when trash is unavailable, reports missing files", async (t) => {
 	const dir = tempDir(t);
@@ -417,18 +417,10 @@ test("deleteSession: a trash command that removes the file counts as trash", asy
 	const s = makeSession(dir);
 	const other = makeSession(mkdtempSync(join(dir, "other-")));
 	const ctx = { sessionManager: SessionManager.open(s.file) };
-	// `node -e` stands in for the trash CLI: it deletes its argument like a real one would move it away
-	const fake = join(dir, "fake-trash.js");
-	const { writeFileSync } = await import("node:fs");
-	writeFileSync(fake, "require('node:fs').unlinkSync(process.argv[2]);\n");
-	// spawnSync 直接找命令名：用一个包装脚本把 node 和脚本路径拼起来（Windows 上是 .cmd）
-	const wrapper = process.platform === "win32" ? join(dir, "trash.cmd") : join(dir, "trash");
-	writeFileSync(
-		wrapper,
-		process.platform === "win32" ? `@"${process.execPath}" "${fake}" %*\r\n` : `#!/bin/sh\nexec "${process.execPath}" "${fake}" "$@"\n`,
-		{ mode: 0o755 },
-	);
-	assert.equal(await deleteSession(ctx, other.file, { trashCommand: wrapper }), "trash");
+	// `node fake-trash.cjs` stands in for the trash CLI: it deletes its argument like a real one would move it away.
+	// 交给 actions 的是 CommandSpec（node + 脚本），Windows 上不需要 .cmd 包装（Node 不开 shell 起不了 .cmd）。
+	const trash = fakeProgram(dir, "fake-trash", "require('node:fs').unlinkSync(process.argv[2]);\n");
+	assert.equal(await deleteSession(ctx, other.file, { trash: { command: trash.command, args: trash.args.slice(0, 1) } }), "trash");
 	assert.equal(existsSync(other.file), false);
 });
 

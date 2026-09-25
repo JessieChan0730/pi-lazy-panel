@@ -27,9 +27,6 @@
 import { treeChildren } from "../data/tree-fold.ts";
 import type { TreeRow } from "../types.ts";
 
-/** Columns per indent level ("├⊟ " / "│  "). */
-const LEVEL_WIDTH = 3;
-
 /** One `│` (or blank) column carried by descendants of a connector row. */
 interface Gutter {
 	position: number;

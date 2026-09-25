@@ -114,10 +114,7 @@ function wrapText(text: string, width: number): string[] {
 			cur = candidate;
 			continue;
 		}
-		if (cur) {
-			out.push(cur);
-			cur = "";
-		}
+		if (cur) out.push(cur);
 		// 单词自身就超过一行：按可见列硬断成多段。
 		let rest = word;
 		while (visibleWidth(rest) > width) {
