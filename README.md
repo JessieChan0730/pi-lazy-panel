@@ -1,32 +1,34 @@
-## 简介
+**English** | [中文](./README.zh.md)
 
-pi-lazy-panel 是 [pi](https://pi.dev) 会话和会话树管理的面板，提供类似于 lazygit 的操作方式和 TUI 风格。安装后在 pi 中执行 `/lazy-panel`，即可打开一个占满终端的三面板界面：
+## Introduction
 
-- 左上 **SESSIONS**：历史会话列表（对应 `/resume`）
-- 左下 **TREE**：当前所选会话的对话树（对应 `/tree`，随上方选择自动切换）
-- 右侧 **CONTENT**：所选节点的对话详情，用 pi 原生 Markdown 渲染，区分「我」和「AI」
+pi-lazy-panel is a panel for managing [pi](https://pi.dev) sessions and session trees, offering a lazygit-style workflow and TUI look. Once installed, run `/lazy-panel` inside pi to open a full-terminal three-pane interface:
 
-围绕会话的常用操作（新建 / 恢复 / 分叉 / 克隆 / 改名 / 删除 / 压缩 / 导出 / 导入 / 分享 / 复制）都收敛成单键快捷键，全程无需鼠标。
+- Top-left **SESSIONS**: the history of past sessions (mirrors `/resume`)
+- Bottom-left **TREE**: the conversation tree of the selected session (mirrors `/tree`, switches automatically with the selection above)
+- Right **CONTENT**: the conversation detail of the selected node, rendered with pi's native Markdown, distinguishing "me" from "AI"
 
-## 界面预览
+The everyday session operations (new / resume / fork / clone / rename / delete / compact / export / import / share / copy) are all condensed into single-key shortcuts — no mouse required.
 
-![pi-lazy-panel 界面预览](assets/readme/preview-zh.png)
+## Preview
 
-## 特点
+![pi-lazy-panel preview](assets/readme/preview-en.png)
 
-1. 纯粹的键盘流，大部分的操作使用一个键就能完成（hjkl 移动、d 删除、r 改名，参考 lazygit）
-2. 三面板联动：SESSIONS → TREE → CONTENT 随光标自动级联刷新
-3. 覆盖全套会话命令：resume / new / fork / clone / rename / delete / compact / export / import / share / copy
-4. 会话树导航：可恢复到任意节点，并选择「不摘要 / 摘要 / 自定义摘要」处理被放弃的分支
-5. lazygit 风格搜索：`/` 就地跳转、`n` / `N` 循环，支持 `name:` `model:` `path:` `tag:` `role:` `after:` `before:` 限定词
-6. 主题跟随 pi 自动切换
-7. 支持中英文（跟随系统语言，可在配置里覆盖）
-8. 快捷键完全可自定义：在 `~/.pi/agent/lazy-panel.json` 里重绑任意动作
-9. 鼠标轻量适配（滚轮滚动、单击聚焦、双击进入 / 折叠）
+## Features
 
-## 快速开始
+1. Pure keyboard flow — most operations take a single key (hjkl to move, `d` to delete, `r` to rename, à la lazygit)
+2. Three linked panes: SESSIONS → TREE → CONTENT cascade-refresh as the cursor moves
+3. Full coverage of the session commands: resume / new / fork / clone / rename / delete / compact / export / import / share / copy
+4. Session-tree navigation: restore to any node, choosing "No summary / Summarize / Summarize with custom prompt" for the abandoned branch
+5. lazygit-style search: `/` jumps in place, `n` / `N` cycle, with `name:` `model:` `path:` `tag:` `role:` `after:` `before:` qualifiers
+6. Theme follows pi automatically
+7. Bilingual — English and Chinese (follows the system language, overridable in the config)
+8. Fully customizable keybindings: rebind any action in `~/.pi/agent/lazy-panel.json`
+9. Light mouse support (wheel to scroll, click to focus, double-click to enter / fold)
 
-需要已安装 [pi](https://pi.dev)，在 pi 中执行安装命令：
+## Quick start
+
+Requires [pi](https://pi.dev) to be installed. Run the install command inside pi:
 
 ```bash
 # npm
@@ -36,39 +38,39 @@ pi install npm:pi-lazy-panel
 pi install git:github.com/JessieChan0730/pi-lazy-panel
 ```
 
-安装后在 pi 里执行 `/lazy-panel` 打开面板，`?` 可查看当前面板的全部快捷键。
+After installing, run `/lazy-panel` inside pi to open the panel; `?` shows all shortcuts for the current pane.
 
-## 本地开发
+## Local development
 
-pi 相关的包是 `devDependencies`，克隆后必须先安装依赖：
+The pi-related packages are `devDependencies`, so you must install dependencies after cloning:
 
 ```bash
-npm install            # 安装依赖（含 pi 相关包，默认不会自动装）
-npm run dev            # 用 pi -e ./src/index.ts 临时加载插件，不写配置
-npm run install:pi     # pi install . 把本目录注册进 pi，只需一次；改完代码在 pi 里 /reload 即最新
+npm install            # install dependencies (pi packages included; not installed automatically by default)
+npm run dev            # load the plugin temporarily via pi -e ./src/index.ts, without writing config
+npm run install:pi     # pi install . registers this directory into pi (once only); after editing code, run /reload in pi to pick up the latest
 ```
 
-提交前请跑全部检查（与 pre-push 钩子一致）：
+Run the full check suite before committing (same as the pre-push hook):
 
 ```bash
 npm run lint           # ESLint
 npm run check          # tsc --noEmit
-npm test               # 单元测试
-npm run i18n:check     # 中英文案对齐
+npm test               # unit tests
+npm run i18n:check     # English/Chinese copy alignment
 ```
 
-## 兼容性
+## Compatibility
 
-- **运行环境**：Node.js ≥ 20。
-- **pi 版本**：作为 pi 插件运行，依赖 pi 的会话 API（`@earendil-works/pi-coding-agent`）。
-- **运行模式**：仅在 pi 的 TUI 模式下可用（非 TUI 模式下 `/lazy-panel` 会拒绝打开）。
-- **操作系统**：跨平台，Windows / macOS / Linux 均可（路径按平台统一处理）。
-- **终端**：regular 模式下的鼠标支持需要终端支持 SGR 鼠标上报（现代终端基本都支持）；不支持也不影响键盘操作。
-- **可选外部命令**：`/share` 需要已登录的 GitHub CLI（`gh`）；删除会话时若存在 `trash` 则移入回收站，否则直接删除。
+- **Runtime**: Node.js ≥ 20.
+- **pi version**: runs as a pi plugin, depending on pi's session API (`@earendil-works/pi-coding-agent`).
+- **Run mode**: available only in pi's TUI mode (`/lazy-panel` refuses to open outside TUI mode).
+- **OS**: cross-platform — Windows / macOS / Linux all work (paths are handled uniformly per platform).
+- **Terminal**: mouse support in regular mode needs a terminal that supports SGR mouse reporting (virtually all modern terminals do); without it, keyboard operation is unaffected.
+- **Optional external commands**: `/share` needs a logged-in GitHub CLI (`gh`); when deleting a session, `trash` is used if available (moving it to the recycle bin), otherwise the file is deleted directly.
 
-## 配置文件
+## Configuration
 
-配置文件位于 `~/.pi/agent/lazy-panel.json`，所有字段均为可选，缺省时使用内置默认值：
+The config file lives at `~/.pi/agent/lazy-panel.json`. Every field is optional and falls back to a built-in default when omitted:
 
 ```json
 {
@@ -83,15 +85,15 @@ npm run i18n:check     # 中英文案对齐
 }
 ```
 
-| 字段              | 说明             | 可选值 / 范围                                       | 默认               |
-| ----------------- | ---------------- | --------------------------------------------------- | ------------------ |
-| `locale`          | UI 语言          | `"en"` / `"zh"`                                     | 跟随系统语言       |
-| `defaultScope`    | 打开时的会话范围 | `"current-folder"` / `"all"`                        | `"current-folder"` |
-| `defaultSort`     | 会话列表排序     | `"recent"` / `"created"` / `"title"` / `"threaded"` | `"recent"`         |
-| `leftColumnRatio` | 左侧列宽占比     | `0.15` ~ `0.6`                                      | `0.25`             |
-| `keymap`          | 自定义快捷键     | 见下                                                | 内置键位           |
+| Field             | Description                     | Values / range                                      | Default                |
+| ----------------- | ------------------------------- | --------------------------------------------------- | ---------------------- |
+| `locale`          | UI language                     | `"en"` / `"zh"`                                     | follows system language |
+| `defaultScope`    | session scope on open           | `"current-folder"` / `"all"`                        | `"current-folder"`     |
+| `defaultSort`     | session list ordering           | `"recent"` / `"created"` / `"title"` / `"threaded"` | `"recent"`             |
+| `leftColumnRatio` | left column width ratio         | `0.15` ~ `0.6`                                      | `0.25`                 |
+| `keymap`          | custom keybindings              | see below                                           | built-in keys          |
 
-`keymap` 按 `scope`（`global` / `sessions` / `tree` / `content` / `tree-dialog`）分组，键为动作 id、值为一个或多个 chord（如 `"ctrl+d"`、`["A", "ctrl+space"]`）；用户提供的键位**整体替换**该动作的默认值，`null` 表示解绑。完整的动作 id 与键位说明见 [docs/keybindings.md](./docs/keybindings.md)。
+`keymap` is grouped by `scope` (`global` / `sessions` / `tree` / `content` / `tree-dialog`); the key is an action id and the value is one or more chords (e.g. `"ctrl+d"`, `["A", "ctrl+space"]`). A user-provided binding **replaces the action's default entirely**, and `null` unbinds it. See [docs/keybindings.md](./docs/keybindings.md) for the full list of action ids and keybindings.
 
 ## License
 
