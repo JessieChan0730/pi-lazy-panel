@@ -65,6 +65,8 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 			const config = await loadConfig(getAgentDir());
+			// 用户配置里的 locale（en / zh）覆盖系统语言；没配就沿用上面按系统语言检测的结果。t() 在渲染时才调用，这里切换后面板 UI 即用新语言。
+			if (config.locale) initI18n(config.locale);
 			// pi 自己的 branchSummary.skipPrompt 打开时，TREE Enter 和内置 /tree 一样不弹摘要菜单；
 			// treeFilterMode 是内置 /tree 的默认过滤，面板的 TREE 也从它开始。
 			const piSettings = loadPiSettings(ctx.cwd, getAgentDir(), ctx.isProjectTrusted());

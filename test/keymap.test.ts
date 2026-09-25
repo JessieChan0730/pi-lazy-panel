@@ -157,6 +157,18 @@ test("resolveConfig: invalid values fall back to defaults with warnings", () => 
 	assert.equal(resolveConfig("nope").warnings.length, 1);
 });
 
+test("resolveConfig: locale overrides system language or falls back with a warning", () => {
+	// 合法值原样保留。
+	assert.equal(resolveConfig({ locale: "zh" }).locale, "zh");
+	assert.equal(resolveConfig({ locale: "en" }).locale, "en");
+	// 未指定时不写入 locale（运行时按系统语言）。
+	assert.equal(resolveConfig({}).locale, undefined);
+	// 非法值退回系统语言并给出一条 warning。
+	const bad = resolveConfig({ locale: "fr" });
+	assert.equal(bad.locale, undefined);
+	assert.equal(bad.warnings.length, 1);
+});
+
 test("chordLabel / labelsForFocus produce readable hints", () => {
 	assert.equal(chordLabel("shift+g"), "G");
 	assert.equal(chordLabel("G"), "G");
