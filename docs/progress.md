@@ -504,3 +504,25 @@
 - 顺手修的：为了让 lint 通过删了几处真正未使用的代码（`sessions-pane.ts` 的 `line1Raw`、`tree-lines.ts` 的 `LEVEL_WIDTH`、`help-overlay.ts` 一次无用赋值）、一个顶级箭头函数（测试里）、两个多余的文件末尾空行；抛出的包装错误带上 `cause`。
 - 为了让"测试必须全过"在 Windows 上可用：修掉原有的 Windows 失败用例（`DeleteOptions.trashCommand` 改成 `trash: CommandSpec`，测试传 `node 假脚本.cjs`，见 issues.md）；并修了一个真实的定时器泄漏——`runCommand` 用 spawn 的 `timeout` 选项，命令不存在（ENOENT）时 Node 不发 exit、定时器不清，进程白挂 60 秒（gh 没装时在 pi 里也一样），改成自己计时、结束时清掉。测试总耗时从 71 秒降到约 8 秒。
 - 测试：新增 `test/lint.test.ts`（i18n 规则的报 / 不报场景、只作用于 src）。`npm run lint` + `npm run check` + `npm test`（173 个）+ `npm run i18n:check` 全过；pre-push 用 `git commit-tree` 造的悬空提交（不动任何分支）验证过：坏消息 + 写死中文时拒绝、合法时放行，commit-msg 钩子同样验证过。
+
+### github action ci 检查
+
+用户（任何人）为此用户提交 pr 的时候，需要通过ci对代码检测，包含：
+
+1. ~~eslint 的检测~~
+2. ~~typescript 的 typecheck~~
+3. ~~完整的测试用例~~
+4. ~~国际化（只对提交的文件检查）~~
+5. ~~提交消息（-m "xxxxxx"），是否符合规范~~
+
+解决方案：使用github的action即可
+
+实现说明（2026-09-25）：
+
+- 复用而不是重写：CI 和 pre-push 跑的是**同一套六项检查**。把原来写在 `scripts/pre-push.mjs` 里的检查实现（commit messages / eslint / i18n text / i18n keys / typecheck / tests）抽到新模块 `scripts/checks.mjs`，导出 `git` / `changedCodeFiles` / `runChecks`。两个入口只负责算出「要检查的提交」和「改动过的代码文件」，然后调 `runChecks`——保证本地推送前和 PR 上验证的规则完全一致，不会各写一份而漂移。
+- `scripts/pre-push.mjs` 瘦身成只做：读 git 传进来的 stdin → `commitsToPush`（本次推送新增的提交）→ `changedCodeFiles` → `runChecks`；行为和改动前逐字节一致（空 stdin 仍打印 `no new commits to check`）。
+- 新增 `scripts/ci-check.mjs`（`npm run ci`）：从 workflow 注入的 `PR_BASE_SHA` / `PR_HEAD_SHA` 算 `base..head` 之间的提交（`git rev-list --reverse base..head`）和这些提交改动过的代码文件，再调同一个 `runChecks`。两个变量都没有时（push / 手动触发）commits / files 为空，commit messages 与 i18n text 自然跳过，其余四项照常整项目跑。
+- 工作流 `.github/workflows/ci.yml`：`pull_request`（目标 main）和 `push`（main，兜底）触发；`actions/checkout@v4` 用 `fetch-depth: 0` 拿全历史（算 base..head 和逐条查提交消息都需要）；`actions/setup-node@v4` Node 22 + `cache: npm`；`npm ci` 装依赖（那三个 pi 包同时在 devDependencies 里锁了版本，`npm ci` 会装上，tsc / 测试能跑）；最后 `npm run ci`。`concurrency` 让同一 PR 的新 push 取消上一次未跑完的检查。
+- 五项要求的落点：eslint = `runChecks` 里对整个项目跑 ESLint（i18n 规则除外）；typecheck = `tsc --noEmit`；测试 = 全部单测（dot reporter）；国际化「只对提交的文件检查」= i18n text 规则（`i18n/no-hardcoded-text`）只跑 PR 改动过的代码文件（`changedCodeFiles`），另有 i18n keys 整项目对齐 locales；提交消息 = commitlint 逐个查 PR 里 `base..head` 的每个提交（和 commit-msg 钩子同一份 `commitlint.config.js`）。
+- 验证：本机用真实提交范围 `PR_BASE_SHA=0d98940 PR_HEAD_SHA=b30ae2d node scripts/ci-check.mjs` 跑通，六项全 ✓（约 9 秒）；`printf '' | node scripts/pre-push.mjs` 仍正常 no-op；`npx eslint` 单独过了三个 `.mjs` 脚本。GitHub 上的实际运行等推上去开 PR 后由 Actions 验证。
+

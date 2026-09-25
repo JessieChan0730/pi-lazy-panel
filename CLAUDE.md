@@ -41,6 +41,7 @@ npm run i18n:scan      # 扫描 src 里的 t("…") key，和 src/i18n/locales/{
 npm run i18n:check     # 同上但只读不写，有不一致时退出码非 0（CI 用）
 npm run lint           # ESLint（eslint.config.js）：@stylistic 预设（tab 缩进等）、命名规范、未使用变量 / import、顶级函数不用箭头函数、本地导入带 .ts、src 里不许写死非英文文案
 npm run lint:fix       # 自动修复能修的（缩进、引号、未使用的 import……）
+npm run ci             # CI 入口（.github/workflows/ci.yml 调用）：跑和 pre-push 同一套六项检查；PR_BASE_SHA / PR_HEAD_SHA 在时按 base..head 算提交消息和改动文件
 ```
 
 - git hooks（husky，`npm install` 时由 `prepare` 自动安装）：commit 时 `.husky/commit-msg` 用 commitlint 检查约定式提交；push 前 `.husky/pre-push` → `scripts/pre-push.mjs` 并行跑 提交消息 / eslint / i18n 写死文案（只查本次推送改动的代码文件）/ i18n:check / tsc / 全部测试，任何一项失败就拒绝 push（紧急时 `git push --no-verify`）。
@@ -116,11 +117,14 @@ scripts/
 ├── i18n-scan.mjs             # 扫描 t("…") key 并和 locales 对齐（i18n:scan 写 / i18n:check 只读）
 ├── eslint-plugin-i18n.mjs    # 本地 ESLint 规则 i18n/no-hardcoded-text：src 里的字符串出现非拉丁字母 / 全角标点就报错（注释、console 日志、类型、键名、import 路径不算）
 ├── install-hooks.mjs         # npm prepare：装 husky hooks；没有 husky（pi 用 --omit=dev 安装 git 来源插件时）静默跳过
-└── pre-push.mjs              # pre-push 检查：算出要推的提交和改动文件，并行跑六项检查并汇总，失败退出码 1
+├── checks.mjs                # 共享的六项检查实现（commit messages / eslint / i18n text / i18n keys / typecheck / tests）；导出 git / changedCodeFiles / runChecks，pre-push 和 CI 复用，保证两边规则一致
+├── pre-push.mjs              # pre-push 钩子：从 git stdin 算本次推送新增的提交 + 改动文件，调 checks.mjs 的 runChecks，失败退出码 1
+└── ci-check.mjs              # CI 入口（npm run ci）：从 PR_BASE_SHA / PR_HEAD_SHA 算 base..head 的提交 + 改动文件，调同一个 runChecks
 
 eslint.config.js              # ESLint flat config
 commitlint.config.js          # 约定式提交（@commitlint/config-conventional）
 .husky/                       # pre-push、commit-msg 两个钩子（_/ 是 husky 生成的，已被忽略）
+.github/workflows/ci.yml      # GitHub Actions：PR（→ main）/ push（main）时装依赖后 npm run ci，跑和 pre-push 同一套检查
 
 test/
 ├── smoke.test.ts             # 键位表、搜索解析的冒烟测试
