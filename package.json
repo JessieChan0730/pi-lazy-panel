@@ -3,7 +3,6 @@
 	"version": "0.1.0",
 	"description": "A lazygit-style TUI for browsing, resuming and managing pi sessions (/lazy-panel)",
 	"type": "module",
-	"private": true,
 	"keywords": [
 		"pi-package",
 		"pi",
@@ -14,7 +13,9 @@
 	"license": "MIT",
 	"files": [
 		"src",
-		"docs",
+		"docs/design.md",
+		"docs/keybindings.md",
+		"docs/keybindings.zh.md",
 		"README.md"
 	],
 	"pi": {
