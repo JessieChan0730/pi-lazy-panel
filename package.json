@@ -5,13 +5,24 @@
 	"type": "module",
 	"keywords": [
 		"pi-package",
+		"pi-extension",
+		"pi-coding-agent",
 		"pi",
 		"tui",
 		"sessions",
 		"lazygit"
 	],
 	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/JessieChan0730/PiLazyPanel.git"
+	},
+	"homepage": "https://github.com/JessieChan0730/PiLazyPanel#readme",
+	"bugs": {
+		"url": "https://github.com/JessieChan0730/PiLazyPanel/issues"
+	},
 	"files": [
+		"index.ts",
 		"src",
 		"docs/design.md",
 		"docs/keybindings.md",
@@ -20,13 +31,13 @@
 	],
 	"pi": {
 		"extensions": [
-			"./src/index.ts"
+			"./index.ts"
 		]
 	},
 	"scripts": {
 		"check": "tsc --noEmit",
 		"test": "node --import tsx --test \"test/**/*.test.ts\"",
-		"dev": "pi -e ./src/index.ts",
+		"dev": "pi -e ./index.ts",
 		"install:pi": "pi install .",
 		"uninstall:pi": "pi remove .",
 		"i18n:scan": "node scripts/i18n-scan.mjs",
