@@ -186,6 +186,8 @@ export interface SessionInfo {
 	createdAt: number;
 	updatedAt: number;
 	path: string;
+	/** Working directory the session was created in (pi header `cwd`), full path. */
+	cwd?: string;
 	id: string;
 	/** Source session this one was forked / cloned from (pi header `parentSession`), full path. */
 	parentPath?: string;

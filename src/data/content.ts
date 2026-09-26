@@ -174,6 +174,8 @@ export async function loadSessionInfo(sessionFile: string): Promise<SessionInfo 
 	const name = manager.getSessionName();
 	if (name) info.name = name;
 	if (model) info.model = model;
+	// 工作目录（会话文件头里的 cwd）：执行 pi 命令的那个目录，会话列表里通常省略了它。
+	if (header?.cwd) info.cwd = header.cwd;
 	// 来源会话（fork/clone 写在文件头的 parentSession）：存全路径，再尽量取它的可读标题。
 	const parentPath = header?.parentSession;
 	if (parentPath) {

@@ -2362,7 +2362,9 @@ test("i opens the Session Info box (what /session shows); y copies its text, Esc
 	assert.ok(dlg, "the info box should be drawn");
 	assert.ok(dlg.title.includes("alpha"), dlg.title);
 	const body = dlg.body.join("\n");
-	for (const expected of ["Name      alpha", "Model     claude-opus-4", "Messages  12", "Tokens    84.2k", "Cost      $1.42", "Created   Sep 20 22:18", "Updated   Sep 20 22:21", "Path      /tmp/s1.jsonl", "ID        id-1"]) {
+	const infoObj: SessionInfo = { name: "alpha", model: "claude-opus-4", messages: 12, tokens: 84_213, cost: 1.4211, createdAt: new Date(2026, 8, 20, 22, 18).getTime(), updatedAt: new Date(2026, 8, 20, 22, 21).getTime(), path: "/tmp/s1.jsonl", id: "id-1" };
+	// 每一行的标签 / 值排版和 sessionInfoText 一致（含 "Session path" 标签、12 列的标签列对齐）。
+	for (const expected of sessionInfoText(infoObj).split("\n")) {
 		assert.ok(body.includes(expected), `${expected}\n${body}`);
 	}
 	assert.ok(h.footer().includes("INFO") && h.footer().includes("y copy") && h.footer().includes("Esc close"), h.footer());
@@ -2372,8 +2374,8 @@ test("i opens the Session Info box (what /session shows); y copies its text, Esc
 	h.panel.handleInput("y");
 	await flush();
 	assert.equal(h.copies.length, 1);
-	assert.equal(h.copies[0], sessionInfoText({ name: "alpha", model: "claude-opus-4", messages: 12, tokens: 84_213, cost: 1.4211, createdAt: new Date(2026, 8, 20, 22, 18).getTime(), updatedAt: new Date(2026, 8, 20, 22, 21).getTime(), path: "/tmp/s1.jsonl", id: "id-1" }));
-	assert.ok(h.copies[0]!.startsWith("Name      alpha\nModel     claude-opus-4\n"), h.copies[0]);
+	assert.equal(h.copies[0], sessionInfoText(infoObj));
+	assert.ok(h.copies[0]!.startsWith(sessionInfoText(infoObj).split("\n").slice(0, 2).join("\n")), h.copies[0]);
 	assert.ok(h.footer().includes("copied session info"), h.footer());
 	h.panel.handleInput("j");
 	h.panel.handleInput("d");
@@ -2424,9 +2426,9 @@ test("Session Info wraps a value too wide for the box (the path) onto continuati
 	assert.ok(joined.includes(longPath.replace(/\s/g, "")), joined);
 	assert.ok(!body.some((l) => l.includes("…")), body.join("\n"));
 	// continuation lines are indented under the value column (no label)
-	const pathRow = body.findIndex((l) => l.includes("Path"));
+	const pathRow = body.findIndex((l) => l.includes("Session path"));
 	assert.ok(pathRow >= 0);
-	assert.ok(body[pathRow + 1]!.startsWith(" ".repeat(11)), JSON.stringify(body[pathRow + 1]));
+	assert.ok(body[pathRow + 1]!.startsWith(" ".repeat(14)), JSON.stringify(body[pathRow + 1]));
 	assert.ok(body[pathRow + 1]!.includes("ID") === false, "the continuation comes before the ID row");
 	for (const l of h.panel.render(160)) assert.equal(visibleWidth(l), 160);
 	h.panel.dispose();
