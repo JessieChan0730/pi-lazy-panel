@@ -68,7 +68,7 @@ export interface SessionInfoDialogOptions {
  * (`~/…`) and copied in full.
  */
 export function sessionInfoRows(info: SessionInfo, fullPath = false): Array<[label: string, value: string]> {
-	return [
+	const rows: Array<[label: string, value: string]> = [
 		[t("info.name"), info.name ?? t("info.none")],
 		[t("info.model"), info.model ?? t("info.unknown")],
 		[t("info.messages"), String(info.messages)],
@@ -79,6 +79,12 @@ export function sessionInfoRows(info: SessionInfo, fullPath = false): Array<[lab
 		[t("info.path"), fullPath ? info.path : shortenPath(info.path)],
 		[t("info.id"), info.id],
 	];
+	// 来源会话（fork/clone 的原会话）：显示可读标题、复制时给全路径；标题取不到（文件已删）就退回缩写路径。
+	if (info.parentPath) {
+		const display = info.parentName ?? shortenPath(info.parentPath);
+		rows.push([t("info.source"), fullPath ? info.parentPath : display]);
+	}
+	return rows;
 }
 
 /** Pad `text` with spaces until it is at least `width` visible columns (wide chars count as two). */

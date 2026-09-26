@@ -243,6 +243,7 @@
     "updated": "Updated",
     "path": "Path",
     "id": "ID",
+    "source": "Source",
     "none": "(none)",
     "unknown": "(unknown)"
   },

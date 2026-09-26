@@ -243,6 +243,7 @@
     "updated": "更新时间",
     "path": "路径",
     "id": "ID",
+    "source": "来源会话",
     "none": "（无）",
     "unknown": "（未知）"
   },

@@ -187,6 +187,10 @@ export interface SessionInfo {
 	updatedAt: number;
 	path: string;
 	id: string;
+	/** Source session this one was forked / cloned from (pi header `parentSession`), full path. */
+	parentPath?: string;
+	/** Readable title of the source session (its name, else first message); undefined when that file is gone. */
+	parentName?: string;
 }
 
 // ---------------------------------------------------------------------------
