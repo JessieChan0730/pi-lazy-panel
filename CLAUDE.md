@@ -166,6 +166,7 @@ AGENTS.md                     # 仅指向本文件，规则统一在这里维护
 12. 新增功能一定要考虑跨平台，不要使用某些特定平台的特性，比如路径使用`~/` 这个在 windows下是会报错的。
 13. 所有 UI 文案走 `src/i18n` 的 `t()`，中英两份 `src/i18n/locales/{en,zh}.json` 同步维护（英文是基准）；**不要在模块顶层用 `t()` 计算 `export const`**（import 期求值会早于 `initI18n`），需要文案的地方写成函数、渲染时才调用。改完跑 `npm run i18n:check` 确认对齐。i18next 放 `dependencies`（第 6 条只约束那三个 pi 包，不影响新增普通依赖）。
 14. 完成任务前跑 `npm run lint`、`npm run check`、`npm test`、`npm run i18n:check` 确认全过——push 时 pre-push 钩子会检查同样的内容，不过就推不上去；不要用 `--no-verify` 绕过。
+15. 发版只在 `main` 上打 tag：先把改动经 PR 合并进 `main`，切到 `main`（`git pull` 到最新）再打 `vX.Y.Z` 并推送。推 `v*.*.*` tag 会触发 `.github/workflows/release.yml` 自动 `npm publish` + 建 GitHub Release，所以严禁在功能分支上打 release tag；`scripts/pre-push.mjs` 会拦截指向非 main 提交的 release tag 推送。
 
 ## 重要文档
 
