@@ -2,24 +2,24 @@
 	"name": "pi-lazy-panel",
 	"version": "0.1.1",
 	"description": "A lazygit-style TUI for browsing, resuming and managing pi sessions (/lazy-panel)",
-	"type": "module",
 	"keywords": [
-		"pi-package",
-		"pi-extension",
-		"pi-coding-agent",
 		"pi",
-		"tui",
+		"pi-coding-agent",
+		"pi-extension",
+		"pi-package",
+		"lazygit",
 		"sessions",
-		"lazygit"
+		"tui"
 	],
-	"license": "MIT",
-	"repository": {
-		"type": "git",
-		"url": "git+https://github.com/JessieChan0730/pi-lazy-panel.git"
-	},
 	"homepage": "https://github.com/JessieChan0730/pi-lazy-panel#readme",
 	"bugs": {
 		"url": "https://github.com/JessieChan0730/pi-lazy-panel/issues"
+	},
+	"license": "MIT",
+	"author": "JessieChan0730",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/JessieChan0730/pi-lazy-panel.git"
 	},
 	"files": [
 		"index.ts",
@@ -29,11 +29,7 @@
 		"docs/keybindings.zh.md",
 		"README.md"
 	],
-	"pi": {
-		"extensions": [
-			"./index.ts"
-		]
-	},
+	"type": "module",
 	"scripts": {
 		"check": "tsc --noEmit",
 		"test": "node --import tsx --test \"test/**/*.test.ts\"",
@@ -49,11 +45,6 @@
 	},
 	"dependencies": {
 		"i18next": "23.16.8"
-	},
-	"peerDependencies": {
-		"@earendil-works/pi-coding-agent": "*",
-		"@earendil-works/pi-tui": "*",
-		"typebox": "*"
 	},
 	"devDependencies": {
 		"@commitlint/cli": "^21.2.3",
@@ -72,7 +63,18 @@
 		"typescript": "^5.6.0",
 		"typescript-eslint": "^8.70.1"
 	},
+	"peerDependencies": {
+		"@earendil-works/pi-coding-agent": "*",
+		"@earendil-works/pi-tui": "*",
+		"typebox": "*"
+	},
 	"engines": {
 		"node": ">=20"
+	},
+	"pi": {
+		"extensions": [
+			"./index.ts"
+		],
+		"image": "https://raw.githubusercontent.com/JessieChan0730/pi-lazy-panel/HEAD/assets/readme/preview-en.png"
 	}
 }
