@@ -36,10 +36,11 @@ import {
 } from "../src/actions/session-actions.ts";
 import { type RestoreContext, restoreNode } from "../src/actions/tree-actions.ts";
 import { EXTENSION_ID, SPINNER_FRAMES } from "../src/constants.ts";
-import { loadForkPoints, loadLastReply } from "../src/data/content.ts";
+import { loadForkPoints, loadLastReply, loadSessionInfo } from "../src/data/content.ts";
 import { isEffectiveLeaf } from "../src/data/tree.ts";
 import { initI18n } from "../src/i18n/index.ts";
 import { expandHome, resolveUserPath, stripQuotes } from "../src/utils/paths.ts";
+import { sessionInfoRows } from "../src/ui/widgets/session-info-dialog.ts";
 
 // 恢复 / 摘要进度这类会话操作会经 t() 输出文案，测试统一按英文界面断言。
 initI18n("en");
@@ -215,6 +216,69 @@ test("isEffectiveLeaf: the leaf itself, or a non-user entry followed only by boo
 	const a3 = m.appendMessage(assistantMessage("alt", 5));
 	assert.equal(isEffectiveLeaf(m, a3), true);
 	assert.equal(isEffectiveLeaf(m, a2), false);
+});
+
+/** Write a child session file whose header points at `parentFile` (what /fork / /clone persist). */
+function writeChildSession(dir: string, parentFile: string): string {
+	const iso = new Date().toISOString();
+	const header = { type: "session", version: 3, id: "01a0-child", timestamp: iso, cwd: dir, parentSession: parentFile };
+	const message = {
+		type: "message",
+		id: "cccc1111",
+		parentId: null,
+		timestamp: iso,
+		message: { role: "user", content: [{ type: "text", text: "child hello" }], timestamp: 1 },
+	};
+	const file = join(dir, `child_${basename(parentFile)}`);
+	writeFileSync(file, `${JSON.stringify(header)}\n${JSON.stringify(message)}\n`);
+	return file;
+}
+
+test("loadSessionInfo: a forked child carries its source session, and the Source row shows the source's name", async (t) => {
+	const dir = tempDir(t);
+	const parent = makeSession(dir);
+	parent.manager.appendSessionInfo("Parent chat");
+	const childFile = writeChildSession(dir, parent.file);
+
+	const info = await loadSessionInfo(childFile);
+	assert.ok(info);
+	assert.equal(info.parentPath, parent.file);
+	assert.equal(info.parentName, "Parent chat");
+	assert.deepEqual(
+		sessionInfoRows(info).find(([label]) => label === "Source"),
+		["Source", "Parent chat"],
+	);
+});
+
+test("loadSessionInfo: falls back to the source's first message when it has no name", async (t) => {
+	const dir = tempDir(t);
+	const parent = makeSession(dir); // u1 = "hello", no /name set
+	const info = await loadSessionInfo(writeChildSession(dir, parent.file));
+	assert.ok(info);
+	assert.equal(info.parentName, "hello");
+});
+
+test("loadSessionInfo: keeps the source path but drops the name when the source file is gone", async (t) => {
+	const dir = tempDir(t);
+	const parent = makeSession(dir);
+	const childFile = writeChildSession(dir, parent.file);
+	rmSync(parent.file); // source deleted after the fork
+
+	const info = await loadSessionInfo(childFile);
+	assert.ok(info);
+	assert.equal(info.parentPath, parent.file);
+	assert.equal(info.parentName, undefined);
+});
+
+test("loadSessionInfo: a session with no parent has no Source row", async (t) => {
+	const dir = tempDir(t);
+	const info = await loadSessionInfo(makeSession(dir).file);
+	assert.ok(info);
+	assert.equal(info.parentPath, undefined);
+	assert.equal(
+		sessionInfoRows(info).some(([label]) => label === "Source"),
+		false,
+	);
 });
 
 test("resumeSession: no-op for the current session, switchSession for others, errors before pi tears anything down", async (t) => {

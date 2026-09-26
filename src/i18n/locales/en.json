@@ -1,4 +1,8 @@
 {
+  "alert": {
+    "cannotDeleteActive": "Can't delete the active session",
+    "ok": "OK"
+  },
   "command": {
     "description": "Open the lazygit-style session panel (sessions / tree / content)"
   },
@@ -31,6 +35,7 @@
     "contentEmpty": "No messages.",
     "emptySession": "(empty session)",
     "msgs": "{{count}} msgs",
+    "current": "(current)",
     "selected": "{{count}} selected",
     "messages": "{{count}} messages",
     "selectSession": "Select a session.",
@@ -241,8 +246,10 @@
     "cost": "Cost",
     "created": "Created",
     "updated": "Updated",
-    "path": "Path",
+    "path": "Session path",
+    "directory": "Directory",
     "id": "ID",
+    "source": "Source",
     "none": "(none)",
     "unknown": "(unknown)"
   },
@@ -291,7 +298,6 @@
     "labelRemoved": "label removed",
     "labelFailed": "label failed: {{error}}",
     "deleteUnavailable": "delete: actions unavailable",
-    "cannotDeleteActive": "Cannot delete the currently active session",
     "deletingN": "deleting {{count}}…",
     "deleting": "deleting…",
     "deleteFailed": "delete failed: {{error}}",

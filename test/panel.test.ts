@@ -27,6 +27,7 @@ import type {
 	TreeRow,
 } from "../src/types.ts";
 import { type ActionSource, type DataSource, LazyPanel } from "../src/ui/app.ts";
+import { cannotDeleteActiveTitle } from "../src/ui/widgets/alert-dialog.ts";
 import { compactDialogTitle } from "../src/ui/widgets/compact-dialog.ts";
 import {
 	cloneSessionTitle,
@@ -69,6 +70,7 @@ const SUMMARY_MENU = restoreSummaryMenu();
 const SEARCH_LABEL = searchLabel();
 const SESSION_INFO_TITLE = sessionInfoTitle();
 const COMPACT_DIALOG_TITLE = compactDialogTitle();
+const CANNOT_DELETE_ACTIVE_TITLE = cannotDeleteActiveTitle();
 
 /** Styling is irrelevant here; return text unchanged so assertions stay simple. */
 const fakeTheme = {
@@ -2190,20 +2192,26 @@ test("y (or k + Enter) confirms: the file is deleted, the list reloads, the curs
 	failing.panel.dispose();
 });
 
-test("d on the session pi has open is refused up front (pi's wording), and a panel without actions says so", async () => {
+test("d on the session pi has open pops a warning box (not the delete confirmation); a panel without actions says so", async () => {
 	const h = makeSessionActionPanel({ currentSessionFile: "/tmp/s2.jsonl" });
 	await h.panel.load();
 	assert.equal(h.panel.state.cursor.sessions, 1, "opens on the current session");
 	h.panel.handleInput("d");
+	assert.equal(dialogAt(h.text(), DELETE_SESSION_TITLE), undefined, "not the delete confirmation");
+	const warn = dialogAt(h.text(), CANNOT_DELETE_ACTIVE_TITLE);
+	assert.ok(warn, "a warning box is drawn instead");
+	assert.ok(warn.title.includes("beta"), warn.title); // subject = the current session's title
+	assert.deepEqual(h.deletes, [], "nothing is deleted");
+	// Enter / Esc dismisses the warning, still nothing deleted
+	h.panel.handleInput("\x1b");
 	assert.equal(h.panel.state.mode, "normal");
-	assert.equal(dialogAt(h.text(), DELETE_SESSION_TITLE), undefined, "no confirmation for the current session");
-	assert.ok(h.footer().includes("Cannot delete the currently active session"), h.footer());
 	assert.deepEqual(h.deletes, []);
-	// another row still asks
+	// another row still asks the real confirmation
 	h.panel.handleInput("j");
 	await settle();
 	h.panel.handleInput("d");
 	assert.equal(h.panel.state.mode, "confirm");
+	assert.ok(dialogAt(h.text(), DELETE_SESSION_TITLE), "delete confirmation for a non-current row");
 	h.panel.handleInput("\x1b");
 	h.panel.dispose();
 
@@ -2219,6 +2227,21 @@ test("d on the session pi has open is refused up front (pi's wording), and a pan
 		assert.ok(bare.footer().includes(`${what}: actions unavailable`), bare.footer());
 	}
 	bare.panel.dispose();
+});
+
+test("the session pi has open is tagged '(current)' after its title, and only that row", async () => {
+	const h = makeSessionActionPanel({ currentSessionFile: "/tmp/s2.jsonl" });
+	await h.panel.load();
+	const tagged = h.text().filter((l) => l.includes("(current)"));
+	assert.equal(tagged.length, 1, "exactly one row carries the current tag");
+	assert.ok(tagged[0]!.includes("beta"), tagged[0]); // the tag sits after that row's title
+	h.panel.dispose();
+
+	// No current session passed → no row is tagged.
+	const none = makeSessionActionPanel();
+	await none.panel.load();
+	assert.equal(none.text().filter((l) => l.includes("(current)")).length, 0);
+	none.panel.dispose();
 });
 
 test("r opens a centered Rename box pre-filled with the name; Enter saves and the row shows it, empty removes, Esc cancels", async () => {
@@ -2339,7 +2362,9 @@ test("i opens the Session Info box (what /session shows); y copies its text, Esc
 	assert.ok(dlg, "the info box should be drawn");
 	assert.ok(dlg.title.includes("alpha"), dlg.title);
 	const body = dlg.body.join("\n");
-	for (const expected of ["Name      alpha", "Model     claude-opus-4", "Messages  12", "Tokens    84.2k", "Cost      $1.42", "Created   Sep 20 22:18", "Updated   Sep 20 22:21", "Path      /tmp/s1.jsonl", "ID        id-1"]) {
+	const infoObj: SessionInfo = { name: "alpha", model: "claude-opus-4", messages: 12, tokens: 84_213, cost: 1.4211, createdAt: new Date(2026, 8, 20, 22, 18).getTime(), updatedAt: new Date(2026, 8, 20, 22, 21).getTime(), path: "/tmp/s1.jsonl", id: "id-1" };
+	// 每一行的标签 / 值排版和 sessionInfoText 一致（含 "Session path" 标签、12 列的标签列对齐）。
+	for (const expected of sessionInfoText(infoObj).split("\n")) {
 		assert.ok(body.includes(expected), `${expected}\n${body}`);
 	}
 	assert.ok(h.footer().includes("INFO") && h.footer().includes("y copy") && h.footer().includes("Esc close"), h.footer());
@@ -2349,8 +2374,8 @@ test("i opens the Session Info box (what /session shows); y copies its text, Esc
 	h.panel.handleInput("y");
 	await flush();
 	assert.equal(h.copies.length, 1);
-	assert.equal(h.copies[0], sessionInfoText({ name: "alpha", model: "claude-opus-4", messages: 12, tokens: 84_213, cost: 1.4211, createdAt: new Date(2026, 8, 20, 22, 18).getTime(), updatedAt: new Date(2026, 8, 20, 22, 21).getTime(), path: "/tmp/s1.jsonl", id: "id-1" }));
-	assert.ok(h.copies[0]!.startsWith("Name      alpha\nModel     claude-opus-4\n"), h.copies[0]);
+	assert.equal(h.copies[0], sessionInfoText(infoObj));
+	assert.ok(h.copies[0]!.startsWith(sessionInfoText(infoObj).split("\n").slice(0, 2).join("\n")), h.copies[0]);
 	assert.ok(h.footer().includes("copied session info"), h.footer());
 	h.panel.handleInput("j");
 	h.panel.handleInput("d");
@@ -2401,9 +2426,9 @@ test("Session Info wraps a value too wide for the box (the path) onto continuati
 	assert.ok(joined.includes(longPath.replace(/\s/g, "")), joined);
 	assert.ok(!body.some((l) => l.includes("…")), body.join("\n"));
 	// continuation lines are indented under the value column (no label)
-	const pathRow = body.findIndex((l) => l.includes("Path"));
+	const pathRow = body.findIndex((l) => l.includes("Session path"));
 	assert.ok(pathRow >= 0);
-	assert.ok(body[pathRow + 1]!.startsWith(" ".repeat(11)), JSON.stringify(body[pathRow + 1]));
+	assert.ok(body[pathRow + 1]!.startsWith(" ".repeat(14)), JSON.stringify(body[pathRow + 1]));
 	assert.ok(body[pathRow + 1]!.includes("ID") === false, "the continuation comes before the ID row");
 	for (const l of h.panel.render(160)) assert.equal(visibleWidth(l), 160);
 	h.panel.dispose();
@@ -2922,13 +2947,17 @@ test("d with a selection deletes them all after one confirmation, skipping the o
 	assert.ok(h.footer().includes("deleted 1, 1 failed") && h.footer().includes("EACCES"), h.footer());
 	h.panel.dispose();
 
-	// only the open session selected: refused without asking
+	// only the open session selected: warned in a box, nothing deleted
 	const cur = makeSessionActionPanel({ currentSessionFile: "/tmp/s1.jsonl" });
 	await cur.panel.load();
 	cur.panel.handleInput(" ");
 	cur.panel.handleInput("d");
+	assert.equal(dialogAt(cur.text(), "Delete 1 session?"), undefined, "no batch confirmation");
+	const warn = dialogAt(cur.text(), CANNOT_DELETE_ACTIVE_TITLE);
+	assert.ok(warn && warn.title.includes("alpha"), "a warning box naming the current session");
+	assert.deepEqual(cur.deletes, []);
+	cur.panel.handleInput("\x1b");
 	assert.equal(cur.panel.state.mode, "normal");
-	assert.ok(cur.footer().includes("Cannot delete the currently active session"), cur.footer());
 	cur.panel.dispose();
 });
 

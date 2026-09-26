@@ -48,8 +48,8 @@ export function sessionInfoHints(): KeyHint[] {
 	];
 }
 
-/** Width of the label column ("Messages" is the longest label). */
-const LABEL_WIDTH = 9;
+/** Width of the label column ("Session path" is the longest label, 12 columns). */
+const LABEL_WIDTH = 12;
 
 export interface SessionInfoDialogSpec {
 	info: SessionInfo;
@@ -68,7 +68,7 @@ export interface SessionInfoDialogOptions {
  * (`~/…`) and copied in full.
  */
 export function sessionInfoRows(info: SessionInfo, fullPath = false): Array<[label: string, value: string]> {
-	return [
+	const rows: Array<[label: string, value: string]> = [
 		[t("info.name"), info.name ?? t("info.none")],
 		[t("info.model"), info.model ?? t("info.unknown")],
 		[t("info.messages"), String(info.messages)],
@@ -77,8 +77,16 @@ export function sessionInfoRows(info: SessionInfo, fullPath = false): Array<[lab
 		[t("info.created"), formatDateTime(info.createdAt) || "-"],
 		[t("info.updated"), formatDateTime(info.updatedAt) || "-"],
 		[t("info.path"), fullPath ? info.path : shortenPath(info.path)],
-		[t("info.id"), info.id],
 	];
+	// 工作目录（执行 pi 命令的目录）：和路径一样，展示时缩写（~/…）、复制时给全路径。
+	if (info.cwd) rows.push([t("info.directory"), fullPath ? info.cwd : shortenPath(info.cwd)]);
+	rows.push([t("info.id"), info.id]);
+	// 来源会话（fork/clone 的原会话）：显示可读标题、复制时给全路径；标题取不到（文件已删）就退回缩写路径。
+	if (info.parentPath) {
+		const display = info.parentName ?? shortenPath(info.parentPath);
+		rows.push([t("info.source"), fullPath ? info.parentPath : display]);
+	}
+	return rows;
 }
 
 /** Pad `text` with spaces until it is at least `width` visible columns (wide chars count as two). */

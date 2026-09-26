@@ -174,5 +174,37 @@ export async function loadSessionInfo(sessionFile: string): Promise<SessionInfo 
 	const name = manager.getSessionName();
 	if (name) info.name = name;
 	if (model) info.model = model;
+	// 工作目录（会话文件头里的 cwd）：执行 pi 命令的那个目录，会话列表里通常省略了它。
+	if (header?.cwd) info.cwd = header.cwd;
+	// 来源会话（fork/clone 写在文件头的 parentSession）：存全路径，再尽量取它的可读标题。
+	const parentPath = header?.parentSession;
+	if (parentPath) {
+		info.parentPath = parentPath;
+		const parentName = loadSessionTitle(parentPath);
+		if (parentName) info.parentName = parentName;
+	}
 	return info;
+}
+
+/**
+ * Readable title of a session file for the Session Info "Source" row: its
+ * `/name` if set, else the first user message squashed to one line. Returns
+ * undefined when the file cannot be opened (e.g. the source was deleted), so
+ * the dialog falls back to showing just the path.
+ */
+function loadSessionTitle(sessionFile: string): string | undefined {
+	let manager: SessionManager;
+	try {
+		manager = SessionManager.open(sessionFile);
+	} catch {
+		return undefined;
+	}
+	const name = manager.getSessionName();
+	if (name) return name;
+	for (const entry of manager.getEntries()) {
+		if (entry.type !== "message" || entry.message.role !== "user") continue;
+		const line = singleLine(textParts(entry.message.content, " "));
+		if (line) return line;
+	}
+	return undefined;
 }

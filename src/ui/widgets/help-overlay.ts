@@ -42,11 +42,14 @@ export type HelpLine = { kind: "header"; text: string } | { kind: "binding"; key
 /** Build the help body for `focus`: its own bindings first, then each outer scope (pane → global; dialog → tree pane → global). */
 export function buildHelpLines(keymap: Keymap, focus: KeyScope): HelpLine[] {
 	const out: HelpLine[] = [];
-	for (const scope of scopeChain(focus)) {
-		if (out.length) out.push({ kind: "blank" });
-		out.push({ kind: "header", text: scopeTitle(scope) });
+	scopeChain(focus).forEach((scope, i) => {
+		// 第一个 scope 就是当前 focus，它的标题和弹窗标题 HELP · xxx 完全重复，所以只画后续 scope 的分组标题。
+		if (i > 0) {
+			out.push({ kind: "blank" });
+			out.push({ kind: "header", text: scopeTitle(scope) });
+		}
 		out.push(...buildScopeLines(keymap, scope, focus));
-	}
+	});
 	return out;
 }
 
@@ -147,6 +150,8 @@ function helpLayout(keymap: Keymap, focus: KeyScope, inner: number): { rows: Hel
 	// 描述列可用宽度 = 内宽 - 前导空格 - keys 列 - keys 后的一个空格。
 	const descW = Math.max(1, inner - keyColW - 2);
 	const rows: HelpRenderRow[] = [];
+	// 顶部留一行空白，把标题（HELP · xxx）和键位列表拉开一点距离，不显得拥挤。
+	rows.push({ kind: "blank" });
 	for (const line of lines) {
 		if (line.kind === "blank") {
 			rows.push({ kind: "blank" });
