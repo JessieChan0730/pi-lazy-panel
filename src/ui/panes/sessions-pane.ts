@@ -13,6 +13,7 @@
  * header counts them ("2/7 matches"); the list itself is never filtered.
  */
 
+import { resolve } from "node:path";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { t } from "../../i18n/index.ts";
@@ -30,6 +31,8 @@ export interface SessionsPaneProps {
 	scope: ListScope;
 	sort: SessionSortMode;
 	selected: Set<string>;
+	/** File pi currently has open, if any: that row's title gets a "current" tag (it is the one `d` refuses). */
+	currentFile?: string;
 	/** Active `/` search of this pane: matching rows are highlighted, the header shows the count. */
 	search?: SearchView;
 	/** Frame title; the panel passes "[1] SESSIONS" so the jump key is visible. */
@@ -49,12 +52,15 @@ export function renderSessionsPane(p: SessionsPaneProps, width: number, height: 
 	if (p.rows.length === 0) {
 		body.push(theme.fg("muted", ` ${t("pane.sessionsEmpty")}`));
 	} else {
+		// pi 当前打开的会话（比较解析后的路径，和 findSessionIndex 一致）：这一行会带 current 标记。
+		const currentResolved = p.currentFile ? resolve(p.currentFile) : undefined;
 		// 滚轮滚动时用给定的 first（不动光标）；否则按光标居中。
 		const first = clampFirst(p.first ?? scrollOffset(p.cursor, p.rows.length, visibleRows), p.rows.length, visibleRows);
 		for (let i = first; i < Math.min(p.rows.length, first + visibleRows); i++) {
 			const row = p.rows[i]!;
 			const isCursor = i === p.cursor;
-			const lines = renderRow(row, inner, isCursor, p);
+			const isCurrent = currentResolved !== undefined && resolve(row.file) === currentResolved;
+			const lines = renderRow(row, inner, isCursor, isCurrent, p);
 			// 搜索命中的行：两行里出现的关键词都加高亮，光标所在的当前匹配再加强调。
 			const search = p.search;
 			if (search?.matches.has(i)) {
@@ -84,7 +90,7 @@ export function renderSessionsPane(p: SessionsPaneProps, width: number, height: 
 	});
 }
 
-function renderRow(row: SessionRow, inner: number, isCursor: boolean, p: SessionsPaneProps): string[] {
+function renderRow(row: SessionRow, inner: number, isCursor: boolean, isCurrent: boolean, p: SessionsPaneProps): string[] {
 	const { theme } = p;
 	const indent = "  ".repeat(row.threadDepth ?? 0);
 	// 光标标记 ›（占第一列，第二列留空对齐）；多选不再画图标，只靠标题着色区分。
@@ -93,11 +99,16 @@ function renderRow(row: SessionRow, inner: number, isCursor: boolean, p: Session
 	const date = formatShortDate(row.updatedAt);
 	const emptyTitle = t("pane.emptySession");
 	const title = row.name ?? row.preview ?? emptyTitle;
+	// pi 当前打开的会话：标题后紧跟一个 (current) / （当前）标记，不特殊着色。
+	const currentTag = isCurrent ? t("pane.current") : "";
+	const tagW = visibleWidth(currentTag);
 
-	// line 1: marker + indent + title ....... date
+	// line 1: marker + indent + title[(current)] ....... date
 	const rightW = visibleWidth(date) + 1;
-	const titleW = Math.max(1, inner - visibleWidth(marker) - visibleWidth(indent) - rightW);
-	const titleText = truncateToWidth(title || emptyTitle, titleW, "…", true);
+	const titleW = Math.max(1, inner - visibleWidth(marker) - visibleWidth(indent) - rightW - tagW);
+	// 先不补齐地截断标题，紧跟上标记，再把整体补齐到 titleW + tagW——这样标记紧贴标题，右侧空白补齐后日期照旧右对齐。
+	const titleWithTag = truncateToWidth(title || emptyTitle, titleW, "…", false) + currentTag;
+	const titleText = truncateToWidth(titleWithTag, titleW + tagW, "…", true);
 
 	// line 2: model · cwd · N msgs
 	const details = [row.model ?? "", shortenPath(row.cwd), t("pane.msgs", { count: row.messageCount })].filter(Boolean).join(" · ");

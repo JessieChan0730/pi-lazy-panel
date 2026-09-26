@@ -1,4 +1,8 @@
 {
+  "alert": {
+    "cannotDeleteActive": "不能删除当前会话",
+    "ok": "知道了"
+  },
   "command": {
     "description": "打开 lazygit 风格的会话面板（会话 / 对话树 / 内容）"
   },
@@ -31,6 +35,7 @@
     "contentEmpty": "没有消息。",
     "emptySession": "（空会话）",
     "msgs": "{{count}} 条消息",
+    "current": "（当前）",
     "selected": "已选 {{count}} 个",
     "messages": "{{count}} 条消息",
     "selectSession": "请选择一个会话。",
@@ -292,7 +297,6 @@
     "labelRemoved": "已清除标签",
     "labelFailed": "设置标签失败：{{error}}",
     "deleteUnavailable": "删除：操作不可用",
-    "cannotDeleteActive": "无法删除当前正在使用的会话",
     "deletingN": "正在删除 {{count}} 个…",
     "deleting": "正在删除…",
     "deleteFailed": "删除失败：{{error}}",

@@ -94,6 +94,7 @@ import { type ContentLayout, layoutContent, maxScroll, renderContentPane } from 
 import { clampFirst, renderSessionsPane, scrollOffset } from "./panes/sessions-pane.ts";
 import { renderTreePane } from "./panes/tree-pane.ts";
 import { type OutlinePrefix, treeOutline } from "./tree-outline.ts";
+import { alertDialogSpec, cannotDeleteActiveTitle } from "./widgets/alert-dialog.ts";
 import { ChangelogDialog } from "./widgets/changelog-dialog.ts";
 import { compactDialogHints, compactDialogTitle } from "./widgets/compact-dialog.ts";
 import {
@@ -1773,9 +1774,9 @@ export class LazyPanel implements Component, Focusable {
 			this.setStatus(t("status.deleteUnavailable"));
 			return;
 		}
-		// 和 pi 内置 /resume 一样：当前打开的会话直接拒绝，不弹确认框。
+		// 和 pi 内置 /resume 一样：当前打开的会话不能删；这里弹一个警告框告诉用户为什么。
 		if (findSessionIndex([row], this.currentSessionFile) === 0) {
-			this.setStatus(t("status.cannotDeleteActive"));
+			this.openCannotDeleteAlert(this.sessionTitle(row));
 			return;
 		}
 		this.deleteTarget = row;
@@ -1806,7 +1807,9 @@ export class LazyPanel implements Component, Focusable {
 		const rows = this.sessions.filter((r) => this.state.selectedSessionFiles.has(r.file));
 		const targets = rows.filter((r) => findSessionIndex([r], this.currentSessionFile) !== 0);
 		if (targets.length === 0) {
-			this.setStatus(t("status.cannotDeleteActive"));
+			// 选中的全是（其实只可能有一个）当前打开的会话：弹警告框，什么都不删。
+			const active = rows.find((r) => findSessionIndex([r], this.currentSessionFile) === 0);
+			this.openCannotDeleteAlert(active ? this.sessionTitle(active) : undefined);
 			return;
 		}
 		const skipped = rows.length - targets.length;
@@ -1953,6 +1956,23 @@ export class LazyPanel implements Component, Focusable {
 		this.selectDialog.close();
 		this.deleteTarget = undefined;
 		this.batchDeleteTargets = undefined;
+		this.o.requestRender();
+	}
+
+	/**
+	 * Warn (in a box, not just the footer) that the session pi has open can't be
+	 * deleted. Reuses the select dialog + "confirm" mode so Enter / Esc / OK all
+	 * dismiss it through `closeConfirm`; nothing is ever deleted from here.
+	 */
+	private openCannotDeleteAlert(subject: string | undefined): void {
+		this.state.mode = "confirm";
+		this.selectDialog.open(
+			alertDialogSpec({
+				title: cannotDeleteActiveTitle(),
+				...(subject ? { subject } : {}),
+				onClose: () => this.closeConfirm(),
+			}),
+		);
 		this.o.requestRender();
 	}
 
@@ -2752,6 +2772,7 @@ export class LazyPanel implements Component, Focusable {
 					selected: this.state.selectedSessionFiles,
 					title: this.paneTitle("sessions"),
 					theme,
+					...(this.currentSessionFile ? { currentFile: this.currentSessionFile } : {}),
 					...(sessionsSearch ? { search: sessionsSearch } : {}),
 				},
 				leftW,
