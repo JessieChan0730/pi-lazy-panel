@@ -308,9 +308,13 @@ export type ActionId =
 	| "tree-filter-user"
 	| "tree-filter-labeled"
 	| "tree-filter-all"
-	| "tree-dialog-close";
-// content pane is read-only and only uses the shared navigation actions
-// (move-down / move-up / go-top / go-bottom) plus the global search, see docs/design.md.
+	| "tree-dialog-close"
+	// content pane
+	| "content-copy"
+	| "content-center";
+// Besides the shared navigation actions (move-down / move-up / go-top / go-bottom)
+// and the global search, the content pane can copy the highlighted message
+// (`content-copy`) and center it in the viewport (`content-center`), see docs/design.md.
 // Tree filters (d/t/u/l/a) live in the tree dialog (`tree-open`), which also has
 // its own live-filtering search row; `/` in the panes jumps between matches.
 

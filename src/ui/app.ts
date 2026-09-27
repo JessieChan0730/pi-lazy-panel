@@ -388,6 +388,13 @@ export class LazyPanel implements Component, Focusable {
 	private layoutCache: { blocks: ContentBlock[]; inner: number; highlight: string | undefined; layout: ContentLayout } | undefined;
 	/** Viewport of the content pane as of the last render, used to clamp scrolling. */
 	private contentView = { inner: 60, visible: 10 };
+	/**
+	 * True right after `zz` centered the highlighted message: the content pane may
+	 * then scroll past the last full page (padding blanks below) so an end-of-file
+	 * message can sit in the middle, like vim's `zz`. Any normal scroll clears it
+	 * and the view snaps back to the last-full-page clamp.
+	 */
+	private contentCentered = false;
 	/** Terminal width from the last render, used to size the help overlay when clamping its scroll. */
 	private lastWidth = 80;
 	/** Matching body lines of the content pane, per layout and query (the layout changes with the width, so the matches follow it). */
@@ -615,6 +622,8 @@ export class LazyPanel implements Component, Focusable {
 		this.state.contentHighlight = targetId;
 		if (targetId) {
 			const start = this.contentLayout().starts.get(targetId) ?? 0;
+			// 高亮切换是普通滚动（把消息滚到顶部）：清掉 zz 的越界居中标记。
+			this.contentCentered = false;
 			this.state.cursor.content = Math.min(start, this.contentMaxScroll());
 		}
 		this.o.requestRender();
@@ -639,8 +648,9 @@ export class LazyPanel implements Component, Focusable {
 	private contentLayoutFor(inner: number, visible: number): ContentLayout {
 		this.contentView = { inner: Math.max(1, inner), visible: Math.max(1, visible) };
 		const layout = this.contentLayout();
-		// 窗口变小后原来的滚动位置可能越界，这里顺手夹回来。
-		this.state.cursor.content = clamp(this.state.cursor.content, 0, maxScroll(layout.lines.length, this.contentView.visible));
+		// 窗口变小后原来的滚动位置可能越界，这里顺手夹回来；`zz` 居中时允许滚过末尾（夹到末行）。
+		const max = this.contentCentered ? Math.max(0, layout.lines.length - 1) : maxScroll(layout.lines.length, this.contentView.visible);
+		this.state.cursor.content = clamp(this.state.cursor.content, 0, max);
 		return layout;
 	}
 
@@ -976,6 +986,12 @@ export class LazyPanel implements Component, Focusable {
 			case "scroll-content-up":
 				this.scrollContent(-this.contentPageStep());
 				return;
+			case "content-center":
+				this.centerContent();
+				return;
+			case "content-copy":
+				void this.copyContentBlock();
+				return;
 			case "tree-copy":
 				void this.copyTreeNode(this.currentTreeNode());
 				return;
@@ -1098,6 +1114,8 @@ export class LazyPanel implements Component, Focusable {
 	}
 
 	private setContentScroll(line: number): void {
+		// 普通滚动：回到常规夹取范围（清掉 zz 的越界居中标记），越界值会被夹回最后一整页。
+		this.contentCentered = false;
 		const next = clamp(line, 0, this.contentMaxScroll());
 		if (next === this.state.cursor.content) return;
 		this.state.cursor.content = next;
@@ -1107,6 +1125,41 @@ export class LazyPanel implements Component, Focusable {
 	/** J/K from the sessions pane scroll the content pane by half a viewport. */
 	private contentPageStep(): number {
 		return Math.max(1, Math.floor(this.contentView.visible / 2));
+	}
+
+	/**
+	 * zz (content pane): scroll so the highlighted message sits in the middle of
+	 * the viewport (vim's zz). To center a message near the end of the file the
+	 * pane may scroll past the last full page — `contentCentered` lets the render
+	 * pad blanks below; any later scroll clears it. A no-op when the whole
+	 * conversation already fits (there is nothing to scroll).
+	 */
+	private centerContent(): void {
+		const target = this.state.contentHighlight;
+		if (!target || this.content.length === 0) {
+			this.setStatus(t("status.noContentSelected"));
+			return;
+		}
+		const layout = this.contentLayout();
+		const start = layout.starts.get(target);
+		if (start === undefined) return;
+		// 让选中消息的头部行落在窗口正中：起始行减去半个可见窗口，允许滚过末尾以居中末尾消息。
+		const half = Math.floor((this.contentView.visible - 1) / 2);
+		const next = clamp(start - half, 0, Math.max(0, layout.lines.length - 1));
+		this.contentCentered = true;
+		this.state.cursor.content = next;
+		this.o.requestRender();
+	}
+
+	/** y (content pane): copy the highlighted message's full text (same as TREE y). */
+	private copyContentBlock(): Promise<void> {
+		const file = this.loadedSessionFile;
+		const entryId = this.state.contentHighlight;
+		if (!file || !entryId) {
+			this.setStatus(t("status.noContentSelected"));
+			return Promise.resolve();
+		}
+		return this.copyEntryText(file, entryId);
 	}
 
 	private cycleFocus(delta: 1 | -1): void {
@@ -1404,12 +1457,17 @@ export class LazyPanel implements Component, Focusable {
 	/** y: copy the node's full text (like /tree ctrl+x). */
 	private async copyTreeNode(target: TreeTarget | undefined): Promise<void> {
 		if (!target) return;
+		await this.copyEntryText(target.file, target.row.entryId);
+	}
+
+	/** Copy the full text of `entryId` in `file` to the clipboard (shared by TREE y and CONTENT y). */
+	private async copyEntryText(file: string, entryId: string): Promise<void> {
 		if (!this.o.actions) {
 			this.setStatus(t("status.copyUnavailable"));
 			return;
 		}
 		try {
-			const copied = await this.o.actions.copyNodeText(target.file, target.row.entryId);
+			const copied = await this.o.actions.copyNodeText(file, entryId);
 			if (this.disposed) return;
 			this.setStatus(copied ? t("status.copiedNode") : t("status.noTextToCopy"));
 		} catch (err) {

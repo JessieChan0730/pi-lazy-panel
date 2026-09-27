@@ -150,12 +150,14 @@ In the table below the parenthesis after "Config name" marks which scope it belo
 
 ## CONTENT pane (read-only)
 
-Only scrolling and search; copying a message is done in the TREE pane (`y`).
+Scrolling, search, plus centering and copying the selected message (the one the TREE cursor highlights, drawn with a `›` marker).
 
 | Key | Config name | Action |
 | --- | --- | --- |
 | `j` `k` `↑` `↓` | `move-down` / `move-up` | Scroll |
 | `gg` / `G` | `go-top` / `go-bottom` | Top / bottom |
+| `zz` | `content-center` | Scroll the selected message to the middle of the pane (vim's `zz`); a no-op when the content already fits without scrolling |
+| `y` | `content-copy` | Copy the selected message's full text to the clipboard (same as `y` in the TREE pane) |
 | `/` | `search` (global) | Search the rendered message body (bare words only, no qualifiers); a matching line is scrolled to the top and `n` / `N` step through hits |
 
 ## Mouse

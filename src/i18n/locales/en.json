@@ -115,7 +115,9 @@
     "tree-filter-user": "Filter: user messages only (toggle)",
     "tree-filter-labeled": "Filter: labeled entries only (toggle)",
     "tree-filter-all": "Filter: show everything (toggle)",
-    "tree-dialog-close": "Close the tree dialog"
+    "tree-dialog-close": "Close the tree dialog",
+    "content-center": "Center the selected message in the pane",
+    "content-copy": "Copy the selected message text"
   },
   "helpGroup": {
     "focus": "Focus previous / next pane",
@@ -295,6 +297,7 @@
     "copyUnavailable": "copy: actions unavailable",
     "copiedNode": "copied node text to clipboard",
     "noTextToCopy": "selected entry has no text to copy",
+    "noContentSelected": "no message selected",
     "copyFailed": "copy failed: {{error}}",
     "labelUnavailable": "label: actions unavailable",
     "labelSet": "label set: {{label}}",

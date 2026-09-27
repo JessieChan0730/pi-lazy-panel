@@ -611,6 +611,129 @@ test("y in the tree pane copies the node under the cursor and reports the result
 	h.panel.dispose();
 });
 
+test("y in the content pane copies the highlighted message and follows the highlight", async () => {
+	const h = makeTreeActionPanel();
+	await h.panel.load();
+	h.text();
+	// initial highlight is the active leaf e2
+	assert.equal(h.panel.state.contentHighlight, "e2");
+	h.panel.handleInput("3");
+	h.panel.handleInput("y");
+	await flush();
+	assert.deepEqual(h.copies, [{ file: "/tmp/s1.jsonl", entryId: "e2" }]);
+	assert.ok(h.text().at(-1)!.includes("copied node text"), h.text().at(-1));
+
+	// move the tree cursor onto e0 (no text): the content copy follows the new highlight
+	h.panel.handleInput("2");
+	h.panel.handleInput("g");
+	h.panel.handleInput("g");
+	await flush();
+	assert.equal(h.panel.state.contentHighlight, "e0");
+	h.panel.handleInput("3");
+	h.panel.handleInput("y");
+	await flush();
+	assert.equal(h.copies.at(-1)!.entryId, "e0");
+	assert.ok(h.text().at(-1)!.includes("no text to copy"), h.text().at(-1));
+	h.panel.dispose();
+});
+
+test("zz in the content pane centers the highlighted message", async () => {
+	const h = makeLoadedPanel(12);
+	await h.panel.load();
+	h.text();
+	// put the highlight on a middle message so there is room to center it
+	h.panel.handleInput("2");
+	h.panel.handleInput("g");
+	h.panel.handleInput("g");
+	h.panel.handleInput("j");
+	await flush();
+	assert.equal(h.panel.state.contentHighlight, "e1");
+	// the tree sync scrolls the block to the top of the pane
+	const topScroll = h.panel.state.cursor.content;
+	assert.ok(topScroll > 0, "the middle block starts below the top of the pane");
+
+	// zz (two-key sequence) scrolls it down into the middle of the viewport
+	h.panel.handleInput("3");
+	h.panel.handleInput("z");
+	h.panel.handleInput("z");
+	assert.ok(h.panel.state.cursor.content < topScroll, "zz moved the block away from the top toward the center");
+	assert.ok(h.panel.state.cursor.content >= 0);
+	assert.ok(h.text().some((l) => l.includes("›┌─")), "the highlighted block is still on screen after centering");
+	h.panel.dispose();
+});
+
+test("zz is a no-op when the content fits without scrolling", async () => {
+	const h = makeLoadedPanel(60);
+	await h.panel.load();
+	h.text();
+	h.panel.handleInput("3");
+	assert.equal(h.panel.state.cursor.content, 0);
+	h.panel.handleInput("z");
+	h.panel.handleInput("z");
+	assert.equal(h.panel.state.cursor.content, 0, "nothing to scroll, so the view stays put");
+	h.panel.dispose();
+});
+
+/** Panel with `n` short (one-line) messages on the active branch, so the content pane scrolls. */
+function makeShortContentPanel(n: number, height: number) {
+	const data: DataSource = {
+		listSessions: async () => [row(1, "/a")],
+		loadTree: async () => Array.from({ length: n }, (_, i) => treeRow(i)),
+		loadContent: async () => Array.from({ length: n }, (_, i) => ({ entryId: `e${i}`, role: i % 2 ? "assistant" : "user", timestamp: 0, markdown: `message ${i}` }) as ContentBlock),
+	};
+	const panel = new LazyPanel({ theme: fakeTheme, data, getHeight: () => height, requestRender: () => {}, onClose: () => {} });
+	return { panel, text: (width = 100) => panel.render(width).map((l) => stripTerminalSequences(l)) };
+}
+
+/** Output line where the content pane vertically centers a body row, derived from the rendered frame. */
+function contentMiddleRow(lines: string[]): number {
+	const bodyH = lines.length - 1; // the last line is the footer
+	const visible = bodyH - 2; // minus the content pane's top / bottom border
+	return 1 + Math.floor((visible - 1) / 2);
+}
+
+test("zz puts the highlighted message on the middle row, even for the last message (overscrolls)", async () => {
+	const h = makeShortContentPanel(12, 20);
+	await h.panel.load();
+	h.text();
+
+	// a middle message: navigate the tree to e5, then center it from the content pane
+	h.panel.handleInput("2");
+	h.panel.handleInput("g");
+	h.panel.handleInput("g");
+	for (let i = 0; i < 5; i++) {
+		h.panel.handleInput("j");
+		await flush();
+	}
+	assert.equal(h.panel.state.contentHighlight, "e5");
+	h.panel.handleInput("3");
+	h.panel.handleInput("z");
+	h.panel.handleInput("z");
+	let lines = h.text();
+	let marker = lines.findIndex((l) => l.includes("›┌─"));
+	assert.ok(Math.abs(marker - contentMiddleRow(lines)) <= 1, `middle message header at ${marker}, expected ~${contentMiddleRow(lines)}`);
+
+	// the last message (the active leaf): the tree sync clamps it to the last full page…
+	h.panel.handleInput("2");
+	h.panel.handleInput("G");
+	await flush();
+	assert.equal(h.panel.state.contentHighlight, "e11");
+	h.panel.handleInput("3");
+	const clamped = h.panel.state.cursor.content;
+	// …and zz scrolls past that so the last message reaches the middle too
+	h.panel.handleInput("z");
+	h.panel.handleInput("z");
+	assert.ok(h.panel.state.cursor.content > clamped, "zz scrolled past the last full page to center the final message");
+	lines = h.text();
+	marker = lines.findIndex((l) => l.includes("›┌─"));
+	assert.ok(Math.abs(marker - contentMiddleRow(lines)) <= 1, `last message header at ${marker}, expected ~${contentMiddleRow(lines)}`);
+
+	// a normal scroll leaves the overscrolled centering and snaps back into range
+	h.panel.handleInput("j");
+	assert.ok(h.panel.state.cursor.content < clamped + 2, "scrolling clears the centering and clamps back to the last full page");
+	h.panel.dispose();
+});
+
 /** The centered Label dialog in rendered `lines`: its top row, title line and input line (row + 1), or undefined when closed. */
 function labelDialog(lines: string[]): { top: number; title: string; input: string } | undefined {
 	const top = lines.findIndex((l) => l.includes(`┌─ ${LABEL_DIALOG_TITLE} `));

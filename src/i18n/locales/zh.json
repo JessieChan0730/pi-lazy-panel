@@ -115,7 +115,9 @@
     "tree-filter-user": "过滤：仅用户消息（切换）",
     "tree-filter-labeled": "过滤：仅带标签的条目（切换）",
     "tree-filter-all": "过滤：显示全部（切换）",
-    "tree-dialog-close": "关闭对话树对话框"
+    "tree-dialog-close": "关闭对话树对话框",
+    "content-center": "将选中的消息滚到面板中间",
+    "content-copy": "复制选中的消息文本"
   },
   "helpGroup": {
     "focus": "聚焦上一个 / 下一个面板",
@@ -295,6 +297,7 @@
     "copyUnavailable": "复制：操作不可用",
     "copiedNode": "已复制节点文本到剪贴板",
     "noTextToCopy": "选中的条目没有可复制的文本",
+    "noContentSelected": "没有选中的消息",
     "copyFailed": "复制失败：{{error}}",
     "labelUnavailable": "标签：操作不可用",
     "labelSet": "已设置标签：{{label}}",

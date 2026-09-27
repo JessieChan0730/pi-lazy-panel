@@ -73,8 +73,10 @@ test("resolveKeys: pane bindings shadow global, multi-key sequences go through p
 	assert.deepEqual(resolveKeys(bindings, "sessions", ["g"]), { kind: "pending" });
 	assert.equal(actionOf(resolveKeys(bindings, "sessions", ["g", "g"])), "go-top");
 	assert.deepEqual(resolveKeys(bindings, "sessions", ["g", "x"]), { kind: "none" });
-	// content pane is read-only: "y" is not bound there
-	assert.deepEqual(resolveKeys(bindings, "content", ["y"]), { kind: "none" });
+	// content pane: "y" copies the selected message, "zz" centers it (two-key sequence)
+	assert.deepEqual(resolveKeys(bindings, "content", ["y"]), { kind: "action", action: "content-copy", scope: "content" });
+	assert.deepEqual(resolveKeys(bindings, "content", ["z"]), { kind: "pending" });
+	assert.equal(actionOf(resolveKeys(bindings, "content", ["z", "z"])), "content-center");
 	assert.deepEqual(resolveKeys(bindings, "sessions", ["z"]), { kind: "none" });
 });
 
