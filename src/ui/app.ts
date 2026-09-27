@@ -91,9 +91,10 @@ import type {
 import { fit, sideBySide } from "./frame.ts";
 import { hitTest, listVisibleRows, type MouseTarget, panelGeometry } from "./mouse.ts";
 import { type ContentLayout, layoutContent, maxScroll, renderContentPane } from "./panes/content-pane.ts";
-import { clampFirst, renderSessionsPane, scrollOffset } from "./panes/sessions-pane.ts";
+import { clampFirst, renderSessionsPane, scrollOffset, sessionAtLine, sessionFirstLine, sessionLineCount } from "./panes/sessions-pane.ts";
 import { renderTreePane } from "./panes/tree-pane.ts";
 import { type OutlinePrefix, treeOutline } from "./tree-outline.ts";
+import { alertDialogSpec, cannotDeleteActiveTitle } from "./widgets/alert-dialog.ts";
 import { ChangelogDialog } from "./widgets/changelog-dialog.ts";
 import { compactDialogHints, compactDialogTitle } from "./widgets/compact-dialog.ts";
 import {
@@ -140,6 +141,12 @@ export interface PanelState {
 	/** Sessions selected with <space> for batch operations. */
 	selectedSessionFiles: Set<string>;
 	/**
+	 * Pinned session files in display order (newest pin first). These sit at the
+	 * top of the sessions pane regardless of the sort mode; persisted to
+	 * `~/.pi/agent/lazy-panel-pins.json` (see config/pins.ts).
+	 */
+	pinnedFiles: string[];
+	/**
 	 * Active `/` search per pane (absent = none). Kept per pane, so switching
 	 * panes keeps each pane's query; only the focused pane's search is acted on.
 	 */
@@ -173,6 +180,7 @@ export function createInitialState(overrides: Partial<PanelState> = {}): PanelSt
 		cursor: { sessions: 0, tree: 0, content: 0 },
 		contentHighlight: undefined,
 		selectedSessionFiles: new Set(),
+		pinnedFiles: [],
 		search: {},
 		scope: "current-folder",
 		sort: "recent",
@@ -187,7 +195,7 @@ export function createInitialState(overrides: Partial<PanelState> = {}): PanelSt
 
 /** Async loaders injected by the entry point (they wrap src/data/*). */
 export interface DataSource {
-	listSessions(scope: ListScope, sort: SessionSortMode): Promise<SessionRow[]>;
+	listSessions(scope: ListScope, sort: SessionSortMode, pinned: readonly string[]): Promise<SessionRow[]>;
 	loadTree(sessionFile: string, filter: TreeFilter): Promise<TreeRow[]>;
 	loadContent(sessionFile: string, leafEntryId?: string): Promise<ContentBlock[]>;
 	/** `i` in SESSIONS: what /session shows; undefined when the file cannot be read. */
@@ -216,6 +224,8 @@ export interface ActionSource {
 	restoreNode(sessionFile: string, entryId: string, options: RestoreOptions): Promise<EnterOutcome>;
 	/** d in SESSIONS (after confirmation): remove the file; resolves to how it was removed. */
 	deleteSession?(sessionFile: string): Promise<DeleteMethod>;
+	/** p in SESSIONS: persist the pinned session files (display order, newest first). */
+	setPins?(pinned: readonly string[]): Promise<void>;
 	/** r in SESSIONS: set the display name ("" clears it). */
 	renameSession?(sessionFile: string, name: string): Promise<void>;
 	/** n in SESSIONS: start a fresh session, naming it when `name` is non-empty (/new). */
@@ -378,6 +388,13 @@ export class LazyPanel implements Component, Focusable {
 	private layoutCache: { blocks: ContentBlock[]; inner: number; highlight: string | undefined; layout: ContentLayout } | undefined;
 	/** Viewport of the content pane as of the last render, used to clamp scrolling. */
 	private contentView = { inner: 60, visible: 10 };
+	/**
+	 * True right after `zz` centered the highlighted message: the content pane may
+	 * then scroll past the last full page (padding blanks below) so an end-of-file
+	 * message can sit in the middle, like vim's `zz`. Any normal scroll clears it
+	 * and the view snaps back to the last-full-page clamp.
+	 */
+	private contentCentered = false;
 	/** Terminal width from the last render, used to size the help overlay when clamping its scroll. */
 	private lastWidth = 80;
 	/** Matching body lines of the content pane, per layout and query (the layout changes with the width, so the matches follow it). */
@@ -453,7 +470,7 @@ export class LazyPanel implements Component, Focusable {
 	 */
 	private async listSessions(keepFile: string | undefined): Promise<boolean> {
 		try {
-			const rows = await this.o.data.listSessions(this.state.scope, this.state.sort);
+			const rows = await this.o.data.listSessions(this.state.scope, this.state.sort, this.state.pinnedFiles);
 			if (this.disposed) return false;
 			this.sessions = rows;
 		} catch (err) {
@@ -605,6 +622,8 @@ export class LazyPanel implements Component, Focusable {
 		this.state.contentHighlight = targetId;
 		if (targetId) {
 			const start = this.contentLayout().starts.get(targetId) ?? 0;
+			// 高亮切换是普通滚动（把消息滚到顶部）：清掉 zz 的越界居中标记。
+			this.contentCentered = false;
 			this.state.cursor.content = Math.min(start, this.contentMaxScroll());
 		}
 		this.o.requestRender();
@@ -629,8 +648,9 @@ export class LazyPanel implements Component, Focusable {
 	private contentLayoutFor(inner: number, visible: number): ContentLayout {
 		this.contentView = { inner: Math.max(1, inner), visible: Math.max(1, visible) };
 		const layout = this.contentLayout();
-		// 窗口变小后原来的滚动位置可能越界，这里顺手夹回来。
-		this.state.cursor.content = clamp(this.state.cursor.content, 0, maxScroll(layout.lines.length, this.contentView.visible));
+		// 窗口变小后原来的滚动位置可能越界，这里顺手夹回来；`zz` 居中时允许滚过末尾（夹到末行）。
+		const max = this.contentCentered ? Math.max(0, layout.lines.length - 1) : maxScroll(layout.lines.length, this.contentView.visible);
+		this.state.cursor.content = clamp(this.state.cursor.content, 0, max);
 		return layout;
 	}
 
@@ -824,24 +844,45 @@ export class LazyPanel implements Component, Focusable {
 	private hitTarget(event: TuiMouseEvent): MouseTarget | undefined {
 		const height = Math.max(8, this.o.getHeight());
 		const visible = listVisibleRows(height);
-		return hitTest({
+		const target = hitTest({
 			width: event.width,
 			height,
 			ratio: this.ratio,
 			x: event.x,
 			y: event.y,
 			sessionsFirst: this.listFirst("sessions", visible.sessions),
-			sessionsTotal: this.sessions.length,
+			// SESSIONS 按行命中：总数是渲染的行数（会话 2 行 + 分隔线），命中的行号再翻译回会话下标。
+			sessionsTotal: sessionLineCount(this.sessions.length, this.pinnedCount()),
 			treeFirst: this.listFirst("tree", visible.tree),
 			treeTotal: this.visibleTree.length,
 		});
+		if (target?.pane === "sessions" && target.row !== undefined) {
+			// 分隔线 / 留白行 → undefined：点它只切焦点、不移光标。
+			const index = sessionAtLine(target.row, this.sessions.length, this.pinnedCount());
+			return { pane: "sessions", ...(index !== undefined ? { row: index } : { row: undefined }) };
+		}
+		return target;
 	}
 
-	/** First visible row of a list pane: the wheel offset when set, else the cursor-centered window; always clamped. */
+	/** How many of the leading (sorted-to-front) sessions are pinned; drives the group rules and line geometry. */
+	private pinnedCount(): number {
+		if (this.state.pinnedFiles.length === 0) return 0;
+		const pinned = new Set(this.state.pinnedFiles);
+		return this.sessions.filter((r) => pinned.has(r.file)).length;
+	}
+
+	/** First visible line/row of a list pane: the wheel offset when set, else the cursor-centered window; always clamped. */
 	private listFirst(pane: "sessions" | "tree", visible: number): number {
-		const total = pane === "sessions" ? this.sessions.length : this.visibleTree.length;
 		const override = this.state.listScroll[pane];
-		const raw = override ?? scrollOffset(this.state.cursor[pane], total, visible);
+		if (pane === "sessions") {
+			// SESSIONS 在"行空间"里滚动：总数含分隔线，居中用光标所在会话的首行。
+			const total = sessionLineCount(this.sessions.length, this.pinnedCount());
+			const cursorLine = sessionFirstLine(this.state.cursor.sessions, this.sessions.length, this.pinnedCount());
+			const raw = override ?? scrollOffset(cursorLine, total, visible);
+			return clampFirst(raw, total, visible);
+		}
+		const total = this.visibleTree.length;
+		const raw = override ?? scrollOffset(this.state.cursor.tree, total, visible);
 		return clampFirst(raw, total, visible);
 	}
 
@@ -859,7 +900,8 @@ export class LazyPanel implements Component, Focusable {
 	/** Scroll a list pane's viewport by `delta` rows, leaving the selection where it is (wheel only). */
 	private scrollList(pane: "sessions" | "tree", delta: number): void {
 		const visible = listVisibleRows(Math.max(8, this.o.getHeight()))[pane];
-		const total = pane === "sessions" ? this.sessions.length : this.visibleTree.length;
+		// SESSIONS 的滚动范围是渲染行数（含分隔线）。
+		const total = pane === "sessions" ? sessionLineCount(this.sessions.length, this.pinnedCount()) : this.visibleTree.length;
 		const next = clampFirst(this.listFirst(pane, visible) + delta, total, visible);
 		if (next === this.state.listScroll[pane]) return;
 		this.state.listScroll[pane] = next;
@@ -944,6 +986,12 @@ export class LazyPanel implements Component, Focusable {
 			case "scroll-content-up":
 				this.scrollContent(-this.contentPageStep());
 				return;
+			case "content-center":
+				this.centerContent();
+				return;
+			case "content-copy":
+				void this.copyContentBlock();
+				return;
 			case "tree-copy":
 				void this.copyTreeNode(this.currentTreeNode());
 				return;
@@ -1000,6 +1048,9 @@ export class LazyPanel implements Component, Focusable {
 				return;
 			case "session-toggle-select":
 				this.toggleSelect();
+				return;
+			case "session-pin":
+				void this.togglePin();
 				return;
 			case "changelog":
 				void this.openChangelog();
@@ -1063,6 +1114,8 @@ export class LazyPanel implements Component, Focusable {
 	}
 
 	private setContentScroll(line: number): void {
+		// 普通滚动：回到常规夹取范围（清掉 zz 的越界居中标记），越界值会被夹回最后一整页。
+		this.contentCentered = false;
 		const next = clamp(line, 0, this.contentMaxScroll());
 		if (next === this.state.cursor.content) return;
 		this.state.cursor.content = next;
@@ -1072,6 +1125,41 @@ export class LazyPanel implements Component, Focusable {
 	/** J/K from the sessions pane scroll the content pane by half a viewport. */
 	private contentPageStep(): number {
 		return Math.max(1, Math.floor(this.contentView.visible / 2));
+	}
+
+	/**
+	 * zz (content pane): scroll so the highlighted message sits in the middle of
+	 * the viewport (vim's zz). To center a message near the end of the file the
+	 * pane may scroll past the last full page — `contentCentered` lets the render
+	 * pad blanks below; any later scroll clears it. A no-op when the whole
+	 * conversation already fits (there is nothing to scroll).
+	 */
+	private centerContent(): void {
+		const target = this.state.contentHighlight;
+		if (!target || this.content.length === 0) {
+			this.setStatus(t("status.noContentSelected"));
+			return;
+		}
+		const layout = this.contentLayout();
+		const start = layout.starts.get(target);
+		if (start === undefined) return;
+		// 让选中消息的头部行落在窗口正中：起始行减去半个可见窗口，允许滚过末尾以居中末尾消息。
+		const half = Math.floor((this.contentView.visible - 1) / 2);
+		const next = clamp(start - half, 0, Math.max(0, layout.lines.length - 1));
+		this.contentCentered = true;
+		this.state.cursor.content = next;
+		this.o.requestRender();
+	}
+
+	/** y (content pane): copy the highlighted message's full text (same as TREE y). */
+	private copyContentBlock(): Promise<void> {
+		const file = this.loadedSessionFile;
+		const entryId = this.state.contentHighlight;
+		if (!file || !entryId) {
+			this.setStatus(t("status.noContentSelected"));
+			return Promise.resolve();
+		}
+		return this.copyEntryText(file, entryId);
 	}
 
 	private cycleFocus(delta: 1 | -1): void {
@@ -1369,12 +1457,17 @@ export class LazyPanel implements Component, Focusable {
 	/** y: copy the node's full text (like /tree ctrl+x). */
 	private async copyTreeNode(target: TreeTarget | undefined): Promise<void> {
 		if (!target) return;
+		await this.copyEntryText(target.file, target.row.entryId);
+	}
+
+	/** Copy the full text of `entryId` in `file` to the clipboard (shared by TREE y and CONTENT y). */
+	private async copyEntryText(file: string, entryId: string): Promise<void> {
 		if (!this.o.actions) {
 			this.setStatus(t("status.copyUnavailable"));
 			return;
 		}
 		try {
-			const copied = await this.o.actions.copyNodeText(target.file, target.row.entryId);
+			const copied = await this.o.actions.copyNodeText(file, entryId);
 			if (this.disposed) return;
 			this.setStatus(copied ? t("status.copiedNode") : t("status.noTextToCopy"));
 		} catch (err) {
@@ -1773,9 +1866,9 @@ export class LazyPanel implements Component, Focusable {
 			this.setStatus(t("status.deleteUnavailable"));
 			return;
 		}
-		// 和 pi 内置 /resume 一样：当前打开的会话直接拒绝，不弹确认框。
+		// 和 pi 内置 /resume 一样：当前打开的会话不能删；这里弹一个警告框告诉用户为什么。
 		if (findSessionIndex([row], this.currentSessionFile) === 0) {
-			this.setStatus(t("status.cannotDeleteActive"));
+			this.openCannotDeleteAlert(this.sessionTitle(row));
 			return;
 		}
 		this.deleteTarget = row;
@@ -1806,7 +1899,9 @@ export class LazyPanel implements Component, Focusable {
 		const rows = this.sessions.filter((r) => this.state.selectedSessionFiles.has(r.file));
 		const targets = rows.filter((r) => findSessionIndex([r], this.currentSessionFile) !== 0);
 		if (targets.length === 0) {
-			this.setStatus(t("status.cannotDeleteActive"));
+			// 选中的全是（其实只可能有一个）当前打开的会话：弹警告框，什么都不删。
+			const active = rows.find((r) => findSessionIndex([r], this.currentSessionFile) === 0);
+			this.openCannotDeleteAlert(active ? this.sessionTitle(active) : undefined);
 			return;
 		}
 		const skipped = rows.length - targets.length;
@@ -1839,16 +1934,19 @@ export class LazyPanel implements Component, Focusable {
 		this.setStatus(t("status.deletingN", { count: targets.length }));
 		let deleted = 0;
 		let firstError: string | undefined;
+		const removed: string[] = [];
 		for (const row of targets) {
 			try {
 				await remove(row.file);
 				deleted++;
 				this.state.selectedSessionFiles.delete(row.file);
+				removed.push(row.file);
 			} catch (err) {
 				firstError ??= `${this.sessionTitle(row)}: ${(err as Error).message}`;
 			}
 			if (this.disposed) return;
 		}
+		this.unpinAfterDelete(removed);
 		const failed = targets.length - deleted;
 		const summary = failed ? t("status.batchDeletedFailed", { deleted, failed, error: firstError }) : t("status.sessionsDeleted", { count: deleted });
 		if (await this.listSessions(undefined)) this.setStatus(summary);
@@ -1868,6 +1966,60 @@ export class LazyPanel implements Component, Focusable {
 	private clearSelection(): void {
 		this.state.selectedSessionFiles.clear();
 		this.setStatus(t("status.selectionCleared"));
+	}
+
+	/**
+	 * p: pin / unpin the session under the cursor (or every selected session).
+	 * With a multi-selection: pin them all when any is still unpinned, otherwise
+	 * unpin them all. Newly pinned sessions go to the top in list order (the most
+	 * recent pin ends up first); the list is re-sorted with the cursor following
+	 * its session. Persisted to disk via `setPins`; a save failure is reverted.
+	 */
+	private async togglePin(): Promise<void> {
+		if (!this.o.actions?.setPins) {
+			this.setStatus(t("status.pinUnavailable"));
+			return;
+		}
+		let targets: string[];
+		if (this.state.selectedSessionFiles.size > 0) {
+			// 按列表顺序取所选会话，置顶时作为一组放到最上面。
+			targets = this.sessions.filter((r) => this.state.selectedSessionFiles.has(r.file)).map((r) => r.file);
+		} else {
+			const row = this.currentSessionRow();
+			if (!row) return;
+			targets = [row.file];
+		}
+		if (targets.length === 0) return;
+		const pinnedSet = new Set(this.state.pinnedFiles);
+		const toPin = targets.filter((f) => !pinnedSet.has(f));
+		const pinning = toPin.length > 0;
+		// 有未置顶的就整组置顶，否则整组取消置顶（和多选删除同一套"整组"语义）。
+		const next = pinning
+			? [...toPin, ...this.state.pinnedFiles]
+			: this.state.pinnedFiles.filter((f) => !targets.includes(f));
+		const prev = this.state.pinnedFiles;
+		this.state.pinnedFiles = next;
+		try {
+			await this.o.actions.setPins(next);
+			if (this.disposed) return;
+		} catch (err) {
+			this.state.pinnedFiles = prev;
+			this.setStatus(t("status.pinFailed", { error: (err as Error).message }));
+			return;
+		}
+		const keep = this.sessions[this.state.cursor.sessions]?.file;
+		const count = pinning ? toPin.length : targets.length;
+		const status = pinning ? t("status.pinned", { count }) : t("status.unpinned", { count });
+		if (await this.listSessions(keep)) this.setStatus(status);
+		await this.followSessionsCursor();
+	}
+
+	/** Drop `files` from the pin list and persist if anything changed (called after a delete). */
+	private unpinAfterDelete(files: Iterable<string>): void {
+		const drop = new Set(files);
+		if (!this.state.pinnedFiles.some((f) => drop.has(f))) return;
+		this.state.pinnedFiles = this.state.pinnedFiles.filter((f) => !drop.has(f));
+		void this.o.actions?.setPins?.(this.state.pinnedFiles);
 	}
 
 	/**
@@ -1956,6 +2108,23 @@ export class LazyPanel implements Component, Focusable {
 		this.o.requestRender();
 	}
 
+	/**
+	 * Warn (in a box, not just the footer) that the session pi has open can't be
+	 * deleted. Reuses the select dialog + "confirm" mode so Enter / Esc / OK all
+	 * dismiss it through `closeConfirm`; nothing is ever deleted from here.
+	 */
+	private openCannotDeleteAlert(subject: string | undefined): void {
+		this.state.mode = "confirm";
+		this.selectDialog.open(
+			alertDialogSpec({
+				title: cannotDeleteActiveTitle(),
+				...(subject ? { subject } : {}),
+				onClose: () => this.closeConfirm(),
+			}),
+		);
+		this.o.requestRender();
+	}
+
 	/** Yes in the confirmation: remove the file, then re-list with the cursor clamped (TREE / CONTENT follow). */
 	private async deleteSession(): Promise<void> {
 		const row = this.deleteTarget;
@@ -1972,6 +2141,7 @@ export class LazyPanel implements Component, Focusable {
 			return;
 		}
 		this.state.selectedSessionFiles.delete(row.file);
+		this.unpinAfterDelete([row.file]);
 		// 删掉的行没了，光标夹回范围内；光标下换了会话就重新加载右边。
 		if (await this.listSessions(undefined)) this.setStatus(method === "trash" ? t("status.movedToTrash") : t("status.deleted"));
 		await this.followSessionsCursor();
@@ -2750,8 +2920,10 @@ export class LazyPanel implements Component, Focusable {
 					scope: this.state.scope,
 					sort: this.state.sort,
 					selected: this.state.selectedSessionFiles,
+					pinnedCount: this.pinnedCount(),
 					title: this.paneTitle("sessions"),
 					theme,
+					...(this.currentSessionFile ? { currentFile: this.currentSessionFile } : {}),
 					...(sessionsSearch ? { search: sessionsSearch } : {}),
 				},
 				leftW,

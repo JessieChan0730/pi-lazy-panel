@@ -49,6 +49,8 @@ export const DEFAULT_KEYMAP: Keymap = {
 		"session-sort": "s",
 		"session-info": "i",
 		"session-toggle-select": "space",
+		// p 置顶 / 取消置顶光标（或所选）会话，置顶的会话固定在列表最上、不受排序影响。
+		"session-pin": "p",
 		// c 压缩光标所在会话（对应 /compact）；C（大写）是全局 scope-current，不冲突。
 		"session-compact": "c",
 		"session-fork": "o",
@@ -76,12 +78,15 @@ export const DEFAULT_KEYMAP: Keymap = {
 		"tree-copy": "y",
 	},
 
-	// 只读面板：只保留上下滚动 + 顶部/底部（搜索 / 帮助等走 global）。
+	// 只读面板：上下滚动 + 顶部/底部（搜索 / 帮助等走 global）；zz 把选中消息居中、y 复制选中消息。
 	content: {
 		"move-down": ["j", "down"],
 		"move-up": ["k", "up"],
 		"go-top": "gg",
 		"go-bottom": "G",
+		// vim 的 zz：把当前选中的消息滚到面板中间；y 复制选中消息的全文。
+		"content-center": "zz",
+		"content-copy": "y",
 	},
 
 	// 树对话框（a 打开）：这里只放对话框独有的键；j/k、gg/G、Enter、y、T、z 沿用 tree 面板的绑定，

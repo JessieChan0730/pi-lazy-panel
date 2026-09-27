@@ -1,4 +1,8 @@
 {
+  "alert": {
+    "cannotDeleteActive": "Can't delete the active session",
+    "ok": "OK"
+  },
   "command": {
     "description": "Open the lazygit-style session panel (sessions / tree / content)"
   },
@@ -31,7 +35,10 @@
     "contentEmpty": "No messages.",
     "emptySession": "(empty session)",
     "msgs": "{{count}} msgs",
+    "current": "(current)",
     "selected": "{{count}} selected",
+    "pinnedGroup": "PINNED",
+    "othersGroup": "OTHERS",
     "messages": "{{count}} messages",
     "selectSession": "Select a session.",
     "loading": "Loading…",
@@ -88,6 +95,7 @@
     "session-rename": "Rename session",
     "session-fork": "Fork session and open the fork",
     "session-toggle-select": "Toggle multi-select",
+    "session-pin": "Pin / unpin session (pinned stay on top)",
     "session-export": "Export to HTML / JSONL",
     "session-import": "Import from JSONL",
     "session-share": "Share as private GitHub Gist",
@@ -107,7 +115,9 @@
     "tree-filter-user": "Filter: user messages only (toggle)",
     "tree-filter-labeled": "Filter: labeled entries only (toggle)",
     "tree-filter-all": "Filter: show everything (toggle)",
-    "tree-dialog-close": "Close the tree dialog"
+    "tree-dialog-close": "Close the tree dialog",
+    "content-center": "Center the selected message in the pane",
+    "content-copy": "Copy the selected message text"
   },
   "helpGroup": {
     "focus": "Focus previous / next pane",
@@ -241,8 +251,10 @@
     "cost": "Cost",
     "created": "Created",
     "updated": "Updated",
-    "path": "Path",
+    "path": "Session path",
+    "directory": "Directory",
     "id": "ID",
+    "source": "Source",
     "none": "(none)",
     "unknown": "(unknown)"
   },
@@ -285,13 +297,13 @@
     "copyUnavailable": "copy: actions unavailable",
     "copiedNode": "copied node text to clipboard",
     "noTextToCopy": "selected entry has no text to copy",
+    "noContentSelected": "no message selected",
     "copyFailed": "copy failed: {{error}}",
     "labelUnavailable": "label: actions unavailable",
     "labelSet": "label set: {{label}}",
     "labelRemoved": "label removed",
     "labelFailed": "label failed: {{error}}",
     "deleteUnavailable": "delete: actions unavailable",
-    "cannotDeleteActive": "Cannot delete the currently active session",
     "deletingN": "deleting {{count}}…",
     "deleting": "deleting…",
     "deleteFailed": "delete failed: {{error}}",
@@ -301,6 +313,12 @@
     "sessionsDeleted_other": "{{count}} sessions deleted",
     "batchDeletedFailed": "deleted {{deleted}}, {{failed}} failed — {{error}}",
     "selectionCleared": "selection cleared",
+    "pinUnavailable": "pin: actions unavailable",
+    "pinFailed": "pin failed: {{error}}",
+    "pinned_one": "session pinned",
+    "pinned_other": "{{count}} sessions pinned",
+    "unpinned_one": "session unpinned",
+    "unpinned_other": "{{count}} sessions unpinned",
     "multiSelectRefused": "{{action}}: cannot act on multiple sessions (Esc clears the selection)",
     "changelogUnavailable": "changelog: unavailable",
     "changelogFailed": "changelog failed: {{error}}",

@@ -108,6 +108,7 @@ When the panel opens, the cursor lands on the session pi currently has open (so 
 | `y` | `session-clone` | Clone (`/clone`): a *Clone session?* Yes / No box confirms (cursor on No), then the active branch is copied to a new session file and pi opens it |
 | `Y` | `session-copy-last-reply` | Copy the last assistant reply to the clipboard (`/copy`): only its text fragments, skipping thinking and tool calls; the panel stays open and the footer reports the result (*copied last reply* or *no assistant reply to copy*) |
 | `Space` | `session-toggle-select` | Toggle multi-select: no marker glyph is drawn — a selected row's title is colored (accent) to stand out in a long list — and the title starts with `3 selected`. With a selection, `d` deletes them all after a single *Delete N sessions?* confirmation (skipping the session pi has open; failures stay listed and selected, the first error goes to the footer), while `r` `o` `y` `e` `S` refuse (*cannot act on multiple sessions*). `Esc` clears the selection first and only quits on the next press |
+| `p` | `session-pin` | Pin / unpin the session under the cursor (or, with a multi-selection, all selected ones): pin when any target is still unpinned, otherwise unpin. Pinned sessions are grouped at the very top of the list under a dim `── PINNED ──` rule (the rest under `── OTHERS ──`) regardless of the sort — the most recent pin sits above the earlier ones; sorting and searching still reach them, but the `C` / `A` scope filter can hide a pin from another folder (its pin is kept). The pin list persists in `~/.pi/agent/lazy-panel-pins.json` and is pruned of sessions deleted elsewhere the next time the panel opens |
 | `e` | `session-export` | Export (`/export`): a centered *Export as* menu picks **HTML** (the whole tree, rendered by pi's own `pi --export`) or **JSONL** (the active branch, re-importable), then an *Export to* box prefilled with pi's default path (`pi-session-<file>.html` / `session-<time>.jsonl` under pi's working directory). Relative paths and `~` work on all platforms; a directory (existing, or an input ending in `/`) uses the default filename inside it. `Esc` in the box returns to the menu; an existing file first asks *Overwrite file?*. Any session can be exported, not just the current one; the panel stays open and the footer says where the file went |
 | `I` | `session-import` | Import (`/import`): a centered box asks for a session `.jsonl` (relative to pi's working directory, `~` allowed), an *Import and switch to it?* Yes / No box confirms, then the file is copied into the current session directory (a name clash gets a `-1` suffix), pi switches to it, and the panel closes. A missing / empty / non-pi file is reported in the footer and nothing is copied |
 | `S` | `session-share` | Share (`/share`): an *Upload as secret gist?* Yes / No box confirms (cursor on No), then the session is rendered to HTML and uploaded with `gh gist create --public=false`; the pi.dev view link is copied to the clipboard and shown in the footer. Requires a logged-in GitHub CLI (otherwise it warns in pi's wording); pi's Radius upload is not available to extensions |
@@ -149,12 +150,14 @@ In the table below the parenthesis after "Config name" marks which scope it belo
 
 ## CONTENT pane (read-only)
 
-Only scrolling and search; copying a message is done in the TREE pane (`y`).
+Scrolling, search, plus centering and copying the selected message (the one the TREE cursor highlights, drawn with a `›` marker).
 
 | Key | Config name | Action |
 | --- | --- | --- |
 | `j` `k` `↑` `↓` | `move-down` / `move-up` | Scroll |
 | `gg` / `G` | `go-top` / `go-bottom` | Top / bottom |
+| `zz` | `content-center` | Scroll the selected message to the middle of the pane (vim's `zz`); a no-op when the content already fits without scrolling |
+| `y` | `content-copy` | Copy the selected message's full text to the clipboard (same as `y` in the TREE pane) |
 | `/` | `search` (global) | Search the rendered message body (bare words only, no qualifiers); a matching line is scrolled to the top and `n` / `N` step through hits |
 
 ## Mouse

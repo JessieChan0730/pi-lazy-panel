@@ -48,6 +48,11 @@ export interface SelectDialogSpec {
 	 * show every entry. Used by the fork selector, which can be long.
 	 */
 	maxRows?: number;
+	/**
+	 * Border + title color of the box (default: the accent border / title). An
+	 * alert passes "error" so a warning box reads in red.
+	 */
+	tone?: Parameters<Theme["fg"]>[0];
 	/** Enter (or a shortcut): the index of the picked entry. */
 	onSelect: (index: number) => void;
 	onCancel: () => void;
@@ -161,12 +166,15 @@ export class SelectDialog {
 		const items = this.spec?.items ?? [];
 		const rows = this.visibleRows();
 		const inner = width - 2;
+		// tone 覆盖强调色（警告框传 "error"：红色的边框 / 标题 / 选中项），默认沿用 accent。
+		const accentColor = this.spec?.tone ?? "accent";
+		const borderColor = this.spec?.tone ?? "borderAccent";
 		const body = items.slice(this.scroll, this.scroll + rows).map((item, k) => {
 			const i = this.scroll + k;
 			const selected = i === this.index;
-			// 选中行：accent 色的 › 标记 + 整行选中背景，和三个面板里的光标行一致。
+			// 选中行：accent（或 tone）色的 › 标记 + 整行选中背景，和三个面板里的光标行一致。
 			const marker = selected ? "› " : "  ";
-			const line = ` ${theme.fg("accent", marker)}${selected ? theme.fg("accent", item) : theme.fg("text", item)}`;
+			const line = ` ${theme.fg(accentColor, marker)}${selected ? theme.fg(accentColor, item) : theme.fg("text", item)}`;
 			return selected ? theme.bg("selectedBg", fit(line, inner)) : line;
 		});
 		const meta = truncateToWidth(this.spec?.subject ?? "", metaBudget(width, title) - 3, "…", false);
@@ -175,8 +183,8 @@ export class SelectDialog {
 			height: rows + 2,
 			title,
 			...(meta ? { meta } : {}),
-			border: (s) => theme.fg("borderAccent", s),
-			titleStyle: (s) => theme.bold(theme.fg("accent", s)),
+			border: (s) => theme.fg(borderColor, s),
+			titleStyle: (s) => theme.bold(theme.fg(accentColor, s)),
 			metaStyle: (s) => theme.fg("dim", s),
 		});
 	}

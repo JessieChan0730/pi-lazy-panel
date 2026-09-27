@@ -1,4 +1,8 @@
 {
+  "alert": {
+    "cannotDeleteActive": "不能删除当前会话",
+    "ok": "知道了"
+  },
   "command": {
     "description": "打开 lazygit 风格的会话面板（会话 / 对话树 / 内容）"
   },
@@ -31,7 +35,10 @@
     "contentEmpty": "没有消息。",
     "emptySession": "（空会话）",
     "msgs": "{{count}} 条消息",
+    "current": "（当前）",
     "selected": "已选 {{count}} 个",
+    "pinnedGroup": "置顶",
+    "othersGroup": "其他",
     "messages": "{{count}} 条消息",
     "selectSession": "请选择一个会话。",
     "loading": "加载中…",
@@ -88,6 +95,7 @@
     "session-rename": "重命名会话",
     "session-fork": "分叉会话并打开分叉",
     "session-toggle-select": "切换多选",
+    "session-pin": "置顶 / 取消置顶会话（置顶始终在最上）",
     "session-export": "导出为 HTML / JSONL",
     "session-import": "从 JSONL 导入",
     "session-share": "分享为私有 GitHub Gist",
@@ -107,7 +115,9 @@
     "tree-filter-user": "过滤：仅用户消息（切换）",
     "tree-filter-labeled": "过滤：仅带标签的条目（切换）",
     "tree-filter-all": "过滤：显示全部（切换）",
-    "tree-dialog-close": "关闭对话树对话框"
+    "tree-dialog-close": "关闭对话树对话框",
+    "content-center": "将选中的消息滚到面板中间",
+    "content-copy": "复制选中的消息文本"
   },
   "helpGroup": {
     "focus": "聚焦上一个 / 下一个面板",
@@ -241,8 +251,10 @@
     "cost": "费用",
     "created": "创建时间",
     "updated": "更新时间",
-    "path": "路径",
+    "path": "会话路径",
+    "directory": "工作目录",
     "id": "ID",
+    "source": "来源会话",
     "none": "（无）",
     "unknown": "（未知）"
   },
@@ -285,13 +297,13 @@
     "copyUnavailable": "复制：操作不可用",
     "copiedNode": "已复制节点文本到剪贴板",
     "noTextToCopy": "选中的条目没有可复制的文本",
+    "noContentSelected": "没有选中的消息",
     "copyFailed": "复制失败：{{error}}",
     "labelUnavailable": "标签：操作不可用",
     "labelSet": "已设置标签：{{label}}",
     "labelRemoved": "已清除标签",
     "labelFailed": "设置标签失败：{{error}}",
     "deleteUnavailable": "删除：操作不可用",
-    "cannotDeleteActive": "无法删除当前正在使用的会话",
     "deletingN": "正在删除 {{count}} 个…",
     "deleting": "正在删除…",
     "deleteFailed": "删除失败：{{error}}",
@@ -301,6 +313,12 @@
     "sessionsDeleted_other": "已删除 {{count}} 个会话",
     "batchDeletedFailed": "已删除 {{deleted}} 个，{{failed}} 个失败 —— {{error}}",
     "selectionCleared": "已清空选择",
+    "pinUnavailable": "置顶：操作不可用",
+    "pinFailed": "置顶失败：{{error}}",
+    "pinned_one": "会话已置顶",
+    "pinned_other": "已置顶 {{count}} 个会话",
+    "unpinned_one": "会话已取消置顶",
+    "unpinned_other": "已取消置顶 {{count}} 个会话",
     "multiSelectRefused": "{{action}}：不能对多个会话操作（按 Esc 清空选择）",
     "changelogUnavailable": "更新日志：不可用",
     "changelogFailed": "加载更新日志失败：{{error}}",

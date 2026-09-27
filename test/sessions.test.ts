@@ -50,3 +50,30 @@ test("sortSessions: recent / created by time, title sorts by shown title (name o
 	// the input is never mutated
 	assert.deepEqual(files(rows), ["a", "b", "c", "d", "e", "f"]);
 });
+
+test("sortSessions: pinned files sit on top in pin order (flat, no thread indent) across every mode", async () => {
+	const { sortSessions } = await import("../src/data/sessions.ts");
+	const r = (file: string, over: Partial<SessionRow>): SessionRow => ({ ...row(file), ...over });
+	const rows = [
+		r("a", { createdAt: 1, updatedAt: 40, name: "zeta" }),
+		r("b", { createdAt: 4, updatedAt: 10, preview: "Hi" }),
+		r("c", { createdAt: 2, updatedAt: 30, name: "Alpha" }),
+		r("d", { createdAt: 3, updatedAt: 20, parentFile: "a", name: "beta" }),
+	];
+	const files = (out: SessionRow[]) => out.map((s) => s.file);
+	// pin order is display order (newest pin first): d then b → [d, b] on top, rest sorted by mode
+	assert.deepEqual(files(sortSessions(rows, "recent", ["d", "b"])), ["d", "b", "a", "c"]);
+	// created order of the rest {a,c}: a(created 1) vs c(created 2) → c before a
+	assert.deepEqual(files(sortSessions(rows, "created", ["d", "b"])), ["d", "b", "c", "a"]);
+	// threaded: a pinned session is flat at the top; the rest is threaded (d's parent a is pinned/removed → d is a root)
+	const threaded = sortSessions(rows, "threaded", ["a"]);
+	assert.deepEqual(files(threaded), ["a", "c", "d", "b"]);
+	// the pinned row carries no thread indent even in threaded mode
+	assert.equal(threaded[0]!.threadDepth, undefined);
+	// an empty pin list behaves exactly like the mode alone
+	assert.deepEqual(files(sortSessions(rows, "recent", [])), files(sortSessions(rows, "recent")));
+	// pins referencing an absent file are ignored
+	assert.deepEqual(files(sortSessions(rows, "recent", ["zzz", "b"])), ["b", "a", "c", "d"]);
+	// input not mutated
+	assert.deepEqual(files(rows), ["a", "b", "c", "d"]);
+});

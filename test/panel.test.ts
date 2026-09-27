@@ -27,6 +27,7 @@ import type {
 	TreeRow,
 } from "../src/types.ts";
 import { type ActionSource, type DataSource, LazyPanel } from "../src/ui/app.ts";
+import { cannotDeleteActiveTitle } from "../src/ui/widgets/alert-dialog.ts";
 import { compactDialogTitle } from "../src/ui/widgets/compact-dialog.ts";
 import {
 	cloneSessionTitle,
@@ -69,6 +70,7 @@ const SUMMARY_MENU = restoreSummaryMenu();
 const SEARCH_LABEL = searchLabel();
 const SESSION_INFO_TITLE = sessionInfoTitle();
 const COMPACT_DIALOG_TITLE = compactDialogTitle();
+const CANNOT_DELETE_ACTIVE_TITLE = cannotDeleteActiveTitle();
 
 /** Styling is irrelevant here; return text unchanged so assertions stay simple. */
 const fakeTheme = {
@@ -606,6 +608,129 @@ test("y in the tree pane copies the node under the cursor and reports the result
 	h.panel.handleInput("y");
 	await flush();
 	assert.equal(h.copies.length, 2);
+	h.panel.dispose();
+});
+
+test("y in the content pane copies the highlighted message and follows the highlight", async () => {
+	const h = makeTreeActionPanel();
+	await h.panel.load();
+	h.text();
+	// initial highlight is the active leaf e2
+	assert.equal(h.panel.state.contentHighlight, "e2");
+	h.panel.handleInput("3");
+	h.panel.handleInput("y");
+	await flush();
+	assert.deepEqual(h.copies, [{ file: "/tmp/s1.jsonl", entryId: "e2" }]);
+	assert.ok(h.text().at(-1)!.includes("copied node text"), h.text().at(-1));
+
+	// move the tree cursor onto e0 (no text): the content copy follows the new highlight
+	h.panel.handleInput("2");
+	h.panel.handleInput("g");
+	h.panel.handleInput("g");
+	await flush();
+	assert.equal(h.panel.state.contentHighlight, "e0");
+	h.panel.handleInput("3");
+	h.panel.handleInput("y");
+	await flush();
+	assert.equal(h.copies.at(-1)!.entryId, "e0");
+	assert.ok(h.text().at(-1)!.includes("no text to copy"), h.text().at(-1));
+	h.panel.dispose();
+});
+
+test("zz in the content pane centers the highlighted message", async () => {
+	const h = makeLoadedPanel(12);
+	await h.panel.load();
+	h.text();
+	// put the highlight on a middle message so there is room to center it
+	h.panel.handleInput("2");
+	h.panel.handleInput("g");
+	h.panel.handleInput("g");
+	h.panel.handleInput("j");
+	await flush();
+	assert.equal(h.panel.state.contentHighlight, "e1");
+	// the tree sync scrolls the block to the top of the pane
+	const topScroll = h.panel.state.cursor.content;
+	assert.ok(topScroll > 0, "the middle block starts below the top of the pane");
+
+	// zz (two-key sequence) scrolls it down into the middle of the viewport
+	h.panel.handleInput("3");
+	h.panel.handleInput("z");
+	h.panel.handleInput("z");
+	assert.ok(h.panel.state.cursor.content < topScroll, "zz moved the block away from the top toward the center");
+	assert.ok(h.panel.state.cursor.content >= 0);
+	assert.ok(h.text().some((l) => l.includes("›┌─")), "the highlighted block is still on screen after centering");
+	h.panel.dispose();
+});
+
+test("zz is a no-op when the content fits without scrolling", async () => {
+	const h = makeLoadedPanel(60);
+	await h.panel.load();
+	h.text();
+	h.panel.handleInput("3");
+	assert.equal(h.panel.state.cursor.content, 0);
+	h.panel.handleInput("z");
+	h.panel.handleInput("z");
+	assert.equal(h.panel.state.cursor.content, 0, "nothing to scroll, so the view stays put");
+	h.panel.dispose();
+});
+
+/** Panel with `n` short (one-line) messages on the active branch, so the content pane scrolls. */
+function makeShortContentPanel(n: number, height: number) {
+	const data: DataSource = {
+		listSessions: async () => [row(1, "/a")],
+		loadTree: async () => Array.from({ length: n }, (_, i) => treeRow(i)),
+		loadContent: async () => Array.from({ length: n }, (_, i) => ({ entryId: `e${i}`, role: i % 2 ? "assistant" : "user", timestamp: 0, markdown: `message ${i}` }) as ContentBlock),
+	};
+	const panel = new LazyPanel({ theme: fakeTheme, data, getHeight: () => height, requestRender: () => {}, onClose: () => {} });
+	return { panel, text: (width = 100) => panel.render(width).map((l) => stripTerminalSequences(l)) };
+}
+
+/** Output line where the content pane vertically centers a body row, derived from the rendered frame. */
+function contentMiddleRow(lines: string[]): number {
+	const bodyH = lines.length - 1; // the last line is the footer
+	const visible = bodyH - 2; // minus the content pane's top / bottom border
+	return 1 + Math.floor((visible - 1) / 2);
+}
+
+test("zz puts the highlighted message on the middle row, even for the last message (overscrolls)", async () => {
+	const h = makeShortContentPanel(12, 20);
+	await h.panel.load();
+	h.text();
+
+	// a middle message: navigate the tree to e5, then center it from the content pane
+	h.panel.handleInput("2");
+	h.panel.handleInput("g");
+	h.panel.handleInput("g");
+	for (let i = 0; i < 5; i++) {
+		h.panel.handleInput("j");
+		await flush();
+	}
+	assert.equal(h.panel.state.contentHighlight, "e5");
+	h.panel.handleInput("3");
+	h.panel.handleInput("z");
+	h.panel.handleInput("z");
+	let lines = h.text();
+	let marker = lines.findIndex((l) => l.includes("›┌─"));
+	assert.ok(Math.abs(marker - contentMiddleRow(lines)) <= 1, `middle message header at ${marker}, expected ~${contentMiddleRow(lines)}`);
+
+	// the last message (the active leaf): the tree sync clamps it to the last full page…
+	h.panel.handleInput("2");
+	h.panel.handleInput("G");
+	await flush();
+	assert.equal(h.panel.state.contentHighlight, "e11");
+	h.panel.handleInput("3");
+	const clamped = h.panel.state.cursor.content;
+	// …and zz scrolls past that so the last message reaches the middle too
+	h.panel.handleInput("z");
+	h.panel.handleInput("z");
+	assert.ok(h.panel.state.cursor.content > clamped, "zz scrolled past the last full page to center the final message");
+	lines = h.text();
+	marker = lines.findIndex((l) => l.includes("›┌─"));
+	assert.ok(Math.abs(marker - contentMiddleRow(lines)) <= 1, `last message header at ${marker}, expected ~${contentMiddleRow(lines)}`);
+
+	// a normal scroll leaves the overscrolled centering and snaps back into range
+	h.panel.handleInput("j");
+	assert.ok(h.panel.state.cursor.content < clamped + 2, "scrolling clears the centering and clamps back to the last full page");
 	h.panel.dispose();
 });
 
@@ -1927,6 +2052,7 @@ function makeSessionActionPanel(opts: { actions?: Partial<ActionSource> | null; 
 	const exports: Array<{ file: string; format: ExportFormat; path: string }> = [];
 	const imports: string[] = [];
 	const shares: string[] = [];
+	const pins: string[][] = [];
 	let closed = false;
 	const hidden: boolean[] = [];
 	const forkPoints = opts.forkPoints ?? [
@@ -1934,9 +2060,15 @@ function makeSessionActionPanel(opts: { actions?: Partial<ActionSource> | null; 
 		{ entryId: "e2", text: "second question" },
 	];
 	const data: DataSource = {
-		listSessions: async (_scope, sort) => {
+		listSessions: async (_scope, sort, pinned) => {
 			lists.push(sort);
-			return sort === "threaded" ? [...sessions].reverse() : [...sessions];
+			const base = sort === "threaded" ? [...sessions].reverse() : [...sessions];
+			if (!pinned || pinned.length === 0) return base;
+			// 置顶的行按 pinned 里的位置提到最前，其余保持原顺序（复刻 sortSessions 的行为）。
+			const order = new Map(pinned.map((f, i) => [f, i]));
+			const top = base.filter((r) => order.has(r.file)).sort((a, b) => order.get(a.file)! - order.get(b.file)!);
+			const rest = base.filter((r) => !order.has(r.file));
+			return [...top, ...rest];
 		},
 		loadTree: async (file) => {
 			treeCalls.push(file);
@@ -2024,6 +2156,7 @@ function makeSessionActionPanel(opts: { actions?: Partial<ActionSource> | null; 
 			shares.push(file);
 			return { url: "https://pi.dev/session/#abc", gistUrl: "https://gist.github.com/me/abc" };
 		},
+		setPins: async (p) => void pins.push([...p]),
 		...(opts.actions ?? {}),
 	};
 	const panel = new LazyPanel({
@@ -2056,6 +2189,7 @@ function makeSessionActionPanel(opts: { actions?: Partial<ActionSource> | null; 
 		exports,
 		imports,
 		shares,
+		pins,
 		closed: () => closed,
 		hidden,
 		text: (width = 120) => panel.render(width).map((l) => stripTerminalSequences(l)),
@@ -2190,20 +2324,26 @@ test("y (or k + Enter) confirms: the file is deleted, the list reloads, the curs
 	failing.panel.dispose();
 });
 
-test("d on the session pi has open is refused up front (pi's wording), and a panel without actions says so", async () => {
+test("d on the session pi has open pops a warning box (not the delete confirmation); a panel without actions says so", async () => {
 	const h = makeSessionActionPanel({ currentSessionFile: "/tmp/s2.jsonl" });
 	await h.panel.load();
 	assert.equal(h.panel.state.cursor.sessions, 1, "opens on the current session");
 	h.panel.handleInput("d");
+	assert.equal(dialogAt(h.text(), DELETE_SESSION_TITLE), undefined, "not the delete confirmation");
+	const warn = dialogAt(h.text(), CANNOT_DELETE_ACTIVE_TITLE);
+	assert.ok(warn, "a warning box is drawn instead");
+	assert.ok(warn.title.includes("beta"), warn.title); // subject = the current session's title
+	assert.deepEqual(h.deletes, [], "nothing is deleted");
+	// Enter / Esc dismisses the warning, still nothing deleted
+	h.panel.handleInput("\x1b");
 	assert.equal(h.panel.state.mode, "normal");
-	assert.equal(dialogAt(h.text(), DELETE_SESSION_TITLE), undefined, "no confirmation for the current session");
-	assert.ok(h.footer().includes("Cannot delete the currently active session"), h.footer());
 	assert.deepEqual(h.deletes, []);
-	// another row still asks
+	// another row still asks the real confirmation
 	h.panel.handleInput("j");
 	await settle();
 	h.panel.handleInput("d");
 	assert.equal(h.panel.state.mode, "confirm");
+	assert.ok(dialogAt(h.text(), DELETE_SESSION_TITLE), "delete confirmation for a non-current row");
 	h.panel.handleInput("\x1b");
 	h.panel.dispose();
 
@@ -2219,6 +2359,21 @@ test("d on the session pi has open is refused up front (pi's wording), and a pan
 		assert.ok(bare.footer().includes(`${what}: actions unavailable`), bare.footer());
 	}
 	bare.panel.dispose();
+});
+
+test("the session pi has open is tagged '(current)' after its title, and only that row", async () => {
+	const h = makeSessionActionPanel({ currentSessionFile: "/tmp/s2.jsonl" });
+	await h.panel.load();
+	const tagged = h.text().filter((l) => l.includes("(current)"));
+	assert.equal(tagged.length, 1, "exactly one row carries the current tag");
+	assert.ok(tagged[0]!.includes("beta"), tagged[0]); // the tag sits after that row's title
+	h.panel.dispose();
+
+	// No current session passed → no row is tagged.
+	const none = makeSessionActionPanel();
+	await none.panel.load();
+	assert.equal(none.text().filter((l) => l.includes("(current)")).length, 0);
+	none.panel.dispose();
 });
 
 test("r opens a centered Rename box pre-filled with the name; Enter saves and the row shows it, empty removes, Esc cancels", async () => {
@@ -2327,6 +2482,72 @@ test("s cycles the sort recent → created → title → threaded → recent; th
 	h.panel.dispose();
 });
 
+test("p groups pinned sessions under a PINNED rule (newest first) and unpins again; batch pins/unpins the selection", async () => {
+	const h = makeSessionActionPanel();
+	await h.panel.load();
+	const at = (sub: string) => h.text().findIndex((l) => l.includes(sub));
+	// pin s2 (beta): it moves under a PINNED rule, keeps the cursor, and is persisted
+	h.panel.handleInput("j");
+	await settle();
+	h.panel.handleInput("p");
+	await flush();
+	await flush();
+	assert.deepEqual(h.panel.state.pinnedFiles, ["/tmp/s2.jsonl"]);
+	assert.deepEqual(h.pins.at(-1), ["/tmp/s2.jsonl"], "the pin list was persisted");
+	assert.equal(h.panel.state.cursor.sessions, 0, "the cursor follows beta to the top group");
+	assert.ok(h.footer().includes("session pinned"), h.footer());
+	// PINNED rule, then beta, then OTHERS rule, then the rest
+	assert.ok(at("PINNED") >= 0 && at("OTHERS") >= 0, "both group rules are drawn");
+	assert.ok(at("PINNED") < at("beta") && at("beta") < at("OTHERS"), "beta sits in the PINNED group");
+	assert.ok(at("OTHERS") < at("alpha"), "unpinned rows are under OTHERS");
+
+	// pin s3 (third words) too: the most recent pin goes above the earlier one → [s3, s2]
+	h.panel.handleInput("G");
+	await settle();
+	h.panel.handleInput("p");
+	await flush();
+	await flush();
+	assert.deepEqual(h.panel.state.pinnedFiles, ["/tmp/s3.jsonl", "/tmp/s2.jsonl"]);
+	assert.ok(at("PINNED") < at("third words") && at("third words") < at("beta") && at("beta") < at("OTHERS"), h.text().join("\n"));
+
+	// unpin the row under the cursor (third words, now first in the PINNED group)
+	h.panel.handleInput("gg");
+	await settle();
+	h.panel.handleInput("p");
+	await flush();
+	await flush();
+	assert.deepEqual(h.panel.state.pinnedFiles, ["/tmp/s2.jsonl"]);
+	assert.ok(h.footer().includes("session unpinned"), h.footer());
+	h.panel.dispose();
+
+	// batch: select two, p pins both as a group (list order); p again unpins both
+	const b = makeSessionActionPanel();
+	await b.panel.load();
+	b.panel.handleInput(" ");
+	b.panel.handleInput("j");
+	await settle();
+	b.panel.handleInput(" ");
+	b.panel.handleInput("p");
+	await flush();
+	await flush();
+	assert.deepEqual(b.panel.state.pinnedFiles, ["/tmp/s1.jsonl", "/tmp/s2.jsonl"]);
+	b.panel.handleInput("p");
+	await flush();
+	await flush();
+	assert.deepEqual(b.panel.state.pinnedFiles, []);
+	// no pins → no group rules
+	assert.equal(b.text().findIndex((l) => l.includes("PINNED")), -1, "no rule when nothing is pinned");
+	b.panel.dispose();
+
+	// no actions wired: p reports it
+	const bare = makeSessionActionPanel({ actions: null });
+	await bare.panel.load();
+	bare.panel.handleInput("p");
+	assert.equal(bare.panel.state.mode, "normal");
+	assert.ok(bare.footer().includes("pin: actions unavailable"), bare.footer());
+	bare.panel.dispose();
+});
+
 test("i opens the Session Info box (what /session shows); y copies its text, Esc closes; a missing loader says so", async () => {
 	const h = makeSessionActionPanel();
 	await h.panel.load();
@@ -2339,7 +2560,9 @@ test("i opens the Session Info box (what /session shows); y copies its text, Esc
 	assert.ok(dlg, "the info box should be drawn");
 	assert.ok(dlg.title.includes("alpha"), dlg.title);
 	const body = dlg.body.join("\n");
-	for (const expected of ["Name      alpha", "Model     claude-opus-4", "Messages  12", "Tokens    84.2k", "Cost      $1.42", "Created   Sep 20 22:18", "Updated   Sep 20 22:21", "Path      /tmp/s1.jsonl", "ID        id-1"]) {
+	const infoObj: SessionInfo = { name: "alpha", model: "claude-opus-4", messages: 12, tokens: 84_213, cost: 1.4211, createdAt: new Date(2026, 8, 20, 22, 18).getTime(), updatedAt: new Date(2026, 8, 20, 22, 21).getTime(), path: "/tmp/s1.jsonl", id: "id-1" };
+	// 每一行的标签 / 值排版和 sessionInfoText 一致（含 "Session path" 标签、12 列的标签列对齐）。
+	for (const expected of sessionInfoText(infoObj).split("\n")) {
 		assert.ok(body.includes(expected), `${expected}\n${body}`);
 	}
 	assert.ok(h.footer().includes("INFO") && h.footer().includes("y copy") && h.footer().includes("Esc close"), h.footer());
@@ -2349,8 +2572,8 @@ test("i opens the Session Info box (what /session shows); y copies its text, Esc
 	h.panel.handleInput("y");
 	await flush();
 	assert.equal(h.copies.length, 1);
-	assert.equal(h.copies[0], sessionInfoText({ name: "alpha", model: "claude-opus-4", messages: 12, tokens: 84_213, cost: 1.4211, createdAt: new Date(2026, 8, 20, 22, 18).getTime(), updatedAt: new Date(2026, 8, 20, 22, 21).getTime(), path: "/tmp/s1.jsonl", id: "id-1" }));
-	assert.ok(h.copies[0]!.startsWith("Name      alpha\nModel     claude-opus-4\n"), h.copies[0]);
+	assert.equal(h.copies[0], sessionInfoText(infoObj));
+	assert.ok(h.copies[0]!.startsWith(sessionInfoText(infoObj).split("\n").slice(0, 2).join("\n")), h.copies[0]);
 	assert.ok(h.footer().includes("copied session info"), h.footer());
 	h.panel.handleInput("j");
 	h.panel.handleInput("d");
@@ -2401,9 +2624,9 @@ test("Session Info wraps a value too wide for the box (the path) onto continuati
 	assert.ok(joined.includes(longPath.replace(/\s/g, "")), joined);
 	assert.ok(!body.some((l) => l.includes("…")), body.join("\n"));
 	// continuation lines are indented under the value column (no label)
-	const pathRow = body.findIndex((l) => l.includes("Path"));
+	const pathRow = body.findIndex((l) => l.includes("Session path"));
 	assert.ok(pathRow >= 0);
-	assert.ok(body[pathRow + 1]!.startsWith(" ".repeat(11)), JSON.stringify(body[pathRow + 1]));
+	assert.ok(body[pathRow + 1]!.startsWith(" ".repeat(14)), JSON.stringify(body[pathRow + 1]));
 	assert.ok(body[pathRow + 1]!.includes("ID") === false, "the continuation comes before the ID row");
 	for (const l of h.panel.render(160)) assert.equal(visibleWidth(l), 160);
 	h.panel.dispose();
@@ -2922,13 +3145,17 @@ test("d with a selection deletes them all after one confirmation, skipping the o
 	assert.ok(h.footer().includes("deleted 1, 1 failed") && h.footer().includes("EACCES"), h.footer());
 	h.panel.dispose();
 
-	// only the open session selected: refused without asking
+	// only the open session selected: warned in a box, nothing deleted
 	const cur = makeSessionActionPanel({ currentSessionFile: "/tmp/s1.jsonl" });
 	await cur.panel.load();
 	cur.panel.handleInput(" ");
 	cur.panel.handleInput("d");
+	assert.equal(dialogAt(cur.text(), "Delete 1 session?"), undefined, "no batch confirmation");
+	const warn = dialogAt(cur.text(), CANNOT_DELETE_ACTIVE_TITLE);
+	assert.ok(warn && warn.title.includes("alpha"), "a warning box naming the current session");
+	assert.deepEqual(cur.deletes, []);
+	cur.panel.handleInput("\x1b");
 	assert.equal(cur.panel.state.mode, "normal");
-	assert.ok(cur.footer().includes("Cannot delete the currently active session"), cur.footer());
 	cur.panel.dispose();
 });
 
@@ -3087,28 +3314,28 @@ test("clicking a border / blank cell still focuses that pane but keeps the curso
 });
 
 test("wheel scrolls the list viewport without moving the selection or stealing focus", async () => {
-	const h = makeLoadedPanel(); // 5 sessions, height 20 → 3 visible rows, so max first = 2
+	const h = makeLoadedPanel(); // 5 sessions, height 20 → 7 visible lines (2 per row), so max first line = 3
 	await h.panel.load();
 	await settle();
 	assert.equal(h.panel.state.focus, "sessions");
 	assert.equal(h.panel.state.cursor.sessions, 0);
 	const treeCallsBefore = h.treeCalls.length;
 
-	// wheel down scrolls the viewport (first visible row) but leaves the selection and focus alone
+	// wheel down scrolls the viewport (first visible line) but leaves the selection and focus alone
 	h.panel.handleMouse(mouseEvent("wheel", 2, 3, { wheelDelta: 2 }));
-	assert.equal(h.panel.state.listScroll.sessions, 2, "viewport scrolled down");
+	assert.equal(h.panel.state.listScroll.sessions, 2, "viewport scrolled down two lines");
 	assert.equal(h.panel.state.cursor.sessions, 0, "selection did not move");
 	assert.equal(h.panel.state.focus, "sessions", "focus unchanged");
 	await settle();
 	assert.equal(h.treeCalls.length, treeCallsBefore, "no session reload — the cursor never moved");
 
-	// wheel down again clamps at the bottom of the list
+	// wheel down again clamps at the bottom of the list (10 lines, 7 visible → max first 3)
 	h.panel.handleMouse(mouseEvent("wheel", 2, 3, { wheelDelta: 5 }));
-	assert.equal(h.panel.state.listScroll.sessions, 2, "clamped at the last window");
+	assert.equal(h.panel.state.listScroll.sessions, 3, "clamped at the last window");
 
 	// wheel back up
 	h.panel.handleMouse(mouseEvent("wheel", 2, 3, { wheelDelta: -1 }));
-	assert.equal(h.panel.state.listScroll.sessions, 1);
+	assert.equal(h.panel.state.listScroll.sessions, 2);
 
 	// a keyboard move re-centers on the cursor: the wheel override is cleared
 	h.panel.handleInput("j");

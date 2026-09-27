@@ -108,6 +108,7 @@ lazygit 风格，每个面板各记各的：列表行永不过滤，光标在匹
 | `y` | `session-clone` | 克隆（`/clone`）：*Clone session?* Yes / No 框确认（光标停在 No），随后把活动分支复制到新会话文件、pi 打开它 |
 | `Y` | `session-copy-last-reply` | 复制最后一条 assistant 回复到剪贴板（`/copy`）：只取其文本片段，跳过思考和工具调用；面板保持打开，footer 报告结果（*copied last reply* 或 *no assistant reply to copy*） |
 | `Space` | `session-toggle-select` | 切换多选：不画标记字形 —— 选中行的标题着色（accent），在长列表里凸显 —— 标题以 `3 selected` 开头。有选中时 `d` 在一次 *Delete N sessions?* 确认后删除全部（跳过 pi 打开的会话；失败的仍列出并保持选中，第一条错误进 footer），而 `r` `o` `y` `e` `S` 拒绝（*cannot act on multiple sessions*）。`Esc` 先清空选中、再按才退出 |
+| `p` | `session-pin` | 置顶 / 取消置顶光标所在会话（有多选时作用于所有选中会话）：只要有未置顶的就整组置顶，否则整组取消置顶。置顶的会话归到列表最上一个 dim 的 `── PINNED ──` 分隔线下（其余在 `── OTHERS ──` 下）、不受排序影响 —— 最后置顶的排在更早置顶的上面；排序和搜索仍然作用于它们，但 `C` / `A` 范围过滤可能挡住其它目录里的置顶会话（其置顶记录会保留）。置顶列表持久化在 `~/.pi/agent/lazy-panel-pins.json`，下次打开面板时会清掉在外部已删除的会话 |
 | `e` | `session-export` | 导出（`/export`）：居中 *Export as* 菜单选 **HTML**（整棵树，由 pi 自己的 `pi --export` 渲染）或 **JSONL**（活动分支，可重新导入），然后 *Export to* 框预填 pi 的默认路径（pi 工作目录下的 `pi-session-<file>.html` / `session-<time>.jsonl`）。相对路径和 `~` 在所有平台通用；目录（已存在，或以 `/` 结尾输入）会在里面用默认文件名。框里 `Esc` 退回菜单；已存在的文件先问 *Overwrite file?*。任意会话都能导出，不只当前会话；面板保持打开，footer 说明文件去向 |
 | `I` | `session-import` | 导入（`/import`）：居中框询问一个会话 `.jsonl`（相对 pi 工作目录，允许 `~`），*Import and switch to it?* Yes / No 框确认，随后文件被复制进当前会话目录（重名加 `-1` 后缀）、pi 切换过去、面板关闭。缺失 / 空 / 非 pi 文件会在 footer 报告，不复制任何东西 |
 | `S` | `session-share` | 分享（`/share`）：*Upload as secret gist?* Yes / No 框确认（光标停在 No），随后会话渲染为 HTML 并用 `gh gist create --public=false` 上传；pi.dev 查看链接复制到剪贴板并显示在 footer。需要已登录的 GitHub CLI（否则用 pi 的措辞提示）；pi 的 Radius 上传对扩展不可用 |
@@ -149,12 +150,14 @@ lazygit 风格，每个面板各记各的：列表行永不过滤，光标在匹
 
 ## CONTENT 面板（只读）
 
-只有滚动和搜索；复制消息在 TREE 面板做（`y`）。
+滚动、搜索，另加把选中的消息（TREE 光标高亮、带 `›` 标记的那条）居中和复制。
 
 | 键 | 配置名称 | 操作 |
 | --- | --- | --- |
 | `j` `k` `↑` `↓` | `move-down` / `move-up` | 滚动 |
 | `gg` / `G` | `go-top` / `go-bottom` | 顶部 / 底部 |
+| `zz` | `content-center` | 把选中的消息滚到面板中间（vim 的 `zz`）；内容不足以滚动时为空操作 |
+| `y` | `content-copy` | 复制选中消息的全文到剪贴板（等同 TREE 面板的 `y`） |
 | `/` | `search`（global） | 搜索渲染后的消息正文（只搜裸词，无限定词）；匹配行被滚到顶部，`n` / `N` 步进命中 |
 
 ## 鼠标

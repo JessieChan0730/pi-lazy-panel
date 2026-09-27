@@ -3,16 +3,25 @@
  *
  * Lists `SessionRow[]`. Each row uses two lines:
  *
- *   › FilmRecall                       09-20 22:18
+ *   › FilmRecall                        09-20 22:18
  *     opus-4 · ~/code/myself/FilmRecall · 128 msgs
  *
- * The cursor row is highlighted; sessions picked with space have no marker glyph
- * — their title is tinted accent so selected rows stand out in a long list — and
- * the header starts with "3 selected". While a `/` search is active in the pane the
- * matching rows get their hits painted (see ../search-highlight.ts) and the
- * header counts them ("2/7 matches"); the list itself is never filtered.
+ * Pinned sessions (sorted to the front by sortSessions) are grouped under a
+ * dim `── PINNED ──` rule and the rest under `── OTHERS ──`; the rules only
+ * appear when something is pinned. A rule is a single line hugging the rows on
+ * both sides. The pane lays its content out as a flat line buffer and scrolls
+ * by line, so a rule need not be the same height as a row (the mouse hit-test
+ * maps a clicked line back to its session, see ../mouse.ts).
+ *
+ * The cursor row is highlighted; sessions picked with space have no marker
+ * glyph — their title is tinted accent so selected rows stand out in a long
+ * list — and the header starts with "3 selected". While a `/` search is active
+ * in the pane the matching rows get their hits painted (see
+ * ../search-highlight.ts) and the header counts them ("2/7 matches"); the list
+ * itself is never filtered.
  */
 
+import { resolve } from "node:path";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { t } from "../../i18n/index.ts";
@@ -24,12 +33,16 @@ import { highlightLine, matchStyle, searchMeta } from "../search-highlight.ts";
 export interface SessionsPaneProps {
 	rows: SessionRow[];
 	cursor: number;
-	/** First visible row; defaults to a cursor-centered window when omitted (keyboard). */
+	/** First visible slot; defaults to a cursor-centered window when omitted (keyboard). Slot space, see the group rules. */
 	first?: number;
 	focused: boolean;
 	scope: ListScope;
 	sort: SessionSortMode;
 	selected: Set<string>;
+	/** How many of the leading rows are pinned (they are contiguous at the top); drives the PINNED / OTHERS group rules. */
+	pinnedCount?: number;
+	/** File pi currently has open, if any: that row's title gets a "current" tag (it is the one `d` refuses). */
+	currentFile?: string;
 	/** Active `/` search of this pane: matching rows are highlighted, the header shows the count. */
 	search?: SearchView;
 	/** Frame title; the panel passes "[1] SESSIONS" so the jump key is visible. */
@@ -37,33 +50,107 @@ export interface SessionsPaneProps {
 	theme: Theme;
 }
 
-/** Each session takes two lines; the tree / mouse hit-test share this constant. */
-export const SESSIONS_ROW_HEIGHT = 2;
+/**
+ * A rendered element: a session row (2 lines) or a group rule (PINNED /
+ * OTHERS). The pane lays elements out as a flat line buffer and scrolls by
+ * line (like the content pane), so the rule can carry a symmetric one-line gap
+ * above and below without forcing every row to the same height.
+ */
+type SessionElement = { kind: "session"; index: number } | { kind: "header"; label: string };
+
+/** Lines a session row occupies. */
+const ROW_LINES = 2;
+/** Lines a group rule occupies: just the rule, hugging the rows on both sides (no blank padding). */
+const HEADER_LINES = 1;
+
+/**
+ * Elements the pane renders, top to bottom. With `pinnedCount` P > 0 the pinned
+ * rows (indices 0..P-1, already sorted to the front) sit under a PINNED rule
+ * and the rest under an OTHERS rule; with P === 0 the elements are the rows 1:1
+ * (no rules, identical to before pinning existed).
+ */
+function sessionElements(total: number, pinnedCount: number): SessionElement[] {
+	const p = clampPinned(pinnedCount, total);
+	if (p === 0) return Array.from({ length: total }, (_, index) => ({ kind: "session", index }) as SessionElement);
+	const els: SessionElement[] = [{ kind: "header", label: t("pane.pinnedGroup") }];
+	for (let i = 0; i < total; i++) {
+		if (i === p) els.push({ kind: "header", label: t("pane.othersGroup") });
+		els.push({ kind: "session", index: i });
+	}
+	return els;
+}
+
+function elementLines(el: SessionElement): number {
+	return el.kind === "header" ? HEADER_LINES : ROW_LINES;
+}
+
+/** Total body lines the pane renders (rows + the group rules, when pinned). */
+export function sessionLineCount(total: number, pinnedCount: number): number {
+	return sessionElements(total, pinnedCount).reduce((n, el) => n + elementLines(el), 0);
+}
+
+/** Body line a session's first row line lands on (used to keep the cursor's row in the window). */
+export function sessionFirstLine(index: number, total: number, pinnedCount: number): number {
+	let line = 0;
+	for (const el of sessionElements(total, pinnedCount)) {
+		if (el.kind === "session" && el.index === index) return line;
+		line += elementLines(el);
+	}
+	return line;
+}
+
+/** Session a body line maps to, or undefined for a group rule / blank / out-of-range line (a click there moves nothing). */
+export function sessionAtLine(lineIndex: number, total: number, pinnedCount: number): number | undefined {
+	let line = 0;
+	for (const el of sessionElements(total, pinnedCount)) {
+		const h = elementLines(el);
+		if (lineIndex >= line && lineIndex < line + h) return el.kind === "session" ? el.index : undefined;
+		line += h;
+	}
+	return undefined;
+}
+
+function clampPinned(pinnedCount: number, total: number): number {
+	return Math.max(0, Math.min(pinnedCount, total));
+}
 
 export function renderSessionsPane(p: SessionsPaneProps, width: number, height: number): string[] {
 	const { theme } = p;
 	const inner = width - 2;
-	const visibleRows = Math.max(1, Math.floor((height - 2) / SESSIONS_ROW_HEIGHT));
+	const visibleLines = Math.max(1, height - 2);
 	const body: string[] = [];
 
 	if (p.rows.length === 0) {
 		body.push(theme.fg("muted", ` ${t("pane.sessionsEmpty")}`));
 	} else {
-		// 滚轮滚动时用给定的 first（不动光标）；否则按光标居中。
-		const first = clampFirst(p.first ?? scrollOffset(p.cursor, p.rows.length, visibleRows), p.rows.length, visibleRows);
-		for (let i = first; i < Math.min(p.rows.length, first + visibleRows); i++) {
+		// pi 当前打开的会话（比较解析后的路径，和 findSessionIndex 一致）：这一行会带 current 标记。
+		const currentResolved = p.currentFile ? resolve(p.currentFile) : undefined;
+		const pinnedCount = p.pinnedCount ?? 0;
+		// 先把整份内容排成行缓冲（会话 2 行、分隔线 3 行：空 / 横线 / 空），再按行窗口切片。
+		const lines: string[] = [];
+		for (const el of sessionElements(p.rows.length, pinnedCount)) {
+			if (el.kind === "header") {
+				lines.push(renderGroupHeader(el.label, inner, theme));
+				continue;
+			}
+			const i = el.index;
 			const row = p.rows[i]!;
 			const isCursor = i === p.cursor;
-			const lines = renderRow(row, inner, isCursor, p);
+			const isCurrent = currentResolved !== undefined && resolve(row.file) === currentResolved;
+			const rowLines = renderRow(row, inner, isCursor, isCurrent, p);
 			// 搜索命中的行：两行里出现的关键词都加高亮，光标所在的当前匹配再加强调。
 			const search = p.search;
 			if (search?.matches.has(i)) {
 				const style = matchStyle(theme, i === search.current);
-				body.push(...lines.map((l) => highlightLine(l, search.terms, style)));
+				lines.push(...rowLines.map((l) => highlightLine(l, search.terms, style)));
 			} else {
-				body.push(...lines);
+				lines.push(...rowLines);
 			}
 		}
+		// 滚轮滚动时用给定的 first（行偏移，不动光标）；否则按光标所在行居中。
+		const cursorLine = sessionFirstLine(p.cursor, p.rows.length, pinnedCount);
+		const first = clampFirst(p.first ?? scrollOffset(cursorLine, lines.length, visibleLines), lines.length, visibleLines);
+		for (let ln = first; ln < Math.min(lines.length, first + visibleLines); ln++) body.push(lines[ln]!);
 	}
 
 	const title = p.title ?? "SESSIONS";
@@ -84,7 +171,14 @@ export function renderSessionsPane(p: SessionsPaneProps, width: number, height: 
 	});
 }
 
-function renderRow(row: SessionRow, inner: number, isCursor: boolean, p: SessionsPaneProps): string[] {
+/** A dim group rule: `── PINNED ─────────` filling the pane width. */
+function renderGroupHeader(label: string, inner: number, theme: Theme): string {
+	const text = `── ${label} `;
+	const rule = "─".repeat(Math.max(0, inner - visibleWidth(text)));
+	return theme.fg("dim", fit(text + rule, inner));
+}
+
+function renderRow(row: SessionRow, inner: number, isCursor: boolean, isCurrent: boolean, p: SessionsPaneProps): string[] {
 	const { theme } = p;
 	const indent = "  ".repeat(row.threadDepth ?? 0);
 	// 光标标记 ›（占第一列，第二列留空对齐）；多选不再画图标，只靠标题着色区分。
@@ -93,11 +187,16 @@ function renderRow(row: SessionRow, inner: number, isCursor: boolean, p: Session
 	const date = formatShortDate(row.updatedAt);
 	const emptyTitle = t("pane.emptySession");
 	const title = row.name ?? row.preview ?? emptyTitle;
+	// pi 当前打开的会话：标题后紧跟一个 (current) / （当前）标记，不特殊着色。
+	const currentTag = isCurrent ? t("pane.current") : "";
+	const tagW = visibleWidth(currentTag);
 
-	// line 1: marker + indent + title ....... date
+	// line 1: marker + indent + title[(current)] ....... date
 	const rightW = visibleWidth(date) + 1;
-	const titleW = Math.max(1, inner - visibleWidth(marker) - visibleWidth(indent) - rightW);
-	const titleText = truncateToWidth(title || emptyTitle, titleW, "…", true);
+	const titleW = Math.max(1, inner - visibleWidth(marker) - visibleWidth(indent) - rightW - tagW);
+	// 先不补齐地截断标题，紧跟上标记，再把整体补齐到 titleW + tagW——这样标记紧贴标题，右侧空白补齐后日期照旧右对齐。
+	const titleWithTag = truncateToWidth(title || emptyTitle, titleW, "…", false) + currentTag;
+	const titleText = truncateToWidth(titleWithTag, titleW + tagW, "…", true);
 
 	// line 2: model · cwd · N msgs
 	const details = [row.model ?? "", shortenPath(row.cwd), t("pane.msgs", { count: row.messageCount })].filter(Boolean).join(" · ");

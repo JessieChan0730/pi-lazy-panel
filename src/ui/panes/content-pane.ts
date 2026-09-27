@@ -107,7 +107,9 @@ export function renderContentPane(p: ContentPaneProps, width: number, height: nu
 		body = ["", theme.fg("muted", `  ${p.emptyMessage ?? t("pane.contentEmpty")}`)];
 	} else {
 		const all = (p.layout ?? layoutContent(p.blocks, inner, theme, p.highlightEntryId)).lines;
-		const start = Math.min(Math.max(0, p.scroll), maxScroll(all.length, visible));
+		// 允许滚过最后一整页（`zz` 居中最后几条消息时会这样，下方由 frame 补空行）；
+		// 常规滚动的 scroll 由调用方夹在 maxScroll 内，这里只兜底不让整段滚出视野。
+		const start = Math.min(Math.max(0, p.scroll), Math.max(0, all.length - 1));
 		body = all.slice(start, start + visible);
 		// 搜索命中：只给窗口里的命中行叠加高亮，缓存的排版结果本身不动。
 		const search = p.search;
