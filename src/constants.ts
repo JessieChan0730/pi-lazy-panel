@@ -11,6 +11,14 @@ export const COMMAND_NAME = "lazy-panel";
 /** Name of the optional user config file inside the pi agent directory. */
 export const CONFIG_FILE_NAME = "lazy-panel.json";
 
+/**
+ * Name of the file that stores the pinned sessions inside the pi agent
+ * directory. Kept separate from the hand-edited config (CONFIG_FILE_NAME) and
+ * from the session .jsonl files (whose entries are append-only), because pins
+ * are runtime state the plugin rewrites on every `p`.
+ */
+export const PINS_FILE_NAME = "lazy-panel-pins.json";
+
 /** Layout ratio for the left column (sessions + tree) vs. the right column (content). */
 export const LEFT_COLUMN_RATIO = 0.25;
 

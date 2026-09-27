@@ -9,7 +9,6 @@
 
 import { LEFT_COLUMN_RATIO } from "../constants.ts";
 import type { PaneId } from "../types.ts";
-import { SESSIONS_ROW_HEIGHT } from "./panes/sessions-pane.ts";
 
 export interface VerticalSplit {
 	/** Rows of the body above the one-line footer. */
@@ -42,10 +41,10 @@ export function panelGeometry(width: number, height: number, ratio: number = LEF
 	return { ...v, leftW, rightW: width - leftW };
 }
 
-/** Visible list rows in each left pane for `height` rows (sessions take 2 lines per row, tree 1). */
+/** Visible body lines in each left pane for `height` rows. Both panes scroll by line (sessions render 2 lines per row + group rules). */
 export function listVisibleRows(height: number): { sessions: number; tree: number } {
 	const { sessionsH, treeH } = verticalSplit(height);
-	return { sessions: Math.max(1, Math.floor((sessionsH - 2) / SESSIONS_ROW_HEIGHT)), tree: Math.max(1, treeH - 2) };
+	return { sessions: Math.max(1, sessionsH - 2), tree: Math.max(1, treeH - 2) };
 }
 
 /** Pane under the pointer; list panes also carry the row hit (undefined on a border / blank cell). */
@@ -58,8 +57,9 @@ export interface HitInput {
 	/** Cell local to the panel (top-left overlay, so this equals the screen cell). */
 	x: number;
 	y: number;
-	/** First visible row of each list pane (the offset render actually used). */
+	/** First visible line/row of each list pane (the offset render actually used). SESSIONS is line-based (see listVisibleRows). */
 	sessionsFirst: number;
+	/** SESSIONS: total body lines (rows × 2 + group rules), not the session count — the hit row is a line index. */
 	sessionsTotal: number;
 	treeFirst: number;
 	treeTotal: number;
@@ -76,7 +76,8 @@ export function hitTest(i: HitInput): MouseTarget | undefined {
 	// 右侧 CONTENT 面板占满 body 高度，只切焦点、不选行。
 	if (i.x >= g.leftW) return { pane: "content", row: undefined };
 	if (i.y < g.sessionsH) {
-		return { pane: "sessions", row: listRow(i.y, g.sessionsH, SESSIONS_ROW_HEIGHT, i.sessionsFirst, i.sessionsTotal) };
+		// SESSIONS 按行命中（会话 2 行 + 分组分隔线，高度不一），命中的行号由调用方翻译回会话下标。
+		return { pane: "sessions", row: listRow(i.y, g.sessionsH, 1, i.sessionsFirst, i.sessionsTotal) };
 	}
 	return { pane: "tree", row: listRow(i.y - g.sessionsH, g.treeH, 1, i.treeFirst, i.treeTotal) };
 }

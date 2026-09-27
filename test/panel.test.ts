@@ -1929,6 +1929,7 @@ function makeSessionActionPanel(opts: { actions?: Partial<ActionSource> | null; 
 	const exports: Array<{ file: string; format: ExportFormat; path: string }> = [];
 	const imports: string[] = [];
 	const shares: string[] = [];
+	const pins: string[][] = [];
 	let closed = false;
 	const hidden: boolean[] = [];
 	const forkPoints = opts.forkPoints ?? [
@@ -1936,9 +1937,15 @@ function makeSessionActionPanel(opts: { actions?: Partial<ActionSource> | null; 
 		{ entryId: "e2", text: "second question" },
 	];
 	const data: DataSource = {
-		listSessions: async (_scope, sort) => {
+		listSessions: async (_scope, sort, pinned) => {
 			lists.push(sort);
-			return sort === "threaded" ? [...sessions].reverse() : [...sessions];
+			const base = sort === "threaded" ? [...sessions].reverse() : [...sessions];
+			if (!pinned || pinned.length === 0) return base;
+			// 置顶的行按 pinned 里的位置提到最前，其余保持原顺序（复刻 sortSessions 的行为）。
+			const order = new Map(pinned.map((f, i) => [f, i]));
+			const top = base.filter((r) => order.has(r.file)).sort((a, b) => order.get(a.file)! - order.get(b.file)!);
+			const rest = base.filter((r) => !order.has(r.file));
+			return [...top, ...rest];
 		},
 		loadTree: async (file) => {
 			treeCalls.push(file);
@@ -2026,6 +2033,7 @@ function makeSessionActionPanel(opts: { actions?: Partial<ActionSource> | null; 
 			shares.push(file);
 			return { url: "https://pi.dev/session/#abc", gistUrl: "https://gist.github.com/me/abc" };
 		},
+		setPins: async (p) => void pins.push([...p]),
 		...(opts.actions ?? {}),
 	};
 	const panel = new LazyPanel({
@@ -2058,6 +2066,7 @@ function makeSessionActionPanel(opts: { actions?: Partial<ActionSource> | null; 
 		exports,
 		imports,
 		shares,
+		pins,
 		closed: () => closed,
 		hidden,
 		text: (width = 120) => panel.render(width).map((l) => stripTerminalSequences(l)),
@@ -2348,6 +2357,72 @@ test("s cycles the sort recent → created → title → threaded → recent; th
 	assert.equal(h.panel.state.cursor.sessions, 2);
 	assert.equal(h.treeCalls.length, treeCalls + 1, "only the k move loaded a tree");
 	h.panel.dispose();
+});
+
+test("p groups pinned sessions under a PINNED rule (newest first) and unpins again; batch pins/unpins the selection", async () => {
+	const h = makeSessionActionPanel();
+	await h.panel.load();
+	const at = (sub: string) => h.text().findIndex((l) => l.includes(sub));
+	// pin s2 (beta): it moves under a PINNED rule, keeps the cursor, and is persisted
+	h.panel.handleInput("j");
+	await settle();
+	h.panel.handleInput("p");
+	await flush();
+	await flush();
+	assert.deepEqual(h.panel.state.pinnedFiles, ["/tmp/s2.jsonl"]);
+	assert.deepEqual(h.pins.at(-1), ["/tmp/s2.jsonl"], "the pin list was persisted");
+	assert.equal(h.panel.state.cursor.sessions, 0, "the cursor follows beta to the top group");
+	assert.ok(h.footer().includes("session pinned"), h.footer());
+	// PINNED rule, then beta, then OTHERS rule, then the rest
+	assert.ok(at("PINNED") >= 0 && at("OTHERS") >= 0, "both group rules are drawn");
+	assert.ok(at("PINNED") < at("beta") && at("beta") < at("OTHERS"), "beta sits in the PINNED group");
+	assert.ok(at("OTHERS") < at("alpha"), "unpinned rows are under OTHERS");
+
+	// pin s3 (third words) too: the most recent pin goes above the earlier one → [s3, s2]
+	h.panel.handleInput("G");
+	await settle();
+	h.panel.handleInput("p");
+	await flush();
+	await flush();
+	assert.deepEqual(h.panel.state.pinnedFiles, ["/tmp/s3.jsonl", "/tmp/s2.jsonl"]);
+	assert.ok(at("PINNED") < at("third words") && at("third words") < at("beta") && at("beta") < at("OTHERS"), h.text().join("\n"));
+
+	// unpin the row under the cursor (third words, now first in the PINNED group)
+	h.panel.handleInput("gg");
+	await settle();
+	h.panel.handleInput("p");
+	await flush();
+	await flush();
+	assert.deepEqual(h.panel.state.pinnedFiles, ["/tmp/s2.jsonl"]);
+	assert.ok(h.footer().includes("session unpinned"), h.footer());
+	h.panel.dispose();
+
+	// batch: select two, p pins both as a group (list order); p again unpins both
+	const b = makeSessionActionPanel();
+	await b.panel.load();
+	b.panel.handleInput(" ");
+	b.panel.handleInput("j");
+	await settle();
+	b.panel.handleInput(" ");
+	b.panel.handleInput("p");
+	await flush();
+	await flush();
+	assert.deepEqual(b.panel.state.pinnedFiles, ["/tmp/s1.jsonl", "/tmp/s2.jsonl"]);
+	b.panel.handleInput("p");
+	await flush();
+	await flush();
+	assert.deepEqual(b.panel.state.pinnedFiles, []);
+	// no pins → no group rules
+	assert.equal(b.text().findIndex((l) => l.includes("PINNED")), -1, "no rule when nothing is pinned");
+	b.panel.dispose();
+
+	// no actions wired: p reports it
+	const bare = makeSessionActionPanel({ actions: null });
+	await bare.panel.load();
+	bare.panel.handleInput("p");
+	assert.equal(bare.panel.state.mode, "normal");
+	assert.ok(bare.footer().includes("pin: actions unavailable"), bare.footer());
+	bare.panel.dispose();
 });
 
 test("i opens the Session Info box (what /session shows); y copies its text, Esc closes; a missing loader says so", async () => {
@@ -3116,28 +3191,28 @@ test("clicking a border / blank cell still focuses that pane but keeps the curso
 });
 
 test("wheel scrolls the list viewport without moving the selection or stealing focus", async () => {
-	const h = makeLoadedPanel(); // 5 sessions, height 20 → 3 visible rows, so max first = 2
+	const h = makeLoadedPanel(); // 5 sessions, height 20 → 7 visible lines (2 per row), so max first line = 3
 	await h.panel.load();
 	await settle();
 	assert.equal(h.panel.state.focus, "sessions");
 	assert.equal(h.panel.state.cursor.sessions, 0);
 	const treeCallsBefore = h.treeCalls.length;
 
-	// wheel down scrolls the viewport (first visible row) but leaves the selection and focus alone
+	// wheel down scrolls the viewport (first visible line) but leaves the selection and focus alone
 	h.panel.handleMouse(mouseEvent("wheel", 2, 3, { wheelDelta: 2 }));
-	assert.equal(h.panel.state.listScroll.sessions, 2, "viewport scrolled down");
+	assert.equal(h.panel.state.listScroll.sessions, 2, "viewport scrolled down two lines");
 	assert.equal(h.panel.state.cursor.sessions, 0, "selection did not move");
 	assert.equal(h.panel.state.focus, "sessions", "focus unchanged");
 	await settle();
 	assert.equal(h.treeCalls.length, treeCallsBefore, "no session reload — the cursor never moved");
 
-	// wheel down again clamps at the bottom of the list
+	// wheel down again clamps at the bottom of the list (10 lines, 7 visible → max first 3)
 	h.panel.handleMouse(mouseEvent("wheel", 2, 3, { wheelDelta: 5 }));
-	assert.equal(h.panel.state.listScroll.sessions, 2, "clamped at the last window");
+	assert.equal(h.panel.state.listScroll.sessions, 3, "clamped at the last window");
 
 	// wheel back up
 	h.panel.handleMouse(mouseEvent("wheel", 2, 3, { wheelDelta: -1 }));
-	assert.equal(h.panel.state.listScroll.sessions, 1);
+	assert.equal(h.panel.state.listScroll.sessions, 2);
 
 	// a keyboard move re-centers on the cursor: the wheel override is cleared
 	h.panel.handleInput("j");

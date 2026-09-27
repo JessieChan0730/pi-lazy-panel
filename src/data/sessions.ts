@@ -75,8 +75,27 @@ export function findSessionIndex(rows: SessionRow[], sessionFile: string | undef
  *             case-insensitive; English (ASCII) before CJK, empty sessions last,
  *             ties by recency
  *   threaded  forks indented under their parent (pi's /resume), roots by recency
+ *
+ * `pinned` (display order, newest pin first) is honoured across every mode: the
+ * pinned rows are pulled to the very top in that exact order — the sort mode
+ * never reorders them — and the rest are sorted normally below. Pinned rows are
+ * shown flat (no thread indent), so in "threaded" a pinned session's own forks
+ * fall back into the unpinned section as ordinary rows.
  */
-export function sortSessions(rows: SessionRow[], mode: SessionSortMode): SessionRow[] {
+export function sortSessions(rows: SessionRow[], mode: SessionSortMode, pinned: readonly string[] = []): SessionRow[] {
+	if (pinned.length === 0) return sortByMode(rows, mode);
+	const order = new Map(pinned.map((file, i) => [file, i]));
+	const top: SessionRow[] = [];
+	const rest: SessionRow[] = [];
+	for (const row of rows) (order.has(row.file) ? top : rest).push(row);
+	// 置顶区按 pinned 里的位置排（最后置顶的在最前），且不缩进（threaded 也拉平）。
+	top.sort((a, b) => order.get(a.file)! - order.get(b.file)!);
+	const flat = top.map(({ threadDepth: _drop, ...row }) => row);
+	return [...flat, ...sortByMode(rest, mode)];
+}
+
+/** Sort by the chosen mode only (no pinning); see `sortSessions`. */
+function sortByMode(rows: SessionRow[], mode: SessionSortMode): SessionRow[] {
 	const byRecent = (a: SessionRow, b: SessionRow) => b.updatedAt - a.updatedAt;
 	switch (mode) {
 		case "recent":

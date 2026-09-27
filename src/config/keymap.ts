@@ -49,6 +49,8 @@ export const DEFAULT_KEYMAP: Keymap = {
 		"session-sort": "s",
 		"session-info": "i",
 		"session-toggle-select": "space",
+		// p 置顶 / 取消置顶光标（或所选）会话，置顶的会话固定在列表最上、不受排序影响。
+		"session-pin": "p",
 		// c 压缩光标所在会话（对应 /compact）；C（大写）是全局 scope-current，不冲突。
 		"session-compact": "c",
 		"session-fork": "o",

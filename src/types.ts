@@ -286,6 +286,7 @@ export type ActionId =
 	| "session-rename"
 	| "session-fork"
 	| "session-toggle-select"
+	| "session-pin"
 	| "session-export"
 	| "session-import"
 	| "session-share"
