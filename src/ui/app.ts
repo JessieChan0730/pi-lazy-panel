@@ -1,8 +1,6 @@
 /**
- * Root panel component.
- *
- * Owns the three panes, focus state, key dispatch and the footer / search bar.
- * Opened from src/index.ts via `ctx.ui.custom(...)`.
+ * Root panel component: the three panes, focus, key dispatch and the footer /
+ * search bar. Opened from src/index.ts via `ctx.ui.custom(...)`.
  *
  * Layout (see docs/design.md):
  *
@@ -14,38 +12,24 @@
  *   └──────────────┴────────────────────┘
  *   │ NORMAL │ / Search  ? Help ...     │   <- footer, or the search bar in search mode
  *
- * This layer does no I/O: all data arrives through the injected `DataSource`
- * so the panel stays testable with plain objects.
+ * The panel coordinates; the parts it delegates to live next to it:
+ *   - ./state.ts            all mutable UI state (`PanelState`)
+ *   - ./ports.ts            the injected `DataSource` / `ActionSource`: this layer does no I/O
+ *   - ./flows/              every command that opens a prompt / menu or calls an action (Enter, d, r, e, T, …)
+ *   - ./tree-view.ts        TREE rows, folds and outline
+ *   - ./content-viewport.ts CONTENT blocks, layout, scrolling (zz) and line matches
+ *   - ./key-sequencer.ts    multi-key sequences such as `gg`
+ *   - ./panes/, ./widgets/  rendering
+ * What stays here ties the panes together: loading the session under the
+ * cursor, the tree cursor driving the content highlight, `/` search in each
+ * pane, the tree dialog, the mouse and render.
  *
- * Key handling (本任务范围):
- *   - 按键 → resolveKeys(bindings, focus, pending) → ActionId → dispatch()
- *   - 支持多键序列（"gg"）：前缀匹配时把按键放进 pending 缓冲，等待下一键
- *   - h / l 前后切换焦点，1 / 2 / 3 直接跳到对应面板（面板标题显示 "[1] SESSIONS"）
- *   - C 切到 Current folder，A 切到 All（各自只做单向切换），? 帮助
- *   - / 搜索（lazygit 风格，只作用于当前聚焦的面板，每个面板各记各的关键字）：底部出现搜索栏，输入时实时跳到
- *     原位置之后的第一个匹配，Enter 保留关键字退出输入栏，Esc 清掉关键字并回到原位置；之后 n / N 在匹配之间
- *     往下 / 往上跳并回绕（搜索生效期间 n / N 优先于面板自己的同键绑定），normal 模式下 Esc 清掉当前面板的搜索。
- *     列表不过滤只跳转：SESSIONS 按 名称 / 预览（模型 / 路径只通过 model: / path:，after: / before: 限定时间），
- *     TREE 按 label / 正文（tag: / role: 限定；目标藏在折叠段里时展开它的祖先，右侧跟着高亮），CONTENT 按渲染后的
- *     正文行（只有自由文本，跳转把该行滚到面板顶部）。命中的文字高亮、当前匹配加强调，标题右侧显示 2/7 matches
- *   - j/k、gg/G：SESSIONS / TREE 移动光标，CONTENT 按行滚动；SESSIONS 里 J/K 滚动右侧内容
- *   - SESSIONS 光标变化 → 重新加载 TREE + CONTENT；TREE 光标变化 → CONTENT 高亮并滚到对应消息
- *   - TREE：y 复制节点全文（走注入的 ActionSource），T 居中弹出 Label 输入框（类似 lazygit 的 commit 弹窗），回车保存 / Esc 取消 / 空值清除；
- *     z 折叠 / 展开光标所在的分支段（旁支默认折叠、活动分支展开，段内按 z 折叠所在段并跳到段头）；
- *     a 打开完整树对话框（顶部搜索框、中间完整树、底部提示；和小面板共用折叠状态）。小面板不做 d/t/u/l/a 过滤
- *   - 树对话框里的按键按 tree-dialog scope 解析（对话框自己的键 → tree 面板的键 → global）：j/k/gg/G 移动、y / T / Enter 和面板一样但作用于
- *     对话框光标、z 折叠、d/t/u/l/a 过滤（重新加载树，面板同步）、/ 聚焦顶部搜索框实时过滤（Esc 退出搜索框但关键字和结果保留、再按 / 接着改，
- *     Enter 在搜索框里没有含义；搜索期间折叠全部打开，删光关键字或关对话框后恢复）、列表上 q / Esc 关闭并让面板光标跳到对话框选中的行
- *     （藏在折叠段里就展开它）；? 在对话框里关掉，它的键都在底部一行
- *   - Enter：SESSIONS 里切到光标所在会话（/resume）；TREE 里以光标节点为叶子恢复（/tree restore）：先居中弹出
- *     Summarize branch? 三选菜单（No summary / Summarize / Summarize with custom prompt，自定义指令再弹一个输入框），
- *     光标就在活动叶子上或 pi 设置了 branchSummary.skipPrompt 时不问、直接进入；
- *     成功后关闭面板，失败原因留在 footer 里、面板不关；等待 pi 切换 / 写摘要期间面板隐藏且不响应按键
- *   - SESSIONS：d 删除（先弹 Yes / No 确认框，默认停在 No，y / n 直接选；当前打开的会话拒绝删除；删完重新拉列表、光标夹回范围内），
- *     r 重命名（居中输入框，预填当前名字，空值清除；改完重新拉列表、光标留在同一会话上），
- *     s 循环切换排序（recent → created → title → threaded，光标跟着同一会话走），i 会话信息弹窗（y 复制全部内容，Esc 关闭）
- *   - space 多选：d 在有选中时批量删除（跳过当前会话，失败的留在列表和选中里），选中多个时 r / o / y / e / S 拒绝；
- *     Esc 先清空选中再退出。@（global）打开 pi 的 changelog 弹窗（j/k 滚动，Esc / q / @ 关闭）
+ * Keys: the first open overlay (`overlays`) takes them; otherwise
+ * key → KeySequencer (the focused pane's scope, then global) → ActionId →
+ * `dispatch`. The default bindings are listed in docs/keybindings.md.
+ *
+ * 面板只做协调：弹窗流程在 flows/，TREE / CONTENT 的视图状态在 tree-view.ts / content-viewport.ts；
+ * 每个快捷键的行为见 docs/keybindings.md，这里不再重复。
  */
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
