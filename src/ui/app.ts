@@ -50,13 +50,12 @@
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, Focusable, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
-import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import { type Binding, compileKeymap, labelsFor, labelsForFocus, matchesKeyId, resolveKeys } from "../config/keys.ts";
 import { DEFAULT_KEYMAP, FOCUS_ACTIONS, isDisabledIn, paneTitleText, TREE_DIALOG_FOOTER, treeDialogHintText } from "../config/keymap.ts";
 import { LEFT_COLUMN_RATIO, PANE_IDS, SESSION_SORT_MODES, SPINNER_INTERVAL_MS, TREE_DIALOG_SCOPE } from "../constants.ts";
 import { t } from "../i18n/index.ts";
 import { clamp, findLastIndex, indicesWhere } from "../utils/indices.ts";
-import { highlightTerms, matchesTokens, matchSessionRow, matchTreeRow, parseSearchQuery, searchTokens } from "../data/search.ts";
+import { highlightTerms, matchSessionRow, matchTreeRow, parseSearchQuery } from "../data/search.ts";
 import { findSessionIndex } from "../data/sessions.ts";
 import {
 	applyTreeFold,
@@ -68,7 +67,6 @@ import {
 } from "../data/tree-fold.ts";
 import type {
 	ActionId,
-	ContentBlock,
 	EnterOutcome,
 	KeyHint,
 	Keymap,
@@ -82,6 +80,7 @@ import type {
 	TreeFilter,
 	TreeRow,
 } from "../types.ts";
+import { ContentViewport } from "./content-viewport.ts";
 import type { FlowHost } from "./flows/host.ts";
 import {
 	confirmCloneSession,
@@ -102,7 +101,7 @@ import { copyEntryText, copyTreeNode, openLabelInput, restoreTreeNode, type Tree
 import { fit, sideBySide } from "./frame.ts";
 import { KeySequencer } from "./key-sequencer.ts";
 import { hitTest, listVisibleRows, type MouseTarget, panelGeometry } from "./mouse.ts";
-import { type ContentLayout, layoutContent, maxScroll, renderContentPane } from "./panes/content-pane.ts";
+import { renderContentPane } from "./panes/content-pane.ts";
 import { clampFirst, renderSessionsPane, scrollOffset, sessionAtLine, sessionFirstLine, sessionLineCount } from "./panes/sessions-pane.ts";
 import { renderTreePane } from "./panes/tree-pane.ts";
 import type { ActionSource, DataSource } from "./ports.ts";
@@ -177,9 +176,8 @@ export class LazyPanel implements Component, Focusable {
 	private visibleTree: TreeRow[] = [];
 	/** Outline prefixes of `tree` for the pane, recomputed together with `visibleTree`. */
 	private treeOutline: ReadonlyMap<string, OutlinePrefix> = new Map();
-	private content: ContentBlock[] = [];
-	/** Leaf entry the current `content` branch ends at (undefined = session's own leaf). */
-	private contentLeaf: string | undefined;
+	/** CONTENT pane: blocks of the branch on show, their layout, scrolling and the `/` matches. */
+	private readonly contentViewport: ContentViewport;
 	private status: string | undefined;
 	private loadedSessionFile: string | undefined;
 	/** Session to put the cursor on at the first load (see `LazyPanelOptions.currentSessionFile`); cleared once used. */
@@ -219,21 +217,8 @@ export class LazyPanel implements Component, Focusable {
 	private sessionLoadTimer: ReturnType<typeof setTimeout> | undefined;
 	private sessionLoadPromise: Promise<void> | undefined;
 	private sessionLoadResolve: (() => void) | undefined;
-	/** Content layout cache keyed by blocks identity / width / highlight. */
-	private layoutCache: { blocks: ContentBlock[]; inner: number; highlight: string | undefined; layout: ContentLayout } | undefined;
-	/** Viewport of the content pane as of the last render, used to clamp scrolling. */
-	private contentView = { inner: 60, visible: 10 };
-	/**
-	 * True right after `zz` centered the highlighted message: the content pane may
-	 * then scroll past the last full page (padding blanks below) so an end-of-file
-	 * message can sit in the middle, like vim's `zz`. Any normal scroll clears it
-	 * and the view snaps back to the last-full-page clamp.
-	 */
-	private contentCentered = false;
 	/** Terminal width from the last render, used to size the help overlay when clamping its scroll. */
 	private lastWidth = 80;
-	/** Matching body lines of the content pane, per layout and query (the layout changes with the width, so the matches follow it). */
-	private contentSearchCache: { layout: ContentLayout; query: string; matches: number[] } | undefined;
 	/** Set while the search bar is open (`mode === "search"`). */
 	private searchOrigin: SearchOrigin | undefined;
 
@@ -242,6 +227,7 @@ export class LazyPanel implements Component, Focusable {
 		this.keymap = o.keymap ?? DEFAULT_KEYMAP;
 		this.bindings = compileKeymap(this.keymap);
 		this.keys = new KeySequencer(this.bindings, () => this.o.requestRender());
+		this.contentViewport = new ContentViewport({ theme: o.theme, state: this.state, onChange: () => this.o.requestRender() });
 		this.ratio = o.leftColumnRatio ?? LEFT_COLUMN_RATIO;
 		this.status = o.status;
 		this.locateSessionFile = o.currentSessionFile;
@@ -356,7 +342,7 @@ export class LazyPanel implements Component, Focusable {
 		const row = this.sessions[this.state.cursor.sessions];
 		if (!row) {
 			this.setTree([], new Set());
-			this.setContent([], undefined);
+			this.contentViewport.setBlocks([], undefined);
 			this.loadedSessionFile = undefined;
 			this.o.requestRender();
 			return;
@@ -372,7 +358,7 @@ export class LazyPanel implements Component, Focusable {
 			if (this.sessions[this.state.cursor.sessions]?.file !== file) return;
 			// 换了会话：旁支折叠、活动分支展开（活动分支上的行因此一定可见）。
 			this.setTree(tree, defaultFolded(tree));
-			this.setContent(content, undefined);
+			this.contentViewport.setBlocks(content, undefined);
 			this.loadedSessionFile = file;
 			// Put the tree cursor on the active leaf, like /tree does.
 			const leafIdx = findLastIndex(this.visibleTree, (r) => r.onActiveBranch);
@@ -382,7 +368,7 @@ export class LazyPanel implements Component, Focusable {
 			await this.syncContentToTree();
 		} catch (err) {
 			this.setTree([], new Set());
-			this.setContent([], undefined);
+			this.contentViewport.setBlocks([], undefined);
 			this.setStatus(t("status.openFailed", { error: (err as Error).message }));
 		}
 		this.o.requestRender();
@@ -409,12 +395,6 @@ export class LazyPanel implements Component, Focusable {
 			void this.loadSelectedSession().finally(() => resolve?.());
 		}, SESSION_LOAD_DEBOUNCE_MS);
 		return this.sessionLoadPromise;
-	}
-
-	private setContent(blocks: ContentBlock[], leaf: string | undefined): void {
-		this.content = blocks;
-		this.contentLeaf = leaf;
-		this.layoutCache = undefined;
 	}
 
 	/** Replace the tree and its fold state, then refresh what the pane lists. */
@@ -447,16 +427,16 @@ export class LazyPanel implements Component, Focusable {
 			this.o.requestRender();
 			return;
 		}
-		const shown = this.content.some((b) => b.entryId === node.entryId);
+		const shown = this.contentViewport.blocks.some((b) => b.entryId === node.entryId);
 		// 需要的分支：活动分支用 undefined（会话自己的叶子），否则以该节点为叶子。
 		const wantLeaf = node.onActiveBranch ? undefined : node.entryId;
-		if (!shown && this.contentLeaf !== wantLeaf) {
+		if (!shown && this.contentViewport.leaf !== wantLeaf) {
 			try {
 				const content = await this.o.data.loadContent(file, wantLeaf);
 				if (this.disposed) return;
 				// 光标又动了 / 会话换了：丢弃这次结果。
 				if (this.visibleTree[this.state.cursor.tree]?.entryId !== node.entryId || this.loadedSessionFile !== file) return;
-				this.setContent(content, wantLeaf);
+				this.contentViewport.setBlocks(content, wantLeaf);
 			} catch (err) {
 				this.setStatus(t("status.loadBranchFailed", { error: (err as Error).message }));
 				return;
@@ -467,7 +447,8 @@ export class LazyPanel implements Component, Focusable {
 
 	/** Highlight the block for `entryId` (or the nearest block before it in the tree) and scroll it to the top. */
 	private highlightContent(entryId: string): void {
-		const shown = new Set(this.content.map((b) => b.entryId));
+		const blocks = this.contentViewport.blocks;
+		const shown = new Set(blocks.map((b) => b.entryId));
 		let targetId: string | undefined = shown.has(entryId) ? entryId : undefined;
 		if (!targetId) {
 			// 没有对应消息块的节点：沿 tree 往上找最近的一条有消息块的节点。
@@ -475,41 +456,9 @@ export class LazyPanel implements Component, Focusable {
 				const id = this.visibleTree[i]?.entryId;
 				if (id && shown.has(id)) targetId = id;
 			}
-			targetId ??= this.content[this.content.length - 1]?.entryId;
+			targetId ??= blocks[blocks.length - 1]?.entryId;
 		}
-		this.state.contentHighlight = targetId;
-		if (targetId) {
-			const start = this.contentLayout().starts.get(targetId) ?? 0;
-			// 高亮切换是普通滚动（把消息滚到顶部）：清掉 zz 的越界居中标记。
-			this.contentCentered = false;
-			this.state.cursor.content = Math.min(start, this.contentMaxScroll());
-		}
-		this.o.requestRender();
-	}
-
-	/** Cached layout of the current content for the last rendered width. */
-	private contentLayout(): ContentLayout {
-		const { inner } = this.contentView;
-		const highlight = this.state.contentHighlight;
-		const c = this.layoutCache;
-		if (c && c.blocks === this.content && c.inner === inner && c.highlight === highlight) return c.layout;
-		const layout = layoutContent(this.content, inner, this.o.theme, highlight);
-		this.layoutCache = { blocks: this.content, inner, highlight, layout };
-		return layout;
-	}
-
-	private contentMaxScroll(): number {
-		return maxScroll(this.contentLayout().lines.length, this.contentView.visible);
-	}
-
-	/** Remember the content viewport for this render (so keys can clamp against it) and return the layout. */
-	private contentLayoutFor(inner: number, visible: number): ContentLayout {
-		this.contentView = { inner: Math.max(1, inner), visible: Math.max(1, visible) };
-		const layout = this.contentLayout();
-		// 窗口变小后原来的滚动位置可能越界，这里顺手夹回来；`zz` 居中时允许滚过末尾（夹到末行）。
-		const max = this.contentCentered ? Math.max(0, layout.lines.length - 1) : maxScroll(layout.lines.length, this.contentView.visible);
-		this.state.cursor.content = clamp(this.state.cursor.content, 0, max);
-		return layout;
+		this.contentViewport.highlight(targetId);
 	}
 
 	private setStatus(s: string | undefined): void {
@@ -760,7 +709,7 @@ export class LazyPanel implements Component, Focusable {
 		const target = this.hitTarget(event);
 		if (target?.pane === "sessions") this.scrollList("sessions", delta);
 		else if (target?.pane === "tree") this.scrollList("tree", delta);
-		else if (target?.pane === "content") this.scrollContent(delta);
+		else if (target?.pane === "content") this.contentViewport.scrollBy(delta);
 		return { handled: true };
 	}
 
@@ -848,13 +797,14 @@ export class LazyPanel implements Component, Focusable {
 				this.moveCursorTo(Number.MAX_SAFE_INTEGER);
 				return;
 			case "scroll-content-down":
-				this.scrollContent(this.contentPageStep());
+				this.contentViewport.scrollBy(this.contentViewport.pageStep());
 				return;
 			case "scroll-content-up":
-				this.scrollContent(-this.contentPageStep());
+				this.contentViewport.scrollBy(-this.contentViewport.pageStep());
 				return;
 			case "content-center":
-				this.centerContent();
+				// zz：让高亮消息落在窗口正中（允许滚过末尾）；没有高亮的消息时提示一下。
+				if (!this.contentViewport.center()) this.setStatus(t("status.noContentSelected"));
 				return;
 			case "content-copy":
 				void this.copyContentBlock();
@@ -935,7 +885,7 @@ export class LazyPanel implements Component, Focusable {
 	/** j/k: list panes move the cursor one row, the content pane scrolls one line. */
 	private moveCursor(delta: number): void {
 		if (this.state.focus === "content") {
-			this.scrollContent(delta);
+			this.contentViewport.scrollBy(delta);
 			return;
 		}
 		this.moveCursorTo(this.state.cursor[this.state.focus] + delta);
@@ -944,7 +894,7 @@ export class LazyPanel implements Component, Focusable {
 	/** gg/G and absolute moves; the index is clamped to the focused list. */
 	private moveCursorTo(index: number): void {
 		const pane = this.state.focus;
-		if (pane === "content") this.setContentScroll(index);
+		if (pane === "content") this.contentViewport.scrollTo(index);
 		else if (pane === "sessions") this.setSessionsCursor(index);
 		else this.setTreeCursor(index);
 	}
@@ -974,48 +924,6 @@ export class LazyPanel implements Component, Focusable {
 		this.state.cursor.tree = next;
 		this.o.requestRender();
 		void this.syncContentToTree();
-	}
-
-	private scrollContent(delta: number): void {
-		this.setContentScroll(this.state.cursor.content + delta);
-	}
-
-	private setContentScroll(line: number): void {
-		// 普通滚动：回到常规夹取范围（清掉 zz 的越界居中标记），越界值会被夹回最后一整页。
-		this.contentCentered = false;
-		const next = clamp(line, 0, this.contentMaxScroll());
-		if (next === this.state.cursor.content) return;
-		this.state.cursor.content = next;
-		this.o.requestRender();
-	}
-
-	/** J/K from the sessions pane scroll the content pane by half a viewport. */
-	private contentPageStep(): number {
-		return Math.max(1, Math.floor(this.contentView.visible / 2));
-	}
-
-	/**
-	 * zz (content pane): scroll so the highlighted message sits in the middle of
-	 * the viewport (vim's zz). To center a message near the end of the file the
-	 * pane may scroll past the last full page — `contentCentered` lets the render
-	 * pad blanks below; any later scroll clears it. A no-op when the whole
-	 * conversation already fits (there is nothing to scroll).
-	 */
-	private centerContent(): void {
-		const target = this.state.contentHighlight;
-		if (!target || this.content.length === 0) {
-			this.setStatus(t("status.noContentSelected"));
-			return;
-		}
-		const layout = this.contentLayout();
-		const start = layout.starts.get(target);
-		if (start === undefined) return;
-		// 让选中消息的头部行落在窗口正中：起始行减去半个可见窗口，允许滚过末尾以居中末尾消息。
-		const half = Math.floor((this.contentView.visible - 1) / 2);
-		const next = clamp(start - half, 0, Math.max(0, layout.lines.length - 1));
-		this.contentCentered = true;
-		this.state.cursor.content = next;
-		this.o.requestRender();
 	}
 
 	/** y (content pane): copy the highlighted message's full text (same as TREE y). */
@@ -1155,7 +1063,7 @@ export class LazyPanel implements Component, Focusable {
 				return;
 			}
 			case "content":
-				this.setContentScroll(origin.index);
+				this.contentViewport.scrollTo(origin.index);
 				return;
 		}
 	}
@@ -1169,27 +1077,10 @@ export class LazyPanel implements Component, Focusable {
 
 	/** Matches of `query` in `pane`: row indices of the sessions list / the whole tree, or body lines of the content layout. */
 	private findMatches(pane: PaneId, query: string): number[] {
-		if (pane === "content") return this.contentMatches(query);
+		if (pane === "content") return this.contentViewport.matches(query);
 		const parsed = parseSearchQuery(query);
 		if (pane === "sessions") return indicesWhere(this.sessions, (r) => matchSessionRow(r, parsed));
 		return indicesWhere(this.tree, (r) => matchTreeRow(r, parsed));
-	}
-
-	/**
-	 * Body lines of the current content layout matching `query` (free text only:
-	 * every token on the line, qualifiers mean nothing here). Cached per layout,
-	 * so a resize (which re-wraps the lines) recomputes them.
-	 */
-	private contentMatches(query: string): number[] {
-		const layout = this.contentLayout();
-		const c = this.contentSearchCache;
-		if (c && c.layout === layout && c.query === query) return c.matches;
-		const tokens = searchTokens(parseSearchQuery(query));
-		const matches = tokens.length
-			? indicesWhere(layout.lines, (line, i) => layout.searchable[i] === true && matchesTokens(stripTerminalSequences(line), tokens))
-			: [];
-		this.contentSearchCache = { layout, query, matches };
-		return matches;
 	}
 
 	/** Recompute a list pane's matches after its rows changed; the query stays. */
@@ -1203,7 +1094,7 @@ export class LazyPanel implements Component, Focusable {
 	/** Up-to-date matches of a pane's search (the content pane's follow the layout). */
 	private matchesOf(pane: PaneId, search: PaneSearch): number[] {
 		if (pane === "content") {
-			search.matches = this.contentMatches(search.query);
+			search.matches = this.contentViewport.matches(search.query);
 			search.current = search.matches.length ? clamp(search.current, 0, search.matches.length - 1) : -1;
 		}
 		return search.matches;
@@ -1261,7 +1152,7 @@ export class LazyPanel implements Component, Focusable {
 				return;
 			}
 			case "content":
-				this.setContentScroll(index);
+				this.contentViewport.scrollTo(index);
 				return;
 		}
 	}
@@ -1872,11 +1763,11 @@ export class LazyPanel implements Component, Focusable {
 		];
 
 		// 先排版（缓存按宽度失效），CONTENT 的搜索结果跟着这份排版算。
-		const layout = this.contentLayoutFor(rightW - 2, bodyH - 2);
+		const layout = this.contentViewport.layoutFor(rightW - 2, bodyH - 2);
 		const contentSearch = this.searchView("content");
 		const right = renderContentPane(
 			{
-				blocks: this.content,
+				blocks: this.contentViewport.blocks,
 				layout,
 				scroll: this.state.cursor.content,
 				focused: this.state.focus === "content",
