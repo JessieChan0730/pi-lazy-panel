@@ -34,6 +34,7 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { t } from "../../i18n/index.ts";
 import type { KeyHint, TreeFilter, TreeRow } from "../../types.ts";
+import { clamp } from "../../utils/indices.ts";
 import { FRAME_DIVIDER, frame, overlayCentered } from "../frame.ts";
 import { renderTreeRow } from "../panes/tree-pane.ts";
 import { scrollOffset } from "../panes/sessions-pane.ts";
@@ -286,8 +287,4 @@ function renderHints(hints: KeyHint[], theme: Theme, width: number): string {
 		used += w;
 	}
 	return parts.join("   ");
-}
-
-function clamp(n: number, min: number, max: number): number {
-	return Math.max(min, Math.min(max, n));
 }

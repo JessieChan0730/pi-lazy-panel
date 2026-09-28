@@ -23,6 +23,7 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import { matchesKeyId } from "../../config/keys.ts";
 import type { KeyHint } from "../../types.ts";
+import { clamp } from "../../utils/indices.ts";
 import { dialogWidth, fit, frame, metaBudget, overlayCentered } from "../frame.ts";
 
 /** What one menu looks like; passed to `open`. */
@@ -194,8 +195,4 @@ export class SelectDialog {
 		const width = dialogWidth(termW);
 		return overlayCentered(lines, this.render(width), width, termW);
 	}
-}
-
-function clamp(n: number, min: number, max: number): number {
-	return Math.max(min, Math.min(max, n));
 }

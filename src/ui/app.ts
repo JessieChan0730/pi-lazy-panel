@@ -55,6 +55,7 @@ import { type Binding, compileKeymap, labelsFor, labelsForFocus, matchesKeyId, r
 import { DEFAULT_KEYMAP, FOCUS_ACTIONS, isDisabledIn, paneTitleText, TREE_DIALOG_FOOTER, treeDialogHintText } from "../config/keymap.ts";
 import { LEFT_COLUMN_RATIO, PANE_IDS, SESSION_SORT_MODES, SPINNER_INTERVAL_MS, TREE_DIALOG_SCOPE } from "../constants.ts";
 import { t } from "../i18n/index.ts";
+import { clamp, findLastIndex, indicesWhere } from "../utils/indices.ts";
 import { highlightTerms, matchesTokens, matchSessionRow, matchTreeRow, parseSearchQuery, searchTokens } from "../data/search.ts";
 import { findSessionIndex } from "../data/sessions.ts";
 import {
@@ -1966,22 +1967,4 @@ export class LazyPanel implements Component, Focusable {
 		const key = labelsFor(this.keymap, "global", FOCUS_ACTIONS[pane])[0];
 		return key ? `[${key}] ${paneTitleText(pane)}` : paneTitleText(pane);
 	}
-}
-
-function findLastIndex<T>(arr: T[], pred: (t: T) => boolean): number {
-	for (let i = arr.length - 1; i >= 0; i--) if (pred(arr[i]!)) return i;
-	return -1;
-}
-
-/** Indices of the elements `pred` accepts, ascending. */
-function indicesWhere<T>(arr: T[], pred: (t: T, i: number) => boolean): number[] {
-	const out: number[] = [];
-	arr.forEach((t, i) => {
-		if (pred(t, i)) out.push(i);
-	});
-	return out;
-}
-
-function clamp(n: number, min: number, max: number): number {
-	return Math.max(min, Math.min(max, n));
 }
