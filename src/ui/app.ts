@@ -55,7 +55,7 @@ import { DEFAULT_KEYMAP, FOCUS_ACTIONS, isDisabledIn, paneTitleText, TREE_DIALOG
 import { LEFT_COLUMN_RATIO, PANE_IDS, SESSION_SORT_MODES, SPINNER_INTERVAL_MS, TREE_DIALOG_SCOPE } from "../constants.ts";
 import { t } from "../i18n/index.ts";
 import { clamp, findLastIndex, indicesWhere } from "../utils/indices.ts";
-import { highlightTerms, matchSessionRow, matchTreeRow, parseSearchQuery } from "../data/search.ts";
+import { cycleMatch, firstMatchFrom, highlightTerms, matchSessionRow, matchTreeRow, parseSearchQuery, stepMatch } from "../data/search.ts";
 import { findSessionIndex } from "../data/sessions.ts";
 import { applyTreeFold, defaultFolded, filterTreeRows, nearestListedIndex } from "../data/tree-fold.ts";
 import type {
@@ -1022,8 +1022,7 @@ export class LazyPanel implements Component, Focusable {
 		this.state.search[pane] = search;
 		// 折叠先回到搜索前的样子，再为新的目标展开（上一次按键跳到的匹配可能展开了别的段）。
 		if (pane === "tree" && origin.folded) this.state.treeFolded = new Set(origin.folded);
-		const from = matches.findIndex((m) => m >= origin.index);
-		const first = from >= 0 ? from : matches.length ? 0 : -1;
+		const first = firstMatchFrom(matches, origin.index);
 		if (first < 0) {
 			this.restoreOrigin(origin);
 			return;
@@ -1131,14 +1130,11 @@ export class LazyPanel implements Component, Focusable {
 			this.setStatus(t("status.noMatches"));
 			return;
 		}
-		let next: number;
-		if (pane === "content") {
-			next = search.current < 0 ? (delta > 0 ? 0 : matches.length - 1) : (search.current + delta + matches.length) % matches.length;
-		} else {
-			const pos = pane === "sessions" ? this.state.cursor.sessions : this.treeView.cursorTreeIndex();
-			const i = delta > 0 ? matches.findIndex((m) => m > pos) : findLastIndex(matches, (m) => m < pos);
-			next = i >= 0 ? i : delta > 0 ? 0 : matches.length - 1;
-		}
+		// 列表面板从光标数起（vim 的 n / N）；CONTENT 没有光标，从上次跳到的匹配数起。
+		const next =
+			pane === "content"
+				? cycleMatch(search.current, delta, matches.length)
+				: stepMatch(matches, pane === "sessions" ? this.state.cursor.sessions : this.treeView.cursorTreeIndex(), delta);
 		search.current = next;
 		this.jumpToMatch(pane, matches[next]!);
 	}

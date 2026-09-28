@@ -24,7 +24,8 @@
  *   - content lines (`matchesTokens` on the rendered line): tokens only, no
  *     qualifier applies
  * `findMatchRanges` locates the tokens in a piece of text so the panes can
- * highlight them.
+ * highlight them; `firstMatchFrom` / `stepMatch` / `cycleMatch` pick which
+ * match the live search, `n` and `N` go to.
  *
  * 三个面板和树对话框共用这里的解析 / 匹配；对话框只用 parseSearchQuery + matchTreeRow。
  * 普通词只搜 名称 / 标题 / label；模型、路径、角色、时间都要加限定词。
@@ -32,6 +33,7 @@
 
 import type { SearchQuery, SessionRow, TreeRow } from "../types.ts";
 import { shortenPath } from "../utils/format.ts";
+import { findLastIndex } from "../utils/indices.ts";
 
 /** Qualifiers `parseSearchQuery` understands, in `key:value` form. */
 const QUALIFIERS = new Set(["name", "model", "path", "tag", "role", "after", "before"]);
@@ -180,4 +182,32 @@ export function findMatchRanges(text: string, terms: string[]): MatchRange[] {
 
 function escapeRegExp(text: string): string {
 	return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// ---------------------------------------------------------------------------
+// Moving between matches. `matches` are ascending row / line numbers; the
+// results index into `matches` (-1 = none).
+// ---------------------------------------------------------------------------
+
+/** Live search (vim's incsearch): the first match at or after `pos`, else the first one. */
+export function firstMatchFrom(matches: readonly number[], pos: number): number {
+	const i = matches.findIndex((m) => m >= pos);
+	return i >= 0 ? i : matches.length ? 0 : -1;
+}
+
+/** n / N in a list pane: the first match after `pos` / the last one before it, wrapping around. */
+export function stepMatch(matches: readonly number[], pos: number, delta: 1 | -1): number {
+	if (matches.length === 0) return -1;
+	const i = delta > 0 ? matches.findIndex((m) => m > pos) : findLastIndex(matches, (m) => m < pos);
+	return i >= 0 ? i : delta > 0 ? 0 : matches.length - 1;
+}
+
+/**
+ * n / N in the content pane, which has no cursor to count from: the match
+ * after / before `current` (an index into the `total` matches, -1 = none
+ * visited yet), wrapping around.
+ */
+export function cycleMatch(current: number, delta: 1 | -1, total: number): number {
+	if (total === 0) return -1;
+	return current < 0 ? (delta > 0 ? 0 : total - 1) : (current + delta + total) % total;
 }
