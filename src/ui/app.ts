@@ -147,6 +147,22 @@ export interface LazyPanelOptions {
 const SESSION_LOAD_DEBOUNCE_MS = 40;
 
 /**
+ * A dialog or overlay drawn over the panes. `LazyPanel.overlays` lists them in
+ * the order they take the keys; see there for how the four users read it.
+ */
+interface Overlay {
+	isOpen(): boolean;
+	/** Every key while this is the first open overlay. */
+	handleInput(data: string): void;
+	/** Draw it over the rendered panel lines. */
+	draw(lines: string[], width: number): string[];
+	/** Footer hints while it is open; undefined keeps the panel's own footer (the help overlay lists the keys itself). */
+	hints(): KeyHint[] | undefined;
+	/** Drawn under the other overlays: the tree dialog, which T / Enter open a prompt / menu on top of. */
+	base?: boolean;
+}
+
+/**
  * Where the focused pane was when `/` opened the search bar: the live search
  * looks for the first match from here, Esc in the bar comes back here.
  */
@@ -189,6 +205,18 @@ export class LazyPanel implements Component, Focusable {
 	private readonly changelogDialog: ChangelogDialog;
 	/** What the dialog flows (./flows/) get from the panel; see `FlowHost`. */
 	private readonly flowHost: FlowHost;
+	/**
+	 * Every dialog / overlay, in the order they take the keys: the first open one
+	 * gets every key (`handleInput`) and gives the footer its hints (`renderBottom`),
+	 * any open one blocks the mouse, and `render` draws the open ones bottom-up
+	 * (`overlaysBottomUp`). Only the tree dialog can have another one open on top
+	 * of it (T / Enter's prompt or menu), so it comes last here and first there.
+	 *
+	 * 所有弹窗按"谁先拿按键"排列：按键、footer 提示、鼠标屏蔽、叠加绘制都从这一份列表来，新增弹窗只改这里。
+	 */
+	private readonly overlays: Overlay[];
+	/** `overlays` in drawing order: the base layer (the tree dialog) first, then the rest in list order. */
+	private readonly overlaysBottomUp: Overlay[];
 	/** Cached changelog markdown so a second `@` opens instantly (only the first render is slow). */
 	private changelogMd: string | undefined;
 	/** Ticker that rotates the changelog loading spinner while the markdown is fetched / rendered. */
@@ -239,6 +267,32 @@ export class LazyPanel implements Component, Focusable {
 		});
 		this.infoDialog = new SessionInfoDialog({ theme: o.theme });
 		this.changelogDialog = new ChangelogDialog({ theme: o.theme, onClose: () => this.closeChangelog() });
+		this.overlays = [
+			widgetOverlay(this.inputDialog),
+			widgetOverlay(this.selectDialog),
+			widgetOverlay(this.infoDialog),
+			{
+				isOpen: () => this.changelogDialog.isOpen,
+				handleInput: (data) => this.handleChangelogInput(data),
+				draw: (lines, width) => this.changelogDialog.overlay(lines, width),
+				hints: () => this.changelogDialog.hints,
+			},
+			{
+				isOpen: () => this.state.helpOpen,
+				handleInput: (data) => this.handleHelpInput(data),
+				draw: (lines, width) =>
+					overlayHelp(lines, { keymap: this.keymap, focus: this.state.focus, scroll: this.state.helpScroll, theme: this.o.theme }, width),
+				hints: () => undefined,
+			},
+			{
+				isOpen: () => this.treeDialog.isOpen,
+				handleInput: (data) => this.handleTreeDialogInput(data),
+				draw: (lines, width) => this.treeDialog.overlay(lines, width),
+				hints: () => this.treeDialog.hints,
+				base: true,
+			},
+		];
+		this.overlaysBottomUp = [...this.overlays.filter((ov) => ov.base), ...this.overlays.filter((ov) => !ov.base)];
 		// flows 拿到的面板能力：都转发给面板自己的私有方法，flows 本身不存任何状态。
 		this.flowHost = {
 			state: this.state,
@@ -460,41 +514,10 @@ export class LazyPanel implements Component, Focusable {
 			return;
 		}
 
-		// 居中输入弹窗打开时（打标签、自定义摘要指令）：同理全部交给弹窗。
-		if (this.inputDialog.isOpen) {
-			this.inputDialog.handleInput(data);
-			return;
-		}
-
-		// 居中选择菜单打开时（Summarize branch?、删除确认）：j/k/Enter/Esc/y/n 都由菜单处理。
-		if (this.selectDialog.isOpen) {
-			this.selectDialog.handleInput(data);
-			return;
-		}
-
-		// 会话信息弹窗打开时只响应 y 复制 / Esc 关闭。
-		if (this.infoDialog.isOpen) {
-			this.infoDialog.handleInput(data);
-			return;
-		}
-
-		// changelog 弹窗：滚动 / 关闭由弹窗处理，再按一次 @（用户绑定给 changelog 的键）也关闭。
-		if (this.changelogDialog.isOpen) {
-			if (this.isAction(data, "global", "changelog")) this.closeChangelog();
-			else this.changelogDialog.handleInput(data);
-			this.o.requestRender();
-			return;
-		}
-
-		// 帮助弹窗打开时只响应关闭 / 滚动。
-		if (this.state.helpOpen) {
-			this.handleHelpInput(data);
-			return;
-		}
-
-		// 完整树对话框打开时：搜索框聚焦就全部交给输入框，否则按 tree-dialog scope 解析按键。
-		if (this.treeDialog.isOpen) {
-			this.handleTreeDialogInput(data);
+		// 有弹窗打开时按键全部交给它（输入框、菜单、会话信息、changelog、帮助、树对话框，顺序见 overlays）。
+		const overlay = this.activeOverlay();
+		if (overlay) {
+			overlay.handleInput(data);
 			return;
 		}
 
@@ -529,6 +552,18 @@ export class LazyPanel implements Component, Focusable {
 
 		const result = this.keys.feed(this.state.focus, data);
 		if (result.kind === "action") this.dispatch(result.action);
+	}
+
+	/** The dialog / overlay that has the keys: the first open one in `overlays`. */
+	private activeOverlay(): Overlay | undefined {
+		return this.overlays.find((ov) => ov.isOpen());
+	}
+
+	/** Keys while the changelog box is open: it scrolls / closes itself, and the `@` key (whatever it is bound to) closes it too. */
+	private handleChangelogInput(data: string): void {
+		if (this.isAction(data, "global", "changelog")) this.closeChangelog();
+		else this.changelogDialog.handleInput(data);
+		this.o.requestRender();
 	}
 
 	private handleHelpInput(data: string): void {
@@ -614,24 +649,12 @@ export class LazyPanel implements Component, Focusable {
 	handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
 		if (this.disposed || this.entering) return undefined;
 		// 搜索输入 / 各类弹窗打开时：吞掉面板区域的滚轮和点击，避免误动下面的列表，但不做交互。
-		if (this.state.mode !== "normal" || this.anyDialogOpen()) {
+		if (this.state.mode !== "normal" || this.activeOverlay()) {
 			return event.type === "wheel" || event.type === "click" ? { handled: true } : undefined;
 		}
 		if (event.type === "wheel") return this.handleWheel(event);
 		if (event.type === "click") return this.handleClick(event);
 		return undefined;
-	}
-
-	/** Any centered / full-screen overlay is up (its own input owns the keyboard). */
-	private anyDialogOpen(): boolean {
-		return (
-			this.state.helpOpen ||
-			this.inputDialog.isOpen ||
-			this.selectDialog.isOpen ||
-			this.infoDialog.isOpen ||
-			this.changelogDialog.isOpen ||
-			this.treeDialog.isOpen
-		);
 	}
 
 	/** Map an event to the pane / row under the pointer, using the same window offsets as render(). */
@@ -1732,24 +1755,9 @@ export class LazyPanel implements Component, Focusable {
 		);
 
 		let lines = sideBySide(left, right, leftW, rightW);
-		// 弹窗按层叠顺序画：树对话框 → 输入框 / 菜单（可以开在树对话框上面）→ 帮助。
-		if (this.treeDialog.isOpen) {
-			lines = this.treeDialog.overlay(lines, width);
-		}
-		if (this.inputDialog.isOpen) {
-			lines = this.inputDialog.overlay(lines, width);
-		}
-		if (this.selectDialog.isOpen) {
-			lines = this.selectDialog.overlay(lines, width);
-		}
-		if (this.infoDialog.isOpen) {
-			lines = this.infoDialog.overlay(lines, width);
-		}
-		if (this.changelogDialog.isOpen) {
-			lines = this.changelogDialog.overlay(lines, width);
-		}
-		if (this.state.helpOpen) {
-			lines = overlayHelp(lines, { keymap: this.keymap, focus: this.state.focus, scroll: this.state.helpScroll, theme }, width);
+		// 弹窗按层叠顺序画：树对话框在最底下（输入框 / 菜单可以开在它上面），其余按 overlays 的顺序往上叠。
+		for (const overlay of this.overlaysBottomUp) {
+			if (overlay.isOpen()) lines = overlay.draw(lines, width);
 		}
 		return [...lines, this.renderBottom(width)].map((l) => fit(l, width));
 	}
@@ -1771,19 +1779,10 @@ export class LazyPanel implements Component, Focusable {
 		const pendingHint = this.keys.hasPending ? t("status.pending", { keys: this.keys.pendingKeys }) : undefined;
 		const status = pendingHint ?? this.status;
 		// 弹窗打开时 footer 只显示弹窗自己的按键提示（如 Enter save / Esc cancel / empty removes）；状态文字照常显示。
-		const dialog = this.inputDialog.isOpen
-			? this.inputDialog
-			: this.selectDialog.isOpen
-				? this.selectDialog
-				: this.infoDialog.isOpen
-					? this.infoDialog
-					: this.changelogDialog.isOpen
-						? this.changelogDialog
-						: this.treeDialog.isOpen
-							? this.treeDialog
-							: undefined;
-		if (dialog) {
-			return renderFooter({ ...footer, hints: dialog.hints, ...(status ? { status } : {}) }, width)[0]!;
+		// 帮助弹窗没有自己的提示（它本身就在列快捷键），footer 照常显示面板的。
+		const hints = this.overlays.find((ov) => ov.isOpen() && ov.hints() !== undefined)?.hints();
+		if (hints) {
+			return renderFooter({ ...footer, hints, ...(status ? { status } : {}) }, width)[0]!;
 		}
 		// 当前面板有搜索生效：显示关键字、位置 / 数量和 n / N / Esc 提示（别的面板的搜索不显示）。
 		const search = this.state.search[this.state.focus];
@@ -1808,4 +1807,19 @@ export class LazyPanel implements Component, Focusable {
 		const key = labelsFor(this.keymap, "global", FOCUS_ACTIONS[pane])[0];
 		return key ? `[${key}] ${paneTitleText(pane)}` : paneTitleText(pane);
 	}
+}
+
+/** The `Overlay` of a dialog widget that handles its own keys and brings its own footer hints. */
+function widgetOverlay(widget: {
+	readonly isOpen: boolean;
+	readonly hints: KeyHint[];
+	handleInput(data: string): void;
+	overlay(lines: string[], termW: number): string[];
+}): Overlay {
+	return {
+		isOpen: () => widget.isOpen,
+		handleInput: (data) => widget.handleInput(data),
+		draw: (lines, width) => widget.overlay(lines, width),
+		hints: () => widget.hints,
+	};
 }
