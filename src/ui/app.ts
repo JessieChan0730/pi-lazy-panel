@@ -743,9 +743,9 @@ export class LazyPanel implements Component, Focusable {
 	}
 
 	/**
-	 * Execute one logical action. Only the generic actions of this task are
-	 * implemented; pane-specific ones show a short "not yet" status so the user
-	 * can see the binding was recognised.
+	 * Execute one logical action of the panes (the tree dialog has its own,
+	 * `dispatchInTreeDialog`). Every ActionId is listed, so adding one without
+	 * handling it here fails the type check.
 	 */
 	dispatch(action: ActionId): void {
 		switch (action) {
@@ -873,9 +873,21 @@ export class LazyPanel implements Component, Focusable {
 			case "changelog":
 				void this.openChangelog();
 				return;
-			default:
+			case "tree-filter-default":
+			case "tree-filter-no-tools":
+			case "tree-filter-user":
+			case "tree-filter-labeled":
+			case "tree-filter-all":
+			case "tree-dialog-close":
+				// 只在树对话框里有意义（dispatchInTreeDialog）；用户把它们绑到面板 scope 时提示一下。
 				this.setStatus(t("status.notImplemented", { action }));
 				return;
+			default: {
+				// 新增 ActionId 却忘了在上面处理时这里编译不过；运行时只可能是用户配置里写错的动作名（config 不校验名字）。
+				const unknown: never = action;
+				this.setStatus(t("status.notImplemented", { action: String(unknown) }));
+				return;
+			}
 		}
 	}
 

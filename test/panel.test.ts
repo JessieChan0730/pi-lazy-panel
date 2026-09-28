@@ -3617,3 +3617,17 @@ test("session actions report loader / action failures in the footer and leave no
 	// d with a selection but no actions wired
 	await run({ actions: null }, [" ", "d"], t("status.deleteUnavailable"));
 });
+
+test("an action bound where it does nothing, or misspelled in the config, only says so in the footer", () => {
+	// tree-filter-all belongs to the tree dialog; "tree-filter-everything" is no action at all (the config does not check names)
+	const keymap = mergeKeymap(DEFAULT_KEYMAP, { sessions: { "tree-filter-all": "F2", "tree-filter-everything": "F3" } as never });
+	const h = makePanel({ keymap });
+	const footer = () => h.text(200).at(-1)!;
+	h.panel.handleInput("\x1bOQ"); // F2
+	assert.ok(footer().includes(t("status.notImplemented", { action: "tree-filter-all" })), footer());
+	h.panel.handleInput("\x1bOR"); // F3
+	assert.ok(footer().includes(t("status.notImplemented", { action: "tree-filter-everything" })), footer());
+	assert.equal(h.closed(), false);
+	assert.equal(h.panel.state.mode, "normal");
+	h.panel.dispose();
+});
