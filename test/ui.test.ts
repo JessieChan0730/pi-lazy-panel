@@ -31,6 +31,7 @@ import { highlightLine, searchMeta } from "../src/ui/search-highlight.ts";
 import { treePrefixes } from "../src/ui/tree-lines.ts";
 import { ELLIPSIS, MARK_FOLDED, MARK_LEAF, MARK_OPEN, MAX_DEPTH, treeOutline } from "../src/ui/tree-outline.ts";
 import { treeSearchHints, TreeDialog } from "../src/ui/widgets/tree-dialog.ts";
+import { contextUsageText } from "../src/ui/widgets/context-usage-dialog.ts";
 import { formatCost, formatTokens, normalizeNewlines, shortenPath, singleLine } from "../src/utils/format.ts";
 import { initI18n } from "../src/i18n/index.ts";
 
@@ -666,4 +667,40 @@ test("TreeView: folds hide descendants; reveal, keepCursorOn and toggleFold; the
 	view.dropSuspendedFolds();
 	view.resumeFolds();
 	assert.equal(state.treeFolded.size, 0, "dropped: nothing to bring back");
+});
+
+// ---------------------------------------------------------------------------
+// Context usage: dialog copy text
+// ---------------------------------------------------------------------------
+
+test("contextUsageText: window line, one row per category, summary", () => {
+	const info = {
+		model: "claude-opus-4",
+		messages: 4,
+		cost: 1.5,
+		used: 84_213,
+		contextWindow: 200_000,
+		percent: 84_213 / 200_000,
+		compactThreshold: 0.918,
+		compactRemaining: 100_000,
+		categories: [
+			{ key: "systemPrompt", tokens: 1700, color: "accent" as const },
+			{ key: "toolResults", tokens: 40_000, color: "toolTitle" as const },
+			{ key: "context", tokens: 42_513, color: "warning" as const },
+			{ key: "other", tokens: 0, color: "muted" as const },
+			{ key: "freeSpace", tokens: 115_787, color: "dim" as const },
+		],
+	};
+	const text = contextUsageText(info);
+	assert.ok(text.includes("84.2k") && text.includes("200k"), text);
+	assert.ok(text.includes("System prompt"), text);
+	assert.ok(text.includes("Tool results"), text);
+	assert.ok(text.includes("Free space"), text);
+	assert.ok(text.includes("Model") && text.includes("claude-opus-4"), text);
+	assert.ok(text.includes("Messages"), text);
+
+	// no window: the line says the window is unknown, still lists the categories
+	const noWindow = contextUsageText({ messages: 0, used: 500, categories: [{ key: "context", tokens: 500, color: "warning" }] });
+	assert.ok(noWindow.includes("unknown"), noWindow);
+	assert.ok(noWindow.includes("Context"), noWindow);
 });

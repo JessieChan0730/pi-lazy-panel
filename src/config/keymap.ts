@@ -48,6 +48,8 @@ export const DEFAULT_KEYMAP: Keymap = {
 		"session-rename": "r",
 		"session-sort": "s",
 		"session-info": "i",
+		// u 显示上下文占用详情（pi footer 那个百分比的展开视图）；只读弹窗。
+		"session-context-usage": "u",
 		"session-toggle-select": "space",
 		// p 置顶 / 取消置顶光标（或所选）会话，置顶的会话固定在列表最上、不受排序影响。
 		"session-pin": "p",

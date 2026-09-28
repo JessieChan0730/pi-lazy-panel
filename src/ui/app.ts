@@ -44,6 +44,7 @@ import { findSessionIndex } from "../data/sessions.ts";
 import { applyTreeFold, defaultFolded, filterTreeRows, nearestListedIndex } from "../data/tree-fold.ts";
 import type {
 	ActionId,
+	ContextUsageInfo,
 	EnterOutcome,
 	KeyHint,
 	Keymap,
@@ -65,6 +66,7 @@ import {
 	confirmShareSession,
 	copyLastReply,
 	openCompactInput,
+	openContextUsage,
 	openImportInput,
 	openNewSessionInput,
 	openRenameInput,
@@ -85,6 +87,7 @@ import type { ActionSource, DataSource } from "./ports.ts";
 import { createInitialState, type PanelState } from "./state.ts";
 import { TreeView } from "./tree-view.ts";
 import { ChangelogDialog } from "./widgets/changelog-dialog.ts";
+import { ContextUsageDialog } from "./widgets/context-usage-dialog.ts";
 
 import { renderFooter } from "./widgets/footer.ts";
 import { compactKeys, helpLineCount, overlayHelp } from "./widgets/help-overlay.ts";
@@ -187,6 +190,8 @@ export class LazyPanel implements Component, Focusable {
 	private readonly treeDialog: TreeDialog;
 	/** `i` in SESSIONS: the read-only Session Info box. */
 	private readonly infoDialog: SessionInfoDialog;
+	/** `u` in SESSIONS: the read-only Context usage box. */
+	private readonly usageDialog: ContextUsageDialog;
 	/** `@`: pi's changelog in a big scrollable box. */
 	private readonly changelogDialog: ChangelogDialog;
 	/** What the dialog flows (./flows/) get from the panel; see `FlowHost`. */
@@ -252,11 +257,13 @@ export class LazyPanel implements Component, Focusable {
 			onChange: () => this.o.requestRender(),
 		});
 		this.infoDialog = new SessionInfoDialog({ theme: o.theme });
+		this.usageDialog = new ContextUsageDialog({ theme: o.theme });
 		this.changelogDialog = new ChangelogDialog({ theme: o.theme, onClose: () => this.closeChangelog() });
 		this.overlays = [
 			widgetOverlay(this.inputDialog),
 			widgetOverlay(this.selectDialog),
 			widgetOverlay(this.infoDialog),
+			widgetOverlay(this.usageDialog),
 			{
 				isOpen: () => this.changelogDialog.isOpen,
 				handleInput: (data) => this.handleChangelogInput(data),
@@ -294,6 +301,7 @@ export class LazyPanel implements Component, Focusable {
 			openMenu: (mode, spec) => this.openMenu(mode, spec),
 			closeDialogs: () => this.closeDialogs(),
 			openInfo: (info, onCopy) => this.openInfo(info, onCopy),
+			openUsage: (info, onCopy) => this.openUsage(info, onCopy),
 			dialogMaxRows: () => this.dialogMaxRows(),
 			enter: (what, run, progress) => this.enter(what, run, progress),
 			relist: (keepFile) => this.listSessions(keepFile),
@@ -830,6 +838,9 @@ export class LazyPanel implements Component, Focusable {
 				return;
 			case "session-info":
 				void openSessionInfo(this.flowHost);
+				return;
+			case "session-context-usage":
+				void openContextUsage(this.flowHost);
 				return;
 			case "session-new":
 				openNewSessionInput(this.flowHost);
@@ -1634,6 +1645,19 @@ export class LazyPanel implements Component, Focusable {
 	private closeSessionInfo(): void {
 		this.state.mode = this.baseMode();
 		this.infoDialog.close();
+		this.o.requestRender();
+	}
+
+	/** The read-only Context usage box (u): `onCopy` gets its text on y, Esc / q close it. */
+	private openUsage(info: ContextUsageInfo, onCopy: (text: string) => void): void {
+		this.state.mode = "usage";
+		this.usageDialog.open({ info, onCopy, onClose: () => this.closeUsage() });
+		this.o.requestRender();
+	}
+
+	private closeUsage(): void {
+		this.state.mode = this.baseMode();
+		this.usageDialog.close();
 		this.o.requestRender();
 	}
 

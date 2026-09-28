@@ -17,6 +17,7 @@ import { initI18n, t } from "../src/i18n/index.ts";
 initI18n("en");
 import type {
 	ContentBlock,
+	ContextUsageInfo,
 	ExportFormat,
 	ForkPoint,
 	RestoreOptions,
@@ -50,6 +51,7 @@ import { customPromptTitle, summaryMenu as restoreSummaryMenu, summaryMenuTitle 
 import { searchLabel } from "../src/ui/widgets/search-bar.ts";
 import { SelectDialog } from "../src/ui/widgets/select-dialog.ts";
 import { sessionInfoText, sessionInfoTitle } from "../src/ui/widgets/session-info-dialog.ts";
+import { contextUsageTitle } from "../src/ui/widgets/context-usage-dialog.ts";
 
 // i18n 已在文件顶部固定为 en；这些别名让下面的断言仍然引用固定的英文文案（所见即所测）。
 const SUMMARIZING_STATUS = t("status.summarizing");
@@ -71,6 +73,7 @@ const SUMMARY_MENU_TITLE = summaryMenuTitle();
 const SUMMARY_MENU = restoreSummaryMenu();
 const SEARCH_LABEL = searchLabel();
 const SESSION_INFO_TITLE = sessionInfoTitle();
+const CONTEXT_USAGE_TITLE = contextUsageTitle();
 const COMPACT_DIALOG_TITLE = compactDialogTitle();
 const CANNOT_DELETE_ACTIVE_TITLE = cannotDeleteActiveTitle();
 
@@ -225,7 +228,7 @@ test("sessions header shows position · scope · sort in BOTH scopes, and the fo
 });
 
 test("? opens the help overlay for the focused pane and ? / Esc close it", () => {
-	const h = makePanel({ height: 30 });
+	const h = makePanel({ height: 40 });
 	h.panel.handleInput("?");
 	assert.equal(h.panel.state.helpOpen, true);
 	let lines = h.text(100);
@@ -2061,6 +2064,7 @@ function makeSessionActionPanel(
 	const renames: Array<{ file: string; name: string }> = [];
 	const copies: string[] = [];
 	const infoCalls: string[] = [];
+	const usageCalls: string[] = [];
 	const news: string[] = [];
 	const compacts: Array<{ file: string; instructions: string | undefined }> = [];
 	const forks: Array<{ file: string; entryId: string }> = [];
@@ -2097,6 +2101,31 @@ function makeSessionActionPanel(
 			forkPointCalls.push(file);
 			return forkPoints;
 		},
+		...(opts.info === false
+			? {}
+			: {
+					loadContextUsage: async (file: string): Promise<ContextUsageInfo | undefined> => {
+						usageCalls.push(file);
+						const s = sessions.find((r) => r.file === file);
+						if (!s) return undefined;
+						return {
+							model: "claude-opus-4",
+							messages: 12,
+							used: 84_213,
+							contextWindow: 200_000,
+							percent: 84_213 / 200_000,
+							compactThreshold: 0.918,
+							compactRemaining: 100_000,
+							categories: [
+								{ key: "systemPrompt", tokens: 1700, color: "accent" },
+								{ key: "toolResults", tokens: 40_000, color: "toolTitle" },
+								{ key: "context", tokens: 42_513, color: "warning" },
+								{ key: "other", tokens: 0, color: "muted" },
+								{ key: "freeSpace", tokens: 115_787, color: "dim" },
+							],
+						};
+					},
+				}),
 		...(opts.info === false
 			? {}
 			: {
@@ -2199,6 +2228,7 @@ function makeSessionActionPanel(
 		renames,
 		copies,
 		infoCalls,
+		usageCalls,
 		news,
 		compacts,
 		forks,
@@ -2621,6 +2651,59 @@ test("i opens the Session Info box (what /session shows); y copies its text, Esc
 	assert.equal(bare.panel.state.mode, "normal");
 	assert.ok(bare.footer().includes("session info: unavailable"), bare.footer());
 	h.panel.dispose();
+	bare.panel.dispose();
+});
+
+test("u opens the context-usage box for the cursor session; y copies its text, Esc / q close, other keys swallowed", async () => {
+	const h = makeSessionActionPanel();
+	await h.panel.load();
+	h.panel.handleInput("u");
+	await flush();
+	assert.equal(h.panel.state.mode, "usage");
+	assert.deepEqual(h.usageCalls, ["/tmp/s1.jsonl"]);
+	const dlg = dialogAt(h.text(), CONTEXT_USAGE_TITLE);
+	assert.ok(dlg, "the usage box should be drawn");
+	assert.ok(dlg.title.includes("claude-opus-4"), dlg.title);
+	const body = dlg.body.join("\n");
+	// the window line, the stacked bar and the category rows are all shown
+	assert.ok(body.includes("84.2k") && body.includes("200k"), body);
+	assert.ok(body.includes("System prompt") && body.includes("Tool results"), body);
+	assert.ok(body.includes("Context") && body.includes("Free space"), body);
+	assert.ok(h.footer().includes("USAGE") && h.footer().includes("y copy") && h.footer().includes("Esc close"), h.footer());
+	for (const l of h.panel.render(120)) assert.equal(visibleWidth(l), 120);
+
+	// y copies the whole text and keeps the box open; j/d are swallowed
+	h.panel.handleInput("y");
+	await flush();
+	assert.equal(h.copies.length, 1);
+	assert.ok(h.copies[0]!.includes("Tool results"), h.copies[0]);
+	assert.ok(h.footer().includes("copied context usage"), h.footer());
+	h.panel.handleInput("j");
+	h.panel.handleInput("d");
+	assert.equal(h.panel.state.mode, "usage");
+	assert.equal(h.panel.state.cursor.sessions, 0);
+	// Esc closes
+	h.panel.handleInput("\x1b");
+	assert.equal(h.panel.state.mode, "normal");
+	assert.equal(dialogAt(h.text(), CONTEXT_USAGE_TITLE), undefined);
+
+	// multi-selecting two sessions refuses u (single-session action)
+	h.panel.handleInput(" ");
+	h.panel.handleInput("j");
+	await settle();
+	h.panel.handleInput(" ");
+	h.panel.handleInput("u");
+	assert.equal(h.panel.state.mode, "normal");
+	assert.ok(h.footer().includes("cannot act on multiple sessions"), h.footer());
+	h.panel.dispose();
+
+	// no loader injected: footer only
+	const bare = makeSessionActionPanel({ info: false });
+	await bare.panel.load();
+	bare.panel.handleInput("u");
+	await flush();
+	assert.equal(bare.panel.state.mode, "normal");
+	assert.ok(bare.footer().includes("context usage: unavailable"), bare.footer());
 	bare.panel.dispose();
 });
 

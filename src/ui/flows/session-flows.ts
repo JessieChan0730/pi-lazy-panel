@@ -13,7 +13,7 @@
 
 import { t } from "../../i18n/index.ts";
 import { findSessionIndex } from "../../data/sessions.ts";
-import type { DeleteMethod, ExportFormat, ForkPoint, SessionInfo, SessionRow, ShareResult } from "../../types.ts";
+import type { ContextUsageInfo, DeleteMethod, ExportFormat, ForkPoint, SessionInfo, SessionRow, ShareResult } from "../../types.ts";
 import { alertDialogSpec, cannotDeleteActiveTitle } from "../widgets/alert-dialog.ts";
 import { compactDialogHints, compactDialogTitle } from "../widgets/compact-dialog.ts";
 import {
@@ -662,6 +662,47 @@ async function copySessionInfo(host: FlowHost, text: string): Promise<void> {
 		await copy(text);
 		if (host.isDisposed()) return;
 		host.setStatus(t("status.copiedSessionInfo"));
+	} catch (err) {
+		host.setStatus(t("status.copyFailed", { error: (err as Error).message }));
+	}
+}
+
+/** u: load the context-window usage for the session under the cursor and open the usage box. */
+export async function openContextUsage(host: FlowHost): Promise<void> {
+	if (refuseMultiSelect(host, "usage")) return;
+	const row = host.currentSessionRow();
+	if (!row) return;
+	const load = host.data.loadContextUsage;
+	if (!load) {
+		host.setStatus(t("status.usageUnavailable"));
+		return;
+	}
+	let info: ContextUsageInfo | undefined;
+	try {
+		info = await load(row.file);
+	} catch (err) {
+		host.setStatus(t("status.usageFailed", { error: (err as Error).message }));
+		return;
+	}
+	if (host.isDisposed()) return;
+	if (!info) {
+		host.setStatus(t("status.usageCannotRead", { file: row.file }));
+		return;
+	}
+	host.openUsage(info, (text) => void copyContextUsage(host, text));
+}
+
+/** y in the usage box: the whole text goes to the clipboard, the box stays open. */
+async function copyContextUsage(host: FlowHost, text: string): Promise<void> {
+	const copy = host.actions?.copyText;
+	if (!copy) {
+		host.setStatus(t("status.copyUnavailable"));
+		return;
+	}
+	try {
+		await copy(text);
+		if (host.isDisposed()) return;
+		host.setStatus(t("status.copiedContextUsage"));
 	} catch (err) {
 		host.setStatus(t("status.copyFailed", { error: (err as Error).message }));
 	}

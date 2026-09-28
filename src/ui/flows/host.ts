@@ -10,7 +10,7 @@
  * 弹窗流程对面板的全部依赖。flows 只认这个接口、不 import app.ts：分层清楚，也能用假 host 单测。
  */
 
-import type { EnterOutcome, PanelMode, SessionInfo, SessionRow, TreeFilter } from "../../types.ts";
+import type { ContextUsageInfo, EnterOutcome, PanelMode, SessionInfo, SessionRow, TreeFilter } from "../../types.ts";
 import type { ActionSource, DataSource } from "../ports.ts";
 import type { PanelState } from "../state.ts";
 import type { InputDialogSpec } from "../widgets/input-dialog.ts";
@@ -42,6 +42,8 @@ export interface FlowHost {
 	closeDialogs(): void;
 	/** Show the read-only Session Info box: `onCopy` gets its text on `y`, the panel closes it on Esc / q. */
 	openInfo(info: SessionInfo, onCopy: (text: string) => void): void;
+	/** Show the read-only Context usage box: `onCopy` gets its text on `y`, the panel closes it on Esc / q. */
+	openUsage(info: ContextUsageInfo, onCopy: (text: string) => void): void;
 	/** Rows a centered menu may show before it scrolls. */
 	dialogMaxRows(): number;
 	/**
