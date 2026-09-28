@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { findMatchRanges, highlightTerms, matchesTokens, matchSessionRow, matchTreeRow, parseSearchQuery, searchTokens } from "../src/data/search.ts";
+import { cycleMatch, findMatchRanges, firstMatchFrom, highlightTerms, matchesTokens, matchSessionRow, matchTreeRow, parseSearchQuery, searchTokens, stepMatch } from "../src/data/search.ts";
 import type { SessionRow, TreeRow } from "../src/types.ts";
 
 test("parseSearchQuery splits GitHub-style qualifiers from the free text", () => {
@@ -126,4 +126,26 @@ test("matchesTokens, highlightTerms and findMatchRanges (content lines and the h
 	]);
 	assert.deepEqual(findMatchRanges("abc", [""]), [], "empty terms are skipped");
 	assert.deepEqual(findMatchRanges("abc", ["zzz"]), []);
+});
+
+test("firstMatchFrom / stepMatch / cycleMatch pick the live-search, n and N targets, wrapping around", () => {
+	const matches = [2, 5, 9];
+	// live search: the first match at or after the origin, else the first one
+	assert.equal(firstMatchFrom(matches, 0), 0);
+	assert.equal(firstMatchFrom(matches, 5), 1, "a match on the origin itself counts");
+	assert.equal(firstMatchFrom(matches, 10), 0, "wraps to the first");
+	assert.equal(firstMatchFrom([], 3), -1);
+	// n / N in a list: strictly after / before the cursor, wrapping
+	assert.equal(stepMatch(matches, 5, 1), 2);
+	assert.equal(stepMatch(matches, 5, -1), 0);
+	assert.equal(stepMatch(matches, 9, 1), 0, "past the last wraps to the first");
+	assert.equal(stepMatch(matches, 2, -1), 2, "before the first wraps to the last");
+	assert.equal(stepMatch(matches, 6, 1), 2, "from between two matches");
+	assert.equal(stepMatch([], 0, 1), -1);
+	// n / N in the content pane: from the match last visited (-1 = none yet), wrapping
+	assert.equal(cycleMatch(-1, 1, 3), 0);
+	assert.equal(cycleMatch(-1, -1, 3), 2);
+	assert.equal(cycleMatch(2, 1, 3), 0);
+	assert.equal(cycleMatch(0, -1, 3), 2);
+	assert.equal(cycleMatch(0, 1, 0), -1);
 });

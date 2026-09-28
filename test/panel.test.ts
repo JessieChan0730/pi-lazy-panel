@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { TuiMouseEvent, TuiMouseEventType } from "@earendil-works/pi-tui";
-import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import { CURSOR_MARKER, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { DEFAULT_KEYMAP } from "../src/config/keymap.ts";
 import { mergeKeymap } from "../src/config/config.ts";
 import { initI18n, t } from "../src/i18n/index.ts";
@@ -26,7 +26,8 @@ import type {
 	TreeFilter,
 	TreeRow,
 } from "../src/types.ts";
-import { type ActionSource, type DataSource, LazyPanel } from "../src/ui/app.ts";
+import { LazyPanel } from "../src/ui/app.ts";
+import type { ActionSource, DataSource } from "../src/ui/ports.ts";
 import { cannotDeleteActiveTitle } from "../src/ui/widgets/alert-dialog.ts";
 import { compactDialogTitle } from "../src/ui/widgets/compact-dialog.ts";
 import {
@@ -2031,7 +2032,9 @@ test("each pane keeps its own query: switching panes shows the other pane's hint
  * `listSessions` honours the sort it is asked for (threaded lists the rows
  * backwards) so the cursor-follows-its-session behaviour can be observed.
  */
-function makeSessionActionPanel(opts: { actions?: Partial<ActionSource> | null; currentSessionFile?: string; info?: boolean; forkPoints?: ForkPoint[] } = {}) {
+function makeSessionActionPanel(
+	opts: { actions?: Partial<ActionSource> | null; data?: Partial<DataSource>; currentSessionFile?: string; info?: boolean; forkPoints?: ForkPoint[] } = {},
+) {
 	const sessions: SessionRow[] = [
 		{ ...row(1, "/a"), name: "alpha", preview: "first words" },
 		{ ...row(2, "/a"), name: "beta", preview: "second words" },
@@ -2099,6 +2102,7 @@ function makeSessionActionPanel(opts: { actions?: Partial<ActionSource> | null; 
 						};
 					},
 				}),
+		...(opts.data ?? {}),
 	};
 	const source: ActionSource = {
 		copyNodeText: async () => true,
@@ -3396,5 +3400,234 @@ test("mouse is swallowed (no-op) while an overlay is open", async () => {
 	assert.equal(h.panel.state.cursor.sessions, 0, "list behind the overlay did not move");
 	// press still falls through so the terminal keeps its own handling
 	assert.equal(h.panel.handleMouse(mouseEvent("press", 2, 5)), undefined);
+	h.panel.dispose();
+});
+
+// -------------------------------------------------------------------------
+// Invariants the app.ts split relies on: IME focus, key timeouts, overlays, failure paths
+// -------------------------------------------------------------------------
+
+test("the IME cursor marker follows panel focus into each text prompt and leaves when it closes", async () => {
+	const h = makeSessionActionPanel();
+	await h.panel.load();
+	await settle();
+	const marked = () => h.panel.render(120).some((l) => l.includes(CURSOR_MARKER));
+	assert.equal(marked(), false, "no prompt, no marker");
+	h.panel.focused = true;
+	// r / n / c / I open a prompt that takes the cursor, / the search bar; Esc closes each again
+	for (const key of ["r", "n", "c", "I", "/"]) {
+		h.panel.handleInput(key);
+		assert.equal(marked(), true, `${key}: the prompt carries the IME cursor`);
+		h.panel.handleInput("\x1b");
+		assert.equal(h.panel.state.mode, "normal", key);
+		assert.equal(marked(), false, `${key}: closing the prompt drops the marker`);
+	}
+	// e: the format menu has no text cursor, the path prompt after it does; Esc steps back
+	h.panel.handleInput("e");
+	assert.equal(marked(), false, "a menu has no text cursor");
+	h.panel.handleInput("\r");
+	assert.equal(marked(), true, "the export path prompt carries the IME cursor");
+	h.panel.handleInput("\x1b");
+	assert.equal(h.panel.state.mode, "export", "Esc goes back to the format menu");
+	assert.equal(marked(), false);
+	h.panel.handleInput("\x1b");
+	// focus that arrives (or leaves) while a prompt is open reaches it
+	h.panel.focused = false;
+	h.panel.handleInput("r");
+	assert.equal(marked(), false, "an unfocused panel draws no marker");
+	h.panel.focused = true;
+	assert.equal(marked(), true, "focus set while the prompt is open reaches it");
+	h.panel.focused = false;
+	assert.equal(marked(), false, "and leaves with it");
+	h.panel.handleInput("\x1b");
+	h.panel.dispose();
+});
+
+test("the IME cursor marker reaches the tree prompts and the tree dialog's search row", async () => {
+	const h = makeTreeActionPanel();
+	await h.panel.load();
+	await flush();
+	const marked = () => h.panel.render(100).some((l) => l.includes(CURSOR_MARKER));
+	h.panel.focused = true;
+	h.panel.handleInput("2");
+	h.panel.handleInput("T");
+	assert.equal(marked(), true, "the label prompt carries the IME cursor");
+	h.panel.handleInput("\x1b");
+	assert.equal(marked(), false);
+	// Enter on e0: the summary menu (no text cursor) → custom prompt (cursor) → Esc back to the menu
+	h.panel.handleInput("g");
+	h.panel.handleInput("g");
+	h.panel.handleInput("\r");
+	assert.equal(h.panel.state.mode, "restore");
+	assert.equal(marked(), false, "the summary menu has no text cursor");
+	h.panel.handleInput("j");
+	h.panel.handleInput("j");
+	h.panel.handleInput("\r");
+	assert.equal(marked(), true, "the custom prompt carries the IME cursor");
+	h.panel.handleInput("\x1b");
+	assert.equal(h.panel.state.mode, "restore", "Esc goes back to the menu");
+	assert.equal(marked(), false);
+	h.panel.handleInput("\x1b");
+	assert.equal(h.panel.state.mode, "normal");
+	// the tree dialog: its list has no text cursor, the search row does while it has the keys
+	h.panel.handleInput("a");
+	assert.equal(marked(), false, "the dialog's list has no text cursor");
+	h.panel.handleInput("/");
+	assert.equal(marked(), true, "the dialog's search row carries the IME cursor");
+	h.panel.handleInput("\x1b");
+	assert.equal(marked(), false, "leaving the search row drops it");
+	// T over the dialog: the prompt gets the cursor, Esc hands the keys back to the dialog
+	h.panel.handleInput("T");
+	assert.equal(marked(), true);
+	h.panel.handleInput("\x1b");
+	assert.equal(h.panel.state.mode, "tree");
+	assert.equal(marked(), false);
+	h.panel.handleInput("\x1b");
+	assert.equal(h.panel.state.mode, "normal");
+	h.panel.dispose();
+});
+
+test("an unfinished key sequence (the g of gg) is dropped after a second", (ctx) => {
+	ctx.mock.timers.enable({ apis: ["setTimeout"] });
+	const h = makePanel();
+	const footer = () => h.text(200).at(-1)!;
+	h.panel.handleInput("g");
+	assert.ok(footer().includes(t("status.pending", { keys: "g" })), footer());
+	ctx.mock.timers.tick(999);
+	assert.ok(footer().includes(t("status.pending", { keys: "g" })), "still waiting just before the timeout");
+	ctx.mock.timers.tick(1);
+	assert.equal(footer().includes(t("status.pending", { keys: "g" })), false, "the half sequence is dropped");
+	// the next g starts a new sequence rather than completing the dropped one
+	h.panel.handleInput("g");
+	assert.ok(footer().includes(t("status.pending", { keys: "g" })), footer());
+	h.panel.dispose();
+});
+
+test("the footer keeps the pane's own hints while the ? help overlay is up", () => {
+	const h = makePanel();
+	const footer = () => h.text(120).at(-1)!;
+	const before = footer();
+	h.panel.handleInput("?");
+	assert.equal(h.panel.state.helpOpen, true);
+	assert.equal(footer(), before, "help brings no footer hints of its own");
+	h.panel.dispose();
+});
+
+test("mouse clicks and wheel are swallowed while any dialog is open", async () => {
+	const h = makeSessionActionPanel({ data: { loadChangelog: async () => "## [1.0.0]\n\n- hello" } });
+	await h.panel.load();
+	await settle();
+	const click = () => h.panel.handleMouse(mouseEvent("click", 2, 3, { height: 24 }));
+	const wheel = () => h.panel.handleMouse(mouseEvent("wheel", 2, 3, { height: 24, wheelDelta: 1 }));
+	const openers: Array<[string, () => Promise<void>]> = [
+		["rename prompt", async () => h.panel.handleInput("r")],
+		["delete confirmation", async () => h.panel.handleInput("d")],
+		["session info", async () => {
+			h.panel.handleInput("i");
+			await flush();
+		}],
+		["changelog", async () => {
+			h.panel.handleInput("@");
+			await flush();
+			await flush();
+		}],
+		["tree dialog", async () => {
+			h.panel.handleInput("2");
+			h.panel.handleInput("a");
+		}],
+	];
+	for (const [name, open] of openers) {
+		await open();
+		const focus = h.panel.state.focus;
+		assert.notEqual(h.panel.state.mode, "normal", `${name} is open`);
+		assert.deepEqual(click(), { handled: true }, name);
+		assert.deepEqual(wheel(), { handled: true }, name);
+		assert.equal(h.panel.state.cursor.sessions, 0, `${name}: the list behind it did not move`);
+		assert.equal(h.panel.state.listScroll.sessions, null, `${name}: nor scroll`);
+		assert.equal(h.panel.state.focus, focus, `${name}: focus unchanged`);
+		h.panel.handleInput("\x1b");
+		assert.equal(h.panel.state.mode, "normal", name);
+		h.panel.handleInput("1");
+	}
+	// with every dialog closed the same click selects the row
+	click();
+	assert.equal(h.panel.state.cursor.sessions, 1);
+	h.panel.dispose();
+});
+
+test("@ closes the changelog box even while it is still loading, and the late content does not reopen it", async () => {
+	let release: (markdown: string) => void = () => {};
+	const panel = new LazyPanel({
+		theme: fakeTheme,
+		data: {
+			listSessions: async () => [row(1, "/a")],
+			loadTree: async () => [],
+			loadContent: async () => [],
+			loadChangelog: () =>
+				new Promise<string>((resolve) => {
+					release = resolve;
+				}),
+		},
+		getHeight: () => 20,
+		requestRender: () => {},
+		onClose: () => {},
+	});
+	await panel.load();
+	panel.handleInput("@");
+	assert.equal(panel.state.mode, "changelog");
+	panel.handleInput("@");
+	assert.equal(panel.state.mode, "normal", "@ again cancels the loading box");
+	release("## [1.0.0]\n\n- hello");
+	await flush();
+	await flush();
+	assert.equal(panel.state.mode, "normal");
+	const lines = panel.render(100).map((l) => stripTerminalSequences(l));
+	assert.equal(dialogAt(lines, "What's New"), undefined, "the late content does not reopen the box");
+	panel.dispose();
+});
+
+test("session actions report loader / action failures in the footer and leave nothing open", async () => {
+	async function boom(): Promise<never> {
+		throw new Error("boom");
+	}
+	async function run(opts: Parameters<typeof makeSessionActionPanel>[0], keys: string[], expected: string, mode = "normal") {
+		const h = makeSessionActionPanel(opts);
+		await h.panel.load();
+		await settle();
+		for (const key of keys) {
+			h.panel.handleInput(key);
+			await flush();
+		}
+		assert.ok(h.footer().includes(expected), `${keys.join(" ")}: ${h.footer()}`);
+		assert.equal(h.panel.state.mode, mode, keys.join(" "));
+		h.panel.dispose();
+		return h;
+	}
+	// o: the fork points cannot be read
+	await run({ data: { loadForkPoints: boom } }, ["o"], t("status.forkFailed", { error: "boom" }));
+	// Y: the clipboard fails
+	await run({ actions: { copyLastReply: boom } }, ["Y"], t("status.copyFailed", { error: "boom" }));
+	// i: the info cannot be loaded / read; y in the box with a failing clipboard keeps the box open
+	await run({ data: { loadSessionInfo: boom } }, ["i"], t("status.sessionInfoFailed", { error: "boom" }));
+	await run({ data: { loadSessionInfo: async () => undefined } }, ["i"], t("status.sessionInfoCannotRead", { file: "/tmp/s1.jsonl" }));
+	await run({ actions: { copyText: boom } }, ["i", "y"], t("status.copyFailed", { error: "boom" }), "info");
+	// p: saving the pins fails → the pin is rolled back
+	const pinned = await run({ actions: { setPins: boom } }, ["p"], t("status.pinFailed", { error: "boom" }));
+	assert.deepEqual(pinned.panel.state.pinnedFiles, [], "the failed pin is rolled back");
+	// d with a selection but no actions wired
+	await run({ actions: null }, [" ", "d"], t("status.deleteUnavailable"));
+});
+
+test("an action bound where it does nothing, or misspelled in the config, only says so in the footer", () => {
+	// tree-filter-all belongs to the tree dialog; "tree-filter-everything" is no action at all (the config does not check names)
+	const keymap = mergeKeymap(DEFAULT_KEYMAP, { sessions: { "tree-filter-all": "F2", "tree-filter-everything": "F3" } as never });
+	const h = makePanel({ keymap });
+	const footer = () => h.text(200).at(-1)!;
+	h.panel.handleInput("\x1bOQ"); // F2
+	assert.ok(footer().includes(t("status.notImplemented", { action: "tree-filter-all" })), footer());
+	h.panel.handleInput("\x1bOR"); // F3
+	assert.ok(footer().includes(t("status.notImplemented", { action: "tree-filter-everything" })), footer());
+	assert.equal(h.closed(), false);
+	assert.equal(h.panel.state.mode, "normal");
 	h.panel.dispose();
 });

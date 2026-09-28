@@ -62,16 +62,25 @@ src/
 ├── types.ts                  # 共享类型（只放类型，禁止运行时代码）
 ├── constants.ts              # 常量：扩展 id、命令名、布局比例、面板 id、排序循环顺序（SESSION_SORT_MODES）、键位 scope（KEY_SCOPES = global + 面板 + tree-dialog）
 ├── ui/                       # 渲染层：pi-tui Component。不做 I/O，不调用 pi 会话 API
-│   ├── app.ts                # 根组件 LazyPanel + PanelState；数据通过 DataSource 接口注入；/ 搜索的流程（原位置、实时跳转、n/N、折叠展开）也在这里
+│   ├── app.ts                # 根组件 LazyPanel，只做协调：加载光标下的会话、TREE 光标驱动 CONTENT 高亮、/ 搜索的编排（原位置、实时跳转、n/N、折叠展开）、树对话框、鼠标、render。overlays 一张表决定按键归谁 / footer 提示 / 鼠标屏蔽 / 叠加顺序（新增弹窗只加一项）；dispatch 对 ActionId 做了穷尽检查（新增动作漏了分发 tsc 会报错）
+│   ├── state.ts              # PanelState + createInitialState：全部可变 UI 状态（焦点、光标、搜索、多选、置顶、折叠……）
+│   ├── ports.ts              # DataSource / ActionSource：面板对外的两个注入端口（只读数据、副作用），入口接真实实现、测试传内存桩
+│   ├── content-viewport.ts   # ContentViewport：CONTENT 的消息块、排版缓存、滚动（含 zz 越界居中，下一次普通滚动收回）、高亮、正文行的 / 匹配缓存；滚动位置和高亮仍放在 PanelState
+│   ├── tree-view.ts          # TreeView：TREE 的整棵树 / 折叠后的可见行 / 大纲前缀，以及 reveal（展开藏住某行的段）、keepCursorOn、z 折叠、树对话框搜索期间暂停折叠；折叠集合和光标仍放在 PanelState
+│   ├── key-sequencer.ts      # KeySequencer：多键序列（gg）的前缀缓冲 + 超时，面板和树对话框共用
 │   ├── frame.ts              # 纯函数：画边框（FRAME_DIVIDER 哨兵行画 ├──┤）、左右拼列、按可见宽度补齐/截断、居中叠加弹窗（overlayCentered）、弹窗宽度（dialogWidth）
 │   ├── mouse.ts              # 纯函数：verticalSplit / panelGeometry（面板列/行切分）、listVisibleRows（每个列表可见行数）、hitTest（单元格 (x,y) → 面板 + 列表行号，吃 render 用的首行偏移，SESSIONS 每行 2 行、TREE 每行 1 行）。render 和鼠标共用，保证画的位置=点的位置
 │   ├── mouse-input.ts        # 纯函数：regular 模式下 pi 不开鼠标，插件自己开 SGR 上报（ENABLE/DISABLE_MOUSE）；parseSgrMouseChunk 解析原始序列（批量拆条），MouseTracker 把按下/释放/滚轮变成 TuiMouseEvent（同格点击、双击计数、只认左键），index.ts 用它把鼠标喂给 handleMouse。见 docs/issues.md
 │   ├── search-highlight.ts   # 纯函数：搜索命中的高亮（highlightLine 在画好的整行上按可见列叠加样式，照 pi 全屏搜索的做法，前后颜色 / 光标背景不断；matchStyle 其他匹配下划线、当前匹配反色；searchMeta 标题的 2/7 matches）
 │   ├── tree-lines.ts         # 纯函数：按 parentId 算 pi /tree 风格的树线前缀（treePrefixes，折叠的段头画 ⊞），只给树对话框用
 │   ├── tree-outline.ts       # 纯函数：TREE 面板的折叠大纲前缀（treeOutline）：段头画 ▸/▾、没有后代的旁支画 ─，段内每层缩进 2 列、最多 4 层、更深的以 … 代替；三角直接占段头行首两列、不预留空列（lazygit 文件树的画法），线性对话完全不缩进
+│   ├── flows/                # 弹窗流程：每个命令从按键到 action 的整条路径（检查 → 弹输入框 / 菜单 → 调 action → footer 报结果）。顶级函数、第一个参数是 FlowHost；流程的目标由弹窗回调的闭包带着，不存任何状态
+│   │   ├── host.ts           # FlowHost：flows 对面板的全部依赖（LazyPanel 用私有对象实现）；flows 不 import app.ts，测试用假 host
+│   │   ├── session-flows.ts  # SESSIONS：Enter / d（单个、批量，拒删当前会话）/ p / r / n / c / o / y / Y / e / I / S / i
+│   │   └── tree-flows.ts     # TREE 和树对话框：y 复制、T 打标签、Enter 恢复（Summarize branch? 菜单 + 自定义摘要指令）
 │   ├── panes/
 │   │   ├── sessions-pane.ts  # 左上 SESSIONS 面板（search prop：命中行高亮、标题计数）
-│   │   ├── tree-pane.ts      # 左下 TREE 面板：折叠大纲（前缀来自 tree-outline.ts，可见行由 app.ts 用 applyTreeFold 算好）；renderTreeRow（光标 › + 已配色的前缀 + 活动路径 • + [label] + 时间 + role + 正文，可选的搜索高亮）和树对话框共用
+│   │   ├── tree-pane.ts      # 左下 TREE 面板：折叠大纲（前缀来自 tree-outline.ts，可见行由 tree-view.ts 用 applyTreeFold 算好）；renderTreeRow（光标 › + 已配色的前缀 + 活动路径 • + [label] + 时间 + role + 正文，可选的搜索高亮）和树对话框共用
 │   │   └── content-pane.ts   # 右侧 CONTENT 面板，用 pi-tui 的 Markdown 渲染消息；排版结果带 searchable[]（只有正文行参与 / 搜索），命中只叠加在窗口里的行上
 │   └── widgets/
 │       ├── footer.ts         # 底部一行：模式 + 当前面板快捷键提示（弹窗打开时显示弹窗的提示）
@@ -98,7 +107,7 @@ src/
 │   ├── tree-fold.ts          # 纯函数：filterTreeRows（删行并把幸存的行挂到最近保留的祖先上，过滤和搜索共用）；折叠（z）：foldableIds（段头 = 父节点有多个子节点且自己有后代；单根不可折叠）、defaultFolded（旁支默认折叠）、applyTreeFold（隐藏折叠段的后代）、foldTarget（z 作用的段头：自己或最近的可折叠祖先）；对话框用的 nearestListedIndex（行被藏掉时光标落到最近还列出来的祖先）、foldedAncestors（关对话框时要展开的段）
 │   ├── content.ts            # getBranch -> ContentBlock[]；loadSessionInfo；resolveContentLeaf
 │   ├── changelog.ts          # 读正在运行的 pi 安装目录（getPackageDir）的 CHANGELOG.md，照搬 pi 的 parseChangelog 按 ## [x.y.z] 切分；保持文件顺序（最新在上）
-│   └── search.ts             # 纯函数：parseSearchQuery 解析 name:/model:/path:/tag:/role:/after:/before: + 自由文本；普通词只搜 名称 / 标题 / label，其他字段都要限定词：matchTreeRow（TREE 面板和树对话框：每个词都要出现在 label + 正文里，tag: 只看 label，role: 只看角色，after:/before: 看时间）；matchSessionRow（SESSIONS：普通词只看 名称 + 首条消息预览，模型 / 路径只通过 model: / path: 匹配，path: 也认 ~/… 写法，after:/before: 看更新时间）；matchesTokens（CONTENT 行）；highlightTerms / findMatchRanges 给高亮用
+│   └── search.ts             # 纯函数：parseSearchQuery 解析 name:/model:/path:/tag:/role:/after:/before: + 自由文本；普通词只搜 名称 / 标题 / label，其他字段都要限定词：matchTreeRow（TREE 面板和树对话框：每个词都要出现在 label + 正文里，tag: 只看 label，role: 只看角色，after:/before: 看时间）；matchSessionRow（SESSIONS：普通词只看 名称 + 首条消息预览，模型 / 路径只通过 model: / path: 匹配，path: 也认 ~/… 写法，after:/before: 看更新时间）；matchesTokens（CONTENT 行）；highlightTerms / findMatchRanges 给高亮用；firstMatchFrom / stepMatch / cycleMatch：实时搜索、n / N 跳到哪个匹配（回绕）
 ├── config/
 │   ├── keymap.ts             # 默认键位 + 动作描述 + footer 提示顺序（纯数据），含 tree-dialog scope（d/t/u/l/a 过滤、q 关闭）；DISABLED_ACTIONS 列出在某个 scope 里关掉的外层动作（对话框里的切面板 / C A / n N / quit / help / tree-open / changelog）；TREE_DIALOG_FOOTER 是对话框提示的顺序
 │   ├── keys.ts               # 纯函数：chord 解析（ctrl+d / G / gg）、按键匹配、按 scope 解析 ActionId；scopeChain 定义查找顺序（对话框 → tree → global，面板 → global）
@@ -111,6 +120,7 @@ src/
 │       └── zh.json           # 中文
 └── utils/
     ├── format.ts             # 纯格式化：时间、token、费用、路径缩写
+    ├── indices.ts            # 纯函数：clamp、findLastIndex、indicesWhere（光标 / 滚动夹取、按条件取下标）
     └── paths.ts              # 用户输入的路径：去引号、~ 用 os.homedir() 展开（Windows 也能用）、相对路径按 cwd 解析
 
 scripts/
@@ -128,16 +138,17 @@ commitlint.config.js          # 约定式提交（@commitlint/config-conventiona
 
 test/
 ├── smoke.test.ts             # 键位表、搜索解析的冒烟测试
-├── keymap.test.ts            # chord 解析、多键序列、scope 链（tree-dialog → tree → global）、用户配置合并
-├── panel.test.ts             # LazyPanel 行为：焦点切换、C/A、? 帮助、/ 搜索（三个面板的实时跳转 / Enter / Esc / n N 回绕 / 标题计数 / 折叠展开 / 高亮 / 切面板保留关键字）、自定义键位、y/T/Enter（含摘要菜单）、树对话框（移动、搜索、过滤、z 折叠、y/T/Enter、关闭后面板光标跟随）、SESSIONS 的 space 多选 / 批量删除 / d 确认删除 / r 改名 / s 排序 / i 信息弹窗 / n o y Y / e I S、@ changelog 弹窗、InputDialog / SelectDialog
+├── keymap.test.ts            # chord 解析、多键序列、scope 链（tree-dialog → tree → global）、用户配置合并、KeySequencer（前缀缓冲 / 超时）
+├── panel.test.ts             # LazyPanel 行为：焦点切换、C/A、? 帮助、/ 搜索（三个面板的实时跳转 / Enter / Esc / n N 回绕 / 标题计数 / 折叠展开 / 高亮 / 切面板保留关键字）、自定义键位、y/T/Enter（含摘要菜单）、树对话框（移动、搜索、过滤、z 折叠、y/T/Enter、关闭后面板光标跟随）、SESSIONS 的 space 多选 / 批量删除 / d 确认删除 / r 改名 / s 排序 / i 信息弹窗 / n o y Y / e I S、@ changelog 弹窗、InputDialog / SelectDialog；拆分 app.ts 时补的行为锁定：输入法光标（CURSOR_MARKER）跟着各输入框走、多键超时、弹窗打开时屏蔽鼠标、各流程的失败分支、绑错 scope / 写错名字的动作只在 footer 提示
+├── flows.test.ts             # 假 FlowHost 驱动 ui/flows：导出 格式 → 路径 → 覆盖确认（每一步 Esc / No 退回上一步）、fork 选择器 ↔ 确认、恢复菜单 ↔ 自定义指令、批量删除跳过当前会话、面板关掉后不再写 footer
 ├── tree-actions.test.ts      # 临时会话文件上验证 loadNodeText / labelNode 的分流、loadTree 的 isLeaf 标记
 ├── session-actions.test.ts   # 临时会话文件上验证 isEffectiveLeaf / resumeSession / restoreNode 的分流与摘要选项透传、deleteSession（当前会话拒绝、trash → unlink 回退）、renameSession 的分流、new / fork / clone、export（默认路径 / JSONL 链 / 假 pi）/ import（复制 / 重名 / 清理副本）/ share（假 gh）、utils/paths
 ├── pi-settings.test.ts       # 临时目录上验证 branchSummary.skipPrompt 的全局 / 项目两级读取、treeFilterMode 映射
 ├── changelog.test.ts         # parseChangelog 的切分 / 跳过无版本段、文件缺失
-├── search.test.ts            # parseSearchQuery 的限定词解析、matchTreeRow / matchSessionRow / matchesTokens 的匹配规则、findMatchRanges
+├── search.test.ts            # parseSearchQuery 的限定词解析、matchTreeRow / matchSessionRow / matchesTokens 的匹配规则、findMatchRanges、firstMatchFrom / stepMatch / cycleMatch
 ├── i18n.test.ts              # 语言检测 / 初始化 / 插值 / 复数 / 缺失回退（initI18n / detectLocale / normalizeLocale / t）
 ├── lint.test.ts              # i18n/no-hardcoded-text 规则：报 / 不报的场景、只作用于 src
-└── ui.test.ts                # 格式化、frame 几何、树过滤 / 折叠、TreeDialog 搜索行、highlightLine / searchMeta
+└── ui.test.ts                # 格式化、frame 几何、树过滤 / 折叠、TreeDialog 搜索行、highlightLine / searchMeta、ContentViewport（滚动夹取 / zz 越界 / 行匹配缓存）、TreeView（reveal / keepCursorOn / z / 搜索期间暂停折叠）
 
 docs/keybindings.md           # 默认快捷键表，新增 ActionId 时同步更新
 docs/design.md                # 产品设计（原 计划.md）
@@ -146,9 +157,9 @@ docs/issues.md                # 已知问题 / 搁置的问题，解决后划掉
 AGENTS.md                     # 仅指向本文件，规则统一在这里维护
 ```
 
-数据流：`sessions.ts` → `SessionRow[]` → SESSIONS 面板；选中行驱动 `tree.ts` → `TreeRow[]` → `tree-fold.ts` 隐藏折叠段（`PanelState.treeFolded`，默认旁支折叠）→ TREE 面板；选中节点（或活动叶子）驱动 `content.ts` → `ContentBlock[]` → CONTENT 面板。所有 UI 状态集中在 `PanelState`（`src/ui/app.ts`）。`/` 搜索是每个面板一份的 `PanelState.search`（关键字 + 匹配行号），列表不过滤只跳转；面板拿到的是 `SearchView`（可见行号的匹配集合、当前匹配、要高亮的词），高亮由 `ui/search-highlight.ts` 在画好的行上叠加。
+数据流：`sessions.ts` → `SessionRow[]` → SESSIONS 面板；选中行驱动 `tree.ts` → `TreeRow[]` → `tree-fold.ts` 隐藏折叠段（`PanelState.treeFolded`，默认旁支折叠）→ TREE 面板；选中节点（或活动叶子）驱动 `content.ts` → `ContentBlock[]` → CONTENT 面板。所有 UI 状态集中在 `PanelState`（`src/ui/state.ts`），TREE / CONTENT 由此派生的视图（可见行、排版、滚动规则）在 `ui/tree-view.ts` / `ui/content-viewport.ts`。`/` 搜索是每个面板一份的 `PanelState.search`（关键字 + 匹配行号），列表不过滤只跳转；面板拿到的是 `SearchView`（可见行号的匹配集合、当前匹配、要高亮的词），高亮由 `ui/search-highlight.ts` 在画好的行上叠加。
 
-快捷键是间接绑定：按键 → `resolveKeys`（`src/config/keys.ts`，按 `scopeChain` 的顺序查：面板 scope 再 global，树对话框是 tree-dialog → tree → global，支持 `gg` 这类多键序列） → `ActionId`（`src/types.ts`） → `LazyPanel.dispatch`（对话框里是 `dispatchInTreeDialog`）。默认值在 `src/config/keymap.ts`，`loadConfig` 深合并用户覆盖。新增动作时要同时改：`ActionId`、默认键位、`ACTION_DESCRIPTIONS`、`dispatch` 里的分发、`docs/keybindings.md`。
+快捷键是间接绑定：按键 → `resolveKeys`（`src/config/keys.ts`，按 `scopeChain` 的顺序查：面板 scope 再 global，树对话框是 tree-dialog → tree → global，支持 `gg` 这类多键序列） → `ActionId`（`src/types.ts`） → `LazyPanel.dispatch`（对话框里是 `dispatchInTreeDialog`）。默认值在 `src/config/keymap.ts`，`loadConfig` 深合并用户覆盖。新增动作时要同时改：`ActionId`、默认键位、`ACTION_DESCRIPTIONS`、`dispatch` 里的分发（漏了 tsc 会报错）、`docs/keybindings.md`。要弹窗或调 action 的命令，流程写成 `ui/flows/` 里的顶级函数（第一个参数是 `FlowHost`），`dispatch` 里只调用它；需要面板的新能力就加到 `FlowHost` 上。
 
 ## 代码风格/合作规范
 

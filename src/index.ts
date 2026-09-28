@@ -39,7 +39,8 @@ import { loadContent, loadForkPoints, loadSessionInfo } from "./data/content.ts"
 import { initI18n, t } from "./i18n/index.ts";
 import { listSessions, sortSessions } from "./data/sessions.ts";
 import { applyTreeFilter, loadTree } from "./data/tree.ts";
-import { type ActionSource, type DataSource, LazyPanel } from "./ui/app.ts";
+import { LazyPanel } from "./ui/app.ts";
+import type { ActionSource, DataSource } from "./ui/ports.ts";
 import { attachMouse } from "./ui/mouse-input.ts";
 
 /** 读本插件 package.json 的版本号，展示在 footer 右下角；读不到就返回空串（不显示）。 */

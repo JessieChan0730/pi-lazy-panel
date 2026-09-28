@@ -8,6 +8,7 @@ import { test } from "node:test";
 import { mergeKeymap, resolveConfig } from "../src/config/config.ts";
 import { DEFAULT_KEYMAP } from "../src/config/keymap.ts";
 import { chordLabel, compileKeymap, labelsForFocus, matchesKeyId, normalizeKeyStep, parseChord, type ResolveResult, resolveKeys, scopeChain } from "../src/config/keys.ts";
+import { KeySequencer, PENDING_TIMEOUT_MS } from "../src/ui/key-sequencer.ts";
 
 /** Action of a resolve result, or undefined when it did not resolve to one. */
 function actionOf(r: ResolveResult): string | undefined {
@@ -183,4 +184,34 @@ test("chordLabel / labelsForFocus produce readable hints", () => {
 	assert.equal(chordLabel("down"), "↓");
 	assert.deepEqual(labelsForFocus(DEFAULT_KEYMAP, "sessions", "quit"), ["q", "Ctrl+c"]);
 	assert.deepEqual(labelsForFocus(DEFAULT_KEYMAP, "sessions", "move-down"), ["j", "↓"]);
+});
+
+test("KeySequencer buffers a prefix, resolves the whole sequence, and drops a half one after the timeout", (ctx) => {
+	ctx.mock.timers.enable({ apis: ["setTimeout"] });
+	let changes = 0;
+	const keys = new KeySequencer(compileKeymap(DEFAULT_KEYMAP), () => changes++);
+	// g is a prefix of gg: buffered, the footer is told
+	assert.equal(keys.feed("sessions", "g").kind, "pending");
+	assert.equal(keys.pendingKeys, "g");
+	assert.equal(changes, 1);
+	// the second g completes it: resolved and the buffer is empty again
+	assert.equal(actionOf(keys.feed("sessions", "g")), "go-top");
+	assert.equal(keys.hasPending, false);
+	// a half sequence is dropped once the timeout passes
+	keys.feed("sessions", "g");
+	ctx.mock.timers.tick(PENDING_TIMEOUT_MS - 1);
+	assert.equal(keys.hasPending, true);
+	ctx.mock.timers.tick(1);
+	assert.equal(keys.hasPending, false);
+	assert.equal(changes, 3, "buffered, then dropped by the timeout");
+	// clear() drops it at once and the cancelled timeout never fires
+	keys.feed("tree-dialog", "g");
+	keys.clear();
+	assert.equal(keys.pendingKeys, "");
+	ctx.mock.timers.tick(PENDING_TIMEOUT_MS);
+	assert.equal(changes, 4);
+	// a key that resolves to nothing also empties the buffer
+	keys.feed("sessions", "g");
+	assert.equal(keys.feed("sessions", "x").kind, "none");
+	assert.equal(keys.hasPending, false);
 });

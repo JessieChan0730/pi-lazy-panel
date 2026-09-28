@@ -1,8 +1,6 @@
 /**
- * Root panel component.
- *
- * Owns the three panes, focus state, key dispatch and the footer / search bar.
- * Opened from src/index.ts via `ctx.ui.custom(...)`.
+ * Root panel component: the three panes, focus, key dispatch and the footer /
+ * search bar. Opened from src/index.ts via `ctx.ui.custom(...)`.
  *
  * Layout (see docs/design.md):
  *
@@ -14,241 +12,88 @@
  *   └──────────────┴────────────────────┘
  *   │ NORMAL │ / Search  ? Help ...     │   <- footer, or the search bar in search mode
  *
- * This layer does no I/O: all data arrives through the injected `DataSource`
- * so the panel stays testable with plain objects.
+ * The panel coordinates; the parts it delegates to live next to it:
+ *   - ./state.ts            all mutable UI state (`PanelState`)
+ *   - ./ports.ts            the injected `DataSource` / `ActionSource`: this layer does no I/O
+ *   - ./flows/              every command that opens a prompt / menu or calls an action (Enter, d, r, e, T, …)
+ *   - ./tree-view.ts        TREE rows, folds and outline
+ *   - ./content-viewport.ts CONTENT blocks, layout, scrolling (zz) and line matches
+ *   - ./key-sequencer.ts    multi-key sequences such as `gg`
+ *   - ./panes/, ./widgets/  rendering
+ * What stays here ties the panes together: loading the session under the
+ * cursor, the tree cursor driving the content highlight, `/` search in each
+ * pane, the tree dialog, the mouse and render.
  *
- * Key handling (本任务范围):
- *   - 按键 → resolveKeys(bindings, focus, pending) → ActionId → dispatch()
- *   - 支持多键序列（"gg"）：前缀匹配时把按键放进 pending 缓冲，等待下一键
- *   - h / l 前后切换焦点，1 / 2 / 3 直接跳到对应面板（面板标题显示 "[1] SESSIONS"）
- *   - C 切到 Current folder，A 切到 All（各自只做单向切换），? 帮助
- *   - / 搜索（lazygit 风格，只作用于当前聚焦的面板，每个面板各记各的关键字）：底部出现搜索栏，输入时实时跳到
- *     原位置之后的第一个匹配，Enter 保留关键字退出输入栏，Esc 清掉关键字并回到原位置；之后 n / N 在匹配之间
- *     往下 / 往上跳并回绕（搜索生效期间 n / N 优先于面板自己的同键绑定），normal 模式下 Esc 清掉当前面板的搜索。
- *     列表不过滤只跳转：SESSIONS 按 名称 / 预览（模型 / 路径只通过 model: / path:，after: / before: 限定时间），
- *     TREE 按 label / 正文（tag: / role: 限定；目标藏在折叠段里时展开它的祖先，右侧跟着高亮），CONTENT 按渲染后的
- *     正文行（只有自由文本，跳转把该行滚到面板顶部）。命中的文字高亮、当前匹配加强调，标题右侧显示 2/7 matches
- *   - j/k、gg/G：SESSIONS / TREE 移动光标，CONTENT 按行滚动；SESSIONS 里 J/K 滚动右侧内容
- *   - SESSIONS 光标变化 → 重新加载 TREE + CONTENT；TREE 光标变化 → CONTENT 高亮并滚到对应消息
- *   - TREE：y 复制节点全文（走注入的 ActionSource），T 居中弹出 Label 输入框（类似 lazygit 的 commit 弹窗），回车保存 / Esc 取消 / 空值清除；
- *     z 折叠 / 展开光标所在的分支段（旁支默认折叠、活动分支展开，段内按 z 折叠所在段并跳到段头）；
- *     a 打开完整树对话框（顶部搜索框、中间完整树、底部提示；和小面板共用折叠状态）。小面板不做 d/t/u/l/a 过滤
- *   - 树对话框里的按键按 tree-dialog scope 解析（对话框自己的键 → tree 面板的键 → global）：j/k/gg/G 移动、y / T / Enter 和面板一样但作用于
- *     对话框光标、z 折叠、d/t/u/l/a 过滤（重新加载树，面板同步）、/ 聚焦顶部搜索框实时过滤（Esc 退出搜索框但关键字和结果保留、再按 / 接着改，
- *     Enter 在搜索框里没有含义；搜索期间折叠全部打开，删光关键字或关对话框后恢复）、列表上 q / Esc 关闭并让面板光标跳到对话框选中的行
- *     （藏在折叠段里就展开它）；? 在对话框里关掉，它的键都在底部一行
- *   - Enter：SESSIONS 里切到光标所在会话（/resume）；TREE 里以光标节点为叶子恢复（/tree restore）：先居中弹出
- *     Summarize branch? 三选菜单（No summary / Summarize / Summarize with custom prompt，自定义指令再弹一个输入框），
- *     光标就在活动叶子上或 pi 设置了 branchSummary.skipPrompt 时不问、直接进入；
- *     成功后关闭面板，失败原因留在 footer 里、面板不关；等待 pi 切换 / 写摘要期间面板隐藏且不响应按键
- *   - SESSIONS：d 删除（先弹 Yes / No 确认框，默认停在 No，y / n 直接选；当前打开的会话拒绝删除；删完重新拉列表、光标夹回范围内），
- *     r 重命名（居中输入框，预填当前名字，空值清除；改完重新拉列表、光标留在同一会话上），
- *     s 循环切换排序（recent → created → title → threaded，光标跟着同一会话走），i 会话信息弹窗（y 复制全部内容，Esc 关闭）
- *   - space 多选：d 在有选中时批量删除（跳过当前会话，失败的留在列表和选中里），选中多个时 r / o / y / e / S 拒绝；
- *     Esc 先清空选中再退出。@（global）打开 pi 的 changelog 弹窗（j/k 滚动，Esc / q / @ 关闭）
+ * Keys: the first open overlay (`overlays`) takes them; otherwise
+ * key → KeySequencer (the focused pane's scope, then global) → ActionId →
+ * `dispatch`. The default bindings are listed in docs/keybindings.md.
+ *
+ * 面板只做协调：弹窗流程在 flows/，TREE / CONTENT 的视图状态在 tree-view.ts / content-viewport.ts；
+ * 每个快捷键的行为见 docs/keybindings.md，这里不再重复。
  */
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, Focusable, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
-import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import { type Binding, compileKeymap, labelsFor, labelsForFocus, matchesKeyId, resolveKeys } from "../config/keys.ts";
 import { DEFAULT_KEYMAP, FOCUS_ACTIONS, isDisabledIn, paneTitleText, TREE_DIALOG_FOOTER, treeDialogHintText } from "../config/keymap.ts";
 import { LEFT_COLUMN_RATIO, PANE_IDS, SESSION_SORT_MODES, SPINNER_INTERVAL_MS, TREE_DIALOG_SCOPE } from "../constants.ts";
 import { t } from "../i18n/index.ts";
-import { highlightTerms, matchesTokens, matchSessionRow, matchTreeRow, parseSearchQuery, searchTokens } from "../data/search.ts";
+import { clamp, findLastIndex, indicesWhere } from "../utils/indices.ts";
+import { cycleMatch, firstMatchFrom, highlightTerms, matchSessionRow, matchTreeRow, parseSearchQuery, stepMatch } from "../data/search.ts";
 import { findSessionIndex } from "../data/sessions.ts";
-import {
-	applyTreeFold,
-	defaultFolded,
-	filterTreeRows,
-	foldedAncestors,
-	foldTarget,
-	nearestListedIndex,
-} from "../data/tree-fold.ts";
+import { applyTreeFold, defaultFolded, filterTreeRows, nearestListedIndex } from "../data/tree-fold.ts";
 import type {
 	ActionId,
-	ContentBlock,
-	DeleteMethod,
 	EnterOutcome,
-	ExportFormat,
-	ExportTarget,
-	ForkPoint,
 	KeyHint,
 	Keymap,
 	ListScope,
 	PaneId,
 	PanelMode,
 	PaneSearch,
-	RestoreOptions,
 	SearchView,
 	SessionInfo,
 	SessionRow,
-	SessionSortMode,
-	ShareResult,
 	TreeFilter,
 	TreeRow,
 } from "../types.ts";
+import { ContentViewport } from "./content-viewport.ts";
+import type { FlowHost } from "./flows/host.ts";
+import {
+	confirmCloneSession,
+	confirmDeleteSession,
+	confirmShareSession,
+	copyLastReply,
+	openCompactInput,
+	openImportInput,
+	openNewSessionInput,
+	openRenameInput,
+	openSessionInfo,
+	resumeSession,
+	startExport,
+	startFork,
+	togglePin,
+} from "./flows/session-flows.ts";
+import { copyEntryText, copyTreeNode, openLabelInput, restoreTreeNode, type TreeTarget } from "./flows/tree-flows.ts";
 import { fit, sideBySide } from "./frame.ts";
+import { KeySequencer } from "./key-sequencer.ts";
 import { hitTest, listVisibleRows, type MouseTarget, panelGeometry } from "./mouse.ts";
-import { type ContentLayout, layoutContent, maxScroll, renderContentPane } from "./panes/content-pane.ts";
+import { renderContentPane } from "./panes/content-pane.ts";
 import { clampFirst, renderSessionsPane, scrollOffset, sessionAtLine, sessionFirstLine, sessionLineCount } from "./panes/sessions-pane.ts";
 import { renderTreePane } from "./panes/tree-pane.ts";
-import { type OutlinePrefix, treeOutline } from "./tree-outline.ts";
-import { alertDialogSpec, cannotDeleteActiveTitle } from "./widgets/alert-dialog.ts";
+import type { ActionSource, DataSource } from "./ports.ts";
+import { createInitialState, type PanelState } from "./state.ts";
+import { TreeView } from "./tree-view.ts";
 import { ChangelogDialog } from "./widgets/changelog-dialog.ts";
-import { compactDialogHints, compactDialogTitle } from "./widgets/compact-dialog.ts";
-import {
-	cloneSessionTitle,
-	confirmDialogSpec,
-	deleteSessionsTitle,
-	deleteSessionTitle,
-	forkSessionTitle,
-	importSessionTitle,
-	overwriteFileTitle,
-	shareSessionTitle,
-} from "./widgets/confirm-dialog.ts";
-import { EXPORT_FORMAT_ORDER, exportFormatHints, exportFormats, exportFormatTitle, exportPathHints, exportPathTitle } from "./widgets/export-dialog.ts";
+
 import { renderFooter } from "./widgets/footer.ts";
-import { forkDialogHints, forkDialogTitle } from "./widgets/fork-dialog.ts";
 import { compactKeys, helpLineCount, overlayHelp } from "./widgets/help-overlay.ts";
-import { importDialogHints, importDialogSubject, importDialogTitle } from "./widgets/import-dialog.ts";
-import { InputDialog } from "./widgets/input-dialog.ts";
-import { labelDialogHints, labelDialogTitle } from "./widgets/label-dialog.ts";
-import { newSessionDialogHints, newSessionDialogTitle } from "./widgets/new-session-dialog.ts";
-import { renameDialogHints, renameDialogTitle } from "./widgets/rename-dialog.ts";
-import {
-	customPromptHints,
-	CUSTOM_PROMPT_INDEX,
-	customPromptTitle,
-	SUMMARY_CHOICES,
-	summaryMenu,
-	summaryMenuHints,
-	summaryMenuTitle,
-} from "./widgets/restore-dialog.ts";
+import { InputDialog, type InputDialogSpec } from "./widgets/input-dialog.ts";
+
 import { renderSearchStatus, SearchBar } from "./widgets/search-bar.ts";
-import { SelectDialog } from "./widgets/select-dialog.ts";
+import { SelectDialog, type SelectDialogSpec } from "./widgets/select-dialog.ts";
 import { SessionInfoDialog } from "./widgets/session-info-dialog.ts";
 import { TreeDialog } from "./widgets/tree-dialog.ts";
-
-/** Mutable UI state of the panel. Kept in one place for easy debugging. */
-export interface PanelState {
-	focus: PaneId;
-	mode: PanelMode;
-	/** Index of the highlighted row per list pane (for content: first visible body line). */
-	cursor: Record<PaneId, number>;
-	/** entryId of the content block highlighted by the tree cursor. */
-	contentHighlight: string | undefined;
-	/** Sessions selected with <space> for batch operations. */
-	selectedSessionFiles: Set<string>;
-	/**
-	 * Pinned session files in display order (newest pin first). These sit at the
-	 * top of the sessions pane regardless of the sort mode; persisted to
-	 * `~/.pi/agent/lazy-panel-pins.json` (see config/pins.ts).
-	 */
-	pinnedFiles: string[];
-	/**
-	 * Active `/` search per pane (absent = none). Kept per pane, so switching
-	 * panes keeps each pane's query; only the focused pane's search is acted on.
-	 */
-	search: Partial<Record<PaneId, PaneSearch>>;
-	scope: ListScope;
-	sort: SessionSortMode;
-	/** Tree filter, chosen with d/t/u/l/a in the tree dialog; the pane lists the same filtered tree. */
-	treeFilter: TreeFilter;
-	/**
-	 * Folded tree rows (branch-segment heads whose descendants are hidden, see
-	 * data/tree-fold.ts). Reset to "side branches folded" whenever another
-	 * session is loaded; kept across reloads of the same session.
-	 */
-	treeFolded: Set<string>;
-	/** Whether the `?` overlay is open, and its scroll offset. */
-	helpOpen: boolean;
-	helpScroll: number;
-	/**
-	 * Wheel-scroll offset (first visible row) for the two list panes; null means
-	 * "follow the cursor" (the keyboard default that centers the cursor). The
-	 * wheel sets a number to scroll the view without moving the selection; any
-	 * cursor move clears it back to null.
-	 */
-	listScroll: { sessions: number | null; tree: number | null };
-}
-
-export function createInitialState(overrides: Partial<PanelState> = {}): PanelState {
-	return {
-		focus: "sessions",
-		mode: "normal",
-		cursor: { sessions: 0, tree: 0, content: 0 },
-		contentHighlight: undefined,
-		selectedSessionFiles: new Set(),
-		pinnedFiles: [],
-		search: {},
-		scope: "current-folder",
-		sort: "recent",
-		treeFilter: "default",
-		treeFolded: new Set(),
-		helpOpen: false,
-		helpScroll: 0,
-		listScroll: { sessions: null, tree: null },
-		...overrides,
-	};
-}
-
-/** Async loaders injected by the entry point (they wrap src/data/*). */
-export interface DataSource {
-	listSessions(scope: ListScope, sort: SessionSortMode, pinned: readonly string[]): Promise<SessionRow[]>;
-	loadTree(sessionFile: string, filter: TreeFilter): Promise<TreeRow[]>;
-	loadContent(sessionFile: string, leafEntryId?: string): Promise<ContentBlock[]>;
-	/** `i` in SESSIONS: what /session shows; undefined when the file cannot be read. */
-	loadSessionInfo?(sessionFile: string): Promise<SessionInfo | undefined>;
-	/** `o` in SESSIONS: the user messages the fork selector lists (empty = nothing to fork). */
-	loadForkPoints?(sessionFile: string): Promise<ForkPoint[]>;
-	/** `@`: pi's changelog as markdown (what /changelog shows). */
-	loadChangelog?(): Promise<string>;
-}
-
-/**
- * Side effects injected by the entry point (they wrap src/actions/*).
- * 面板本身不做 I/O：复制、打标签、恢复会话、删除、改名都通过这里交给 actions 层。
- */
-export interface ActionSource {
-	/** Copy the node's full text to the clipboard; `false` = the entry has no text. */
-	copyNodeText(sessionFile: string, entryId: string): Promise<boolean>;
-	/** Set, or clear with `undefined`, the label of a node. */
-	setNodeLabel(sessionFile: string, entryId: string, label: string | undefined): Promise<void>;
-	/** Enter in SESSIONS: make pi show this session (/resume). Rejects with the reason on failure. */
-	resumeSession(sessionFile: string): Promise<EnterOutcome>;
-	/**
-	 * Enter in TREE: continue the conversation from this node (/tree restore),
-	 * switching session first if needed; `options` is the summary choice.
-	 */
-	restoreNode(sessionFile: string, entryId: string, options: RestoreOptions): Promise<EnterOutcome>;
-	/** d in SESSIONS (after confirmation): remove the file; resolves to how it was removed. */
-	deleteSession?(sessionFile: string): Promise<DeleteMethod>;
-	/** p in SESSIONS: persist the pinned session files (display order, newest first). */
-	setPins?(pinned: readonly string[]): Promise<void>;
-	/** r in SESSIONS: set the display name ("" clears it). */
-	renameSession?(sessionFile: string, name: string): Promise<void>;
-	/** n in SESSIONS: start a fresh session, naming it when `name` is non-empty (/new). */
-	newSession?(name: string): Promise<EnterOutcome>;
-	/** o in SESSIONS (after picking a message and confirming): fork before that user message and open the fork (/fork). */
-	forkSession?(sessionFile: string, entryId: string): Promise<EnterOutcome>;
-	/** y in SESSIONS (after confirmation): clone the active branch to a new file (/clone). */
-	cloneSession?(sessionFile: string): Promise<EnterOutcome>;
-	/** c in SESSIONS: compact this conversation's active branch and open it (/compact). */
-	compactSession?(sessionFile: string, customInstructions?: string): Promise<EnterOutcome>;
-	/** Y in SESSIONS: copy the last assistant reply to the clipboard; `false` = no reply yet. */
-	copyLastReply?(sessionFile: string): Promise<boolean>;
-	/** y in the Session Info dialog: copy its text to the clipboard. */
-	copyText?(text: string): Promise<void>;
-	/** e in SESSIONS: where an export goes for what the user typed ("" = pi's default path); synchronous, no writing. */
-	exportTarget?(sessionFile: string, format: ExportFormat, input: string): ExportTarget;
-	/** e in SESSIONS (once the path is picked, and confirmed when it exists): write the export, resolving to its path (/export). */
-	exportSession?(sessionFile: string, format: ExportFormat, outputPath: string): Promise<string>;
-	/** I in SESSIONS (after confirmation): copy a session JSONL into the session folder and switch to it (/import). */
-	importSession?(input: string): Promise<EnterOutcome>;
-	/** S in SESSIONS (after confirmation): upload as a secret GitHub gist (/share). */
-	shareSession?(sessionFile: string): Promise<ShareResult>;
-}
 
 export interface LazyPanelOptions {
 	theme: Theme;
@@ -282,24 +127,23 @@ export interface LazyPanelOptions {
 	currentSessionFile?: string;
 }
 
-/** Max time between keys of a multi-key sequence such as "gg". */
-const PENDING_TIMEOUT_MS = 1000;
-
 /** Delay before (re)loading the session under the cursor while the user is still moving. */
 const SESSION_LOAD_DEBOUNCE_MS = 40;
 
-/** Node TREE Enter is restoring to while its menu / custom prompt is open. */
-interface RestoreTarget {
-	file: string;
-	entryId: string;
-	/** "role: text" of the node, shown in the dialog title bars. */
-	subject: string;
-}
-
-/** A tree row plus the session it belongs to: what y / T / Enter act on (the pane's cursor row, or the dialog's). */
-interface TreeTarget {
-	file: string;
-	row: TreeRow;
+/**
+ * A dialog or overlay drawn over the panes. `LazyPanel.overlays` lists them in
+ * the order they take the keys; see there for how the four users read it.
+ */
+interface Overlay {
+	isOpen(): boolean;
+	/** Every key while this is the first open overlay. */
+	handleInput(data: string): void;
+	/** Draw it over the rendered panel lines. */
+	draw(lines: string[], width: number): string[];
+	/** Footer hints while it is open; undefined keeps the panel's own footer (the help overlay lists the keys itself). */
+	hints(): KeyHint[] | undefined;
+	/** Drawn under the other overlays: the tree dialog, which T / Enter open a prompt / menu on top of. */
+	base?: boolean;
 }
 
 /**
@@ -320,14 +164,10 @@ export class LazyPanel implements Component, Focusable {
 	readonly keymap: Keymap;
 	private readonly bindings: Binding[];
 	private sessions: SessionRow[] = [];
-	/** Whole (filtered) tree of the loaded session; `visibleTree` is what the pane lists once folded branches are hidden. */
-	private tree: TreeRow[] = [];
-	private visibleTree: TreeRow[] = [];
-	/** Outline prefixes of `tree` for the pane, recomputed together with `visibleTree`. */
-	private treeOutline: ReadonlyMap<string, OutlinePrefix> = new Map();
-	private content: ContentBlock[] = [];
-	/** Leaf entry the current `content` branch ends at (undefined = session's own leaf). */
-	private contentLeaf: string | undefined;
+	/** TREE pane: the whole tree of the loaded session, the visible rows once folded, their outline and the fold rules. */
+	private readonly treeView: TreeView;
+	/** CONTENT pane: blocks of the branch on show, their layout, scrolling and the `/` matches. */
+	private readonly contentViewport: ContentViewport;
 	private status: string | undefined;
 	private loadedSessionFile: string | undefined;
 	/** Session to put the cursor on at the first load (see `LazyPanelOptions.currentSessionFile`); cleared once used. */
@@ -347,58 +187,35 @@ export class LazyPanel implements Component, Focusable {
 	private readonly infoDialog: SessionInfoDialog;
 	/** `@`: pi's changelog in a big scrollable box. */
 	private readonly changelogDialog: ChangelogDialog;
+	/** What the dialog flows (./flows/) get from the panel; see `FlowHost`. */
+	private readonly flowHost: FlowHost;
+	/**
+	 * Every dialog / overlay, in the order they take the keys: the first open one
+	 * gets every key (`handleInput`) and gives the footer its hints (`renderBottom`),
+	 * any open one blocks the mouse, and `render` draws the open ones bottom-up
+	 * (`overlaysBottomUp`). Only the tree dialog can have another one open on top
+	 * of it (T / Enter's prompt or menu), so it comes last here and first there.
+	 *
+	 * 所有弹窗按"谁先拿按键"排列：按键、footer 提示、鼠标屏蔽、叠加绘制都从这一份列表来，新增弹窗只改这里。
+	 */
+	private readonly overlays: Overlay[];
+	/** `overlays` in drawing order: the base layer (the tree dialog) first, then the rest in list order. */
+	private readonly overlaysBottomUp: Overlay[];
 	/** Cached changelog markdown so a second `@` opens instantly (only the first render is slow). */
 	private changelogMd: string | undefined;
 	/** Ticker that rotates the changelog loading spinner while the markdown is fetched / rendered. */
 	private changelogSpinner: ReturnType<typeof setInterval> | undefined;
-	/**
-	 * Fold state from before the dialog's search started: a search shows every
-	 * match, so folds are cleared meanwhile and restored when the query is gone.
-	 */
-	private foldedBeforeSearch: Set<string> | undefined;
-	/** Node being labelled while `mode === "label"`. */
-	private labelTarget: { file: string; entryId: string } | undefined;
-	/** Node being restored to while `mode === "restore"`. */
-	private restoreTarget: RestoreTarget | undefined;
-	/** Session being renamed while `mode === "rename"`. */
-	private renameTarget: SessionRow | undefined;
-	/** Session the delete confirmation is about while `mode === "confirm"`. */
-	private deleteTarget: SessionRow | undefined;
-	/** Sessions the batch delete confirmation is about (d with a multi-selection). */
-	private batchDeleteTargets: SessionRow[] | undefined;
-	/** Session being forked while `mode === "fork"`: its file, title-bar subject and the user messages to pick from. */
-	private forkTarget: { file: string; subject: string; points: ForkPoint[] } | undefined;
-	/** Session the clone confirmation is about while `mode === "clone"`. */
-	private cloneTarget: SessionRow | undefined;
-	/** Session being compacted while `mode === "compact"`. */
-	private compactTarget: SessionRow | undefined;
-	/** Session being exported while `mode === "export"`: its file, title-bar subject, and the format once picked. */
-	private exportJob: { file: string; subject: string; format?: ExportFormat } | undefined;
 	/** True while an Enter action is waiting for pi (keys are ignored, the panel is hidden). */
 	private entering = false;
-	/** Raw key chunks of an unfinished multi-key sequence. */
-	private pending: string[] = [];
-	private pendingTimer: ReturnType<typeof setTimeout> | undefined;
+	/** Keys of an unfinished multi-key sequence such as "gg" (panes and tree dialog alike). */
+	private readonly keys: KeySequencer;
 	private _focused = false;
 	/** Debounced reload of tree + content after the sessions cursor moved. */
 	private sessionLoadTimer: ReturnType<typeof setTimeout> | undefined;
 	private sessionLoadPromise: Promise<void> | undefined;
 	private sessionLoadResolve: (() => void) | undefined;
-	/** Content layout cache keyed by blocks identity / width / highlight. */
-	private layoutCache: { blocks: ContentBlock[]; inner: number; highlight: string | undefined; layout: ContentLayout } | undefined;
-	/** Viewport of the content pane as of the last render, used to clamp scrolling. */
-	private contentView = { inner: 60, visible: 10 };
-	/**
-	 * True right after `zz` centered the highlighted message: the content pane may
-	 * then scroll past the last full page (padding blanks below) so an end-of-file
-	 * message can sit in the middle, like vim's `zz`. Any normal scroll clears it
-	 * and the view snaps back to the last-full-page clamp.
-	 */
-	private contentCentered = false;
 	/** Terminal width from the last render, used to size the help overlay when clamping its scroll. */
 	private lastWidth = 80;
-	/** Matching body lines of the content pane, per layout and query (the layout changes with the width, so the matches follow it). */
-	private contentSearchCache: { layout: ContentLayout; query: string; matches: number[] } | undefined;
 	/** Set while the search bar is open (`mode === "search"`). */
 	private searchOrigin: SearchOrigin | undefined;
 
@@ -406,6 +223,9 @@ export class LazyPanel implements Component, Focusable {
 		this.state = createInitialState(o.initialState);
 		this.keymap = o.keymap ?? DEFAULT_KEYMAP;
 		this.bindings = compileKeymap(this.keymap);
+		this.keys = new KeySequencer(this.bindings, () => this.o.requestRender());
+		this.treeView = new TreeView(this.state);
+		this.contentViewport = new ContentViewport({ theme: o.theme, state: this.state, onChange: () => this.o.requestRender() });
 		this.ratio = o.leftColumnRatio ?? LEFT_COLUMN_RATIO;
 		this.status = o.status;
 		this.locateSessionFile = o.currentSessionFile;
@@ -431,6 +251,54 @@ export class LazyPanel implements Component, Focusable {
 		});
 		this.infoDialog = new SessionInfoDialog({ theme: o.theme });
 		this.changelogDialog = new ChangelogDialog({ theme: o.theme, onClose: () => this.closeChangelog() });
+		this.overlays = [
+			widgetOverlay(this.inputDialog),
+			widgetOverlay(this.selectDialog),
+			widgetOverlay(this.infoDialog),
+			{
+				isOpen: () => this.changelogDialog.isOpen,
+				handleInput: (data) => this.handleChangelogInput(data),
+				draw: (lines, width) => this.changelogDialog.overlay(lines, width),
+				hints: () => this.changelogDialog.hints,
+			},
+			{
+				isOpen: () => this.state.helpOpen,
+				handleInput: (data) => this.handleHelpInput(data),
+				draw: (lines, width) =>
+					overlayHelp(lines, { keymap: this.keymap, focus: this.state.focus, scroll: this.state.helpScroll, theme: this.o.theme }, width),
+				hints: () => undefined,
+			},
+			{
+				isOpen: () => this.treeDialog.isOpen,
+				handleInput: (data) => this.handleTreeDialogInput(data),
+				draw: (lines, width) => this.treeDialog.overlay(lines, width),
+				hints: () => this.treeDialog.hints,
+				base: true,
+			},
+		];
+		this.overlaysBottomUp = [...this.overlays.filter((ov) => ov.base), ...this.overlays.filter((ov) => !ov.base)];
+		// flows 拿到的面板能力：都转发给面板自己的私有方法，flows 本身不存任何状态。
+		this.flowHost = {
+			state: this.state,
+			data: o.data,
+			actions: o.actions,
+			currentSessionFile: o.currentSessionFile,
+			skipSummaryPrompt: o.skipSummaryPrompt ?? false,
+			isDisposed: () => this.disposed,
+			setStatus: (text) => this.setStatus(text),
+			sessionRows: () => this.sessions,
+			currentSessionRow: () => this.currentSessionRow(),
+			openPrompt: (mode, spec) => this.openPrompt(mode, spec),
+			openMenu: (mode, spec) => this.openMenu(mode, spec),
+			closeDialogs: () => this.closeDialogs(),
+			openInfo: (info, onCopy) => this.openInfo(info, onCopy),
+			dialogMaxRows: () => this.dialogMaxRows(),
+			enter: (what, run, progress) => this.enter(what, run, progress),
+			relist: (keepFile) => this.listSessions(keepFile),
+			followSessionsCursor: () => this.followSessionsCursor(),
+			reloadTree: (file, entryId) => this.reloadTree(file, entryId),
+			refreshSession: (file) => this.refreshSession(file),
+		};
 	}
 
 	/** Focusable: forwarded to the active prompt so the IME cursor lands in the bar. */
@@ -498,7 +366,7 @@ export class LazyPanel implements Component, Focusable {
 		const row = this.sessions[this.state.cursor.sessions];
 		if (!row) {
 			this.setTree([], new Set());
-			this.setContent([], undefined);
+			this.contentViewport.setBlocks([], undefined);
 			this.loadedSessionFile = undefined;
 			this.o.requestRender();
 			return;
@@ -514,17 +382,17 @@ export class LazyPanel implements Component, Focusable {
 			if (this.sessions[this.state.cursor.sessions]?.file !== file) return;
 			// 换了会话：旁支折叠、活动分支展开（活动分支上的行因此一定可见）。
 			this.setTree(tree, defaultFolded(tree));
-			this.setContent(content, undefined);
+			this.contentViewport.setBlocks(content, undefined);
 			this.loadedSessionFile = file;
 			// Put the tree cursor on the active leaf, like /tree does.
-			const leafIdx = findLastIndex(this.visibleTree, (r) => r.onActiveBranch);
+			const leafIdx = findLastIndex(this.treeView.visible, (r) => r.onActiveBranch);
 			this.state.cursor.tree = leafIdx >= 0 ? leafIdx : 0;
 			this.state.cursor.content = 0;
 			// 树光标落在活动叶子上，右侧内容同步滚到并高亮这条消息。
 			await this.syncContentToTree();
 		} catch (err) {
 			this.setTree([], new Set());
-			this.setContent([], undefined);
+			this.contentViewport.setBlocks([], undefined);
 			this.setStatus(t("status.openFailed", { error: (err as Error).message }));
 		}
 		this.o.requestRender();
@@ -553,25 +421,11 @@ export class LazyPanel implements Component, Focusable {
 		return this.sessionLoadPromise;
 	}
 
-	private setContent(blocks: ContentBlock[], leaf: string | undefined): void {
-		this.content = blocks;
-		this.contentLeaf = leaf;
-		this.layoutCache = undefined;
-	}
-
 	/** Replace the tree and its fold state, then refresh what the pane lists. */
 	private setTree(rows: TreeRow[], folded: Set<string>): void {
-		this.tree = rows;
-		this.state.treeFolded = folded;
-		this.refreshTreeView();
+		this.treeView.set(rows, folded);
 		// 树换了（换会话、打标签、换过滤）：TREE 的搜索结果按新树重算。
 		this.refreshSearch("tree");
-	}
-
-	/** 折叠状态变了 / 树重新加载后：重新算可见行和大纲前缀（光标索引指向可见行）。 */
-	private refreshTreeView(): void {
-		this.visibleTree = applyTreeFold(this.tree, this.state.treeFolded);
-		this.treeOutline = treeOutline(this.tree, this.state.treeFolded);
 	}
 
 	/**
@@ -582,23 +436,23 @@ export class LazyPanel implements Component, Focusable {
 	 * 节点在另一条分支上 → 重新加载“以该节点为叶子”的分支再高亮。
 	 */
 	private async syncContentToTree(): Promise<void> {
-		const node = this.visibleTree[this.state.cursor.tree];
+		const node = this.treeView.cursorRow();
 		const file = this.loadedSessionFile ?? this.sessions[this.state.cursor.sessions]?.file;
 		if (!node || !file) {
 			this.state.contentHighlight = undefined;
 			this.o.requestRender();
 			return;
 		}
-		const shown = this.content.some((b) => b.entryId === node.entryId);
+		const shown = this.contentViewport.blocks.some((b) => b.entryId === node.entryId);
 		// 需要的分支：活动分支用 undefined（会话自己的叶子），否则以该节点为叶子。
 		const wantLeaf = node.onActiveBranch ? undefined : node.entryId;
-		if (!shown && this.contentLeaf !== wantLeaf) {
+		if (!shown && this.contentViewport.leaf !== wantLeaf) {
 			try {
 				const content = await this.o.data.loadContent(file, wantLeaf);
 				if (this.disposed) return;
 				// 光标又动了 / 会话换了：丢弃这次结果。
-				if (this.visibleTree[this.state.cursor.tree]?.entryId !== node.entryId || this.loadedSessionFile !== file) return;
-				this.setContent(content, wantLeaf);
+				if (this.treeView.cursorRow()?.entryId !== node.entryId || this.loadedSessionFile !== file) return;
+				this.contentViewport.setBlocks(content, wantLeaf);
 			} catch (err) {
 				this.setStatus(t("status.loadBranchFailed", { error: (err as Error).message }));
 				return;
@@ -609,49 +463,18 @@ export class LazyPanel implements Component, Focusable {
 
 	/** Highlight the block for `entryId` (or the nearest block before it in the tree) and scroll it to the top. */
 	private highlightContent(entryId: string): void {
-		const shown = new Set(this.content.map((b) => b.entryId));
+		const blocks = this.contentViewport.blocks;
+		const shown = new Set(blocks.map((b) => b.entryId));
 		let targetId: string | undefined = shown.has(entryId) ? entryId : undefined;
 		if (!targetId) {
 			// 没有对应消息块的节点：沿 tree 往上找最近的一条有消息块的节点。
 			for (let i = this.state.cursor.tree - 1; i >= 0 && !targetId; i--) {
-				const id = this.visibleTree[i]?.entryId;
+				const id = this.treeView.visible[i]?.entryId;
 				if (id && shown.has(id)) targetId = id;
 			}
-			targetId ??= this.content[this.content.length - 1]?.entryId;
+			targetId ??= blocks[blocks.length - 1]?.entryId;
 		}
-		this.state.contentHighlight = targetId;
-		if (targetId) {
-			const start = this.contentLayout().starts.get(targetId) ?? 0;
-			// 高亮切换是普通滚动（把消息滚到顶部）：清掉 zz 的越界居中标记。
-			this.contentCentered = false;
-			this.state.cursor.content = Math.min(start, this.contentMaxScroll());
-		}
-		this.o.requestRender();
-	}
-
-	/** Cached layout of the current content for the last rendered width. */
-	private contentLayout(): ContentLayout {
-		const { inner } = this.contentView;
-		const highlight = this.state.contentHighlight;
-		const c = this.layoutCache;
-		if (c && c.blocks === this.content && c.inner === inner && c.highlight === highlight) return c.layout;
-		const layout = layoutContent(this.content, inner, this.o.theme, highlight);
-		this.layoutCache = { blocks: this.content, inner, highlight, layout };
-		return layout;
-	}
-
-	private contentMaxScroll(): number {
-		return maxScroll(this.contentLayout().lines.length, this.contentView.visible);
-	}
-
-	/** Remember the content viewport for this render (so keys can clamp against it) and return the layout. */
-	private contentLayoutFor(inner: number, visible: number): ContentLayout {
-		this.contentView = { inner: Math.max(1, inner), visible: Math.max(1, visible) };
-		const layout = this.contentLayout();
-		// 窗口变小后原来的滚动位置可能越界，这里顺手夹回来；`zz` 居中时允许滚过末尾（夹到末行）。
-		const max = this.contentCentered ? Math.max(0, layout.lines.length - 1) : maxScroll(layout.lines.length, this.contentView.visible);
-		this.state.cursor.content = clamp(this.state.cursor.content, 0, max);
-		return layout;
+		this.contentViewport.highlight(targetId);
 	}
 
 	private setStatus(s: string | undefined): void {
@@ -675,48 +498,17 @@ export class LazyPanel implements Component, Focusable {
 			return;
 		}
 
-		// 居中输入弹窗打开时（打标签、自定义摘要指令）：同理全部交给弹窗。
-		if (this.inputDialog.isOpen) {
-			this.inputDialog.handleInput(data);
-			return;
-		}
-
-		// 居中选择菜单打开时（Summarize branch?、删除确认）：j/k/Enter/Esc/y/n 都由菜单处理。
-		if (this.selectDialog.isOpen) {
-			this.selectDialog.handleInput(data);
-			return;
-		}
-
-		// 会话信息弹窗打开时只响应 y 复制 / Esc 关闭。
-		if (this.infoDialog.isOpen) {
-			this.infoDialog.handleInput(data);
-			return;
-		}
-
-		// changelog 弹窗：滚动 / 关闭由弹窗处理，再按一次 @（用户绑定给 changelog 的键）也关闭。
-		if (this.changelogDialog.isOpen) {
-			if (this.isAction(data, "global", "changelog")) this.closeChangelog();
-			else this.changelogDialog.handleInput(data);
-			this.o.requestRender();
-			return;
-		}
-
-		// 帮助弹窗打开时只响应关闭 / 滚动。
-		if (this.state.helpOpen) {
-			this.handleHelpInput(data);
-			return;
-		}
-
-		// 完整树对话框打开时：搜索框聚焦就全部交给输入框，否则按 tree-dialog scope 解析按键。
-		if (this.treeDialog.isOpen) {
-			this.handleTreeDialogInput(data);
+		// 有弹窗打开时按键全部交给它（输入框、菜单、会话信息、changelog、帮助、树对话框，顺序见 overlays）。
+		const overlay = this.activeOverlay();
+		if (overlay) {
+			overlay.handleInput(data);
 			return;
 		}
 
 		// Esc 优先：清掉半截序列或当前面板的搜索结果。
 		if (matchesKeyId(data, "escape")) {
-			if (this.pending.length) {
-				this.clearPending();
+			if (this.keys.hasPending) {
+				this.keys.clear();
 				return;
 			}
 			if (this.state.search[this.state.focus]) {
@@ -734,7 +526,7 @@ export class LazyPanel implements Component, Focusable {
 
 		// 搜索生效期间 n / N（global 的 search-next / search-prev）优先于面板自己的同键绑定
 		// （SESSIONS 里 n 本来是 new session），和 lazygit 搜索模式里的 n / N 一致。
-		if (this.pending.length === 0 && this.state.search[this.state.focus]) {
+		if (!this.keys.hasPending && this.state.search[this.state.focus]) {
 			const g = resolveKeys(this.bindings, "global", [data]);
 			if (g.kind === "action" && (g.action === "search-next" || g.action === "search-prev")) {
 				this.dispatch(g.action);
@@ -742,35 +534,20 @@ export class LazyPanel implements Component, Focusable {
 			}
 		}
 
-		const pressed = [...this.pending, data];
-		const result = resolveKeys(this.bindings, this.state.focus, pressed);
-		if (result.kind === "pending") {
-			this.pending = pressed;
-			this.armPendingTimer();
-			this.o.requestRender();
-			return;
-		}
-		this.clearPending();
+		const result = this.keys.feed(this.state.focus, data);
 		if (result.kind === "action") this.dispatch(result.action);
 	}
 
-	private armPendingTimer(): void {
-		if (this.pendingTimer) clearTimeout(this.pendingTimer);
-		this.pendingTimer = setTimeout(() => {
-			this.pendingTimer = undefined;
-			if (this.pending.length) {
-				this.pending = [];
-				this.o.requestRender();
-			}
-		}, PENDING_TIMEOUT_MS);
+	/** The dialog / overlay that has the keys: the first open one in `overlays`. */
+	private activeOverlay(): Overlay | undefined {
+		return this.overlays.find((ov) => ov.isOpen());
 	}
 
-	private clearPending(): void {
-		this.pending = [];
-		if (this.pendingTimer) {
-			clearTimeout(this.pendingTimer);
-			this.pendingTimer = undefined;
-		}
+	/** Keys while the changelog box is open: it scrolls / closes itself, and the `@` key (whatever it is bound to) closes it too. */
+	private handleChangelogInput(data: string): void {
+		if (this.isAction(data, "global", "changelog")) this.closeChangelog();
+		else this.changelogDialog.handleInput(data);
+		this.o.requestRender();
 	}
 
 	private handleHelpInput(data: string): void {
@@ -801,6 +578,42 @@ export class LazyPanel implements Component, Focusable {
 		return this.treeDialog.isOpen ? "tree" : "normal";
 	}
 
+	/**
+	 * Show the text prompt of a flow in `mode`. The prompt and the menu are
+	 * never up together, so the menu (if any) closes first; the prompt gets the
+	 * IME cursor while the panel has focus.
+	 */
+	private openPrompt(mode: PanelMode, spec: InputDialogSpec): void {
+		this.selectDialog.close();
+		this.state.mode = mode;
+		this.inputDialog.open(spec);
+		this.inputDialog.focused = this._focused;
+		this.o.requestRender();
+	}
+
+	/** Show the menu of a flow (a picker, a confirmation, an alert) in `mode`; the text prompt (if any) closes first. */
+	private openMenu(mode: PanelMode, spec: SelectDialogSpec): void {
+		this.inputDialog.close();
+		this.inputDialog.focused = false;
+		this.state.mode = mode;
+		this.selectDialog.open(spec);
+		this.o.requestRender();
+	}
+
+	/**
+	 * End a flow: close its prompt / menu and go back to the base mode (`tree`
+	 * while the tree dialog is still open under it).
+	 *
+	 * 所有弹窗流程（打标签、恢复、删除、改名、fork、导出……）都从这里收尾；流程的目标由各自的回调闭包带着，不再存字段。
+	 */
+	private closeDialogs(): void {
+		this.state.mode = this.baseMode();
+		this.selectDialog.close();
+		this.inputDialog.close();
+		this.inputDialog.focused = false;
+		this.o.requestRender();
+	}
+
 	private openHelp(): void {
 		this.state.helpOpen = true;
 		this.state.helpScroll = 0;
@@ -820,24 +633,12 @@ export class LazyPanel implements Component, Focusable {
 	handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
 		if (this.disposed || this.entering) return undefined;
 		// 搜索输入 / 各类弹窗打开时：吞掉面板区域的滚轮和点击，避免误动下面的列表，但不做交互。
-		if (this.state.mode !== "normal" || this.anyDialogOpen()) {
+		if (this.state.mode !== "normal" || this.activeOverlay()) {
 			return event.type === "wheel" || event.type === "click" ? { handled: true } : undefined;
 		}
 		if (event.type === "wheel") return this.handleWheel(event);
 		if (event.type === "click") return this.handleClick(event);
 		return undefined;
-	}
-
-	/** Any centered / full-screen overlay is up (its own input owns the keyboard). */
-	private anyDialogOpen(): boolean {
-		return (
-			this.state.helpOpen ||
-			this.inputDialog.isOpen ||
-			this.selectDialog.isOpen ||
-			this.infoDialog.isOpen ||
-			this.changelogDialog.isOpen ||
-			this.treeDialog.isOpen
-		);
 	}
 
 	/** Map an event to the pane / row under the pointer, using the same window offsets as render(). */
@@ -854,7 +655,7 @@ export class LazyPanel implements Component, Focusable {
 			// SESSIONS 按行命中：总数是渲染的行数（会话 2 行 + 分隔线），命中的行号再翻译回会话下标。
 			sessionsTotal: sessionLineCount(this.sessions.length, this.pinnedCount()),
 			treeFirst: this.listFirst("tree", visible.tree),
-			treeTotal: this.visibleTree.length,
+			treeTotal: this.treeView.visible.length,
 		});
 		if (target?.pane === "sessions" && target.row !== undefined) {
 			// 分隔线 / 留白行 → undefined：点它只切焦点、不移光标。
@@ -881,7 +682,7 @@ export class LazyPanel implements Component, Focusable {
 			const raw = override ?? scrollOffset(cursorLine, total, visible);
 			return clampFirst(raw, total, visible);
 		}
-		const total = this.visibleTree.length;
+		const total = this.treeView.visible.length;
 		const raw = override ?? scrollOffset(this.state.cursor.tree, total, visible);
 		return clampFirst(raw, total, visible);
 	}
@@ -893,7 +694,7 @@ export class LazyPanel implements Component, Focusable {
 		const target = this.hitTarget(event);
 		if (target?.pane === "sessions") this.scrollList("sessions", delta);
 		else if (target?.pane === "tree") this.scrollList("tree", delta);
-		else if (target?.pane === "content") this.scrollContent(delta);
+		else if (target?.pane === "content") this.contentViewport.scrollBy(delta);
 		return { handled: true };
 	}
 
@@ -901,7 +702,7 @@ export class LazyPanel implements Component, Focusable {
 	private scrollList(pane: "sessions" | "tree", delta: number): void {
 		const visible = listVisibleRows(Math.max(8, this.o.getHeight()))[pane];
 		// SESSIONS 的滚动范围是渲染行数（含分隔线）。
-		const total = pane === "sessions" ? sessionLineCount(this.sessions.length, this.pinnedCount()) : this.visibleTree.length;
+		const total = pane === "sessions" ? sessionLineCount(this.sessions.length, this.pinnedCount()) : this.treeView.visible.length;
 		const next = clampFirst(this.listFirst(pane, visible) + delta, total, visible);
 		if (next === this.state.listScroll[pane]) return;
 		this.state.listScroll[pane] = next;
@@ -917,7 +718,7 @@ export class LazyPanel implements Component, Focusable {
 		this.setFocus(target.pane);
 		if (target.pane === "sessions") {
 			if (target.row !== undefined) this.setSessionsCursor(target.row);
-			if (double) void this.resumeSession(); // 双击进入会话（等价于 Enter / resume）
+			if (double) void resumeSession(this.flowHost); // 双击进入会话（等价于 Enter / resume）
 		} else if (target.pane === "tree") {
 			if (target.row !== undefined) this.setTreeCursor(target.row);
 			if (double) this.toggleTreeFold(); // 双击折叠 / 展开分支
@@ -926,9 +727,9 @@ export class LazyPanel implements Component, Focusable {
 	}
 
 	/**
-	 * Execute one logical action. Only the generic actions of this task are
-	 * implemented; pane-specific ones show a short "not yet" status so the user
-	 * can see the binding was recognised.
+	 * Execute one logical action of the panes (the tree dialog has its own,
+	 * `dispatchInTreeDialog`). Every ActionId is listed, so adding one without
+	 * handling it here fails the type check.
 	 */
 	dispatch(action: ActionId): void {
 		switch (action) {
@@ -981,22 +782,23 @@ export class LazyPanel implements Component, Focusable {
 				this.moveCursorTo(Number.MAX_SAFE_INTEGER);
 				return;
 			case "scroll-content-down":
-				this.scrollContent(this.contentPageStep());
+				this.contentViewport.scrollBy(this.contentViewport.pageStep());
 				return;
 			case "scroll-content-up":
-				this.scrollContent(-this.contentPageStep());
+				this.contentViewport.scrollBy(-this.contentViewport.pageStep());
 				return;
 			case "content-center":
-				this.centerContent();
+				// zz：让高亮消息落在窗口正中（允许滚过末尾）；没有高亮的消息时提示一下。
+				if (!this.contentViewport.center()) this.setStatus(t("status.noContentSelected"));
 				return;
 			case "content-copy":
 				void this.copyContentBlock();
 				return;
 			case "tree-copy":
-				void this.copyTreeNode(this.currentTreeNode());
+				void copyTreeNode(this.flowHost, this.currentTreeNode());
 				return;
 			case "tree-label":
-				this.openLabelInput(this.currentTreeNode());
+				openLabelInput(this.flowHost, this.currentTreeNode());
 				return;
 			case "tree-open":
 				this.openTreeDialog();
@@ -1005,59 +807,71 @@ export class LazyPanel implements Component, Focusable {
 				this.toggleTreeFold();
 				return;
 			case "session-resume":
-				void this.resumeSession();
+				void resumeSession(this.flowHost);
 				return;
 			case "tree-restore":
-				this.restoreTreeNode(this.currentTreeNode());
+				restoreTreeNode(this.flowHost, this.currentTreeNode());
 				return;
 			case "session-delete":
-				this.confirmDeleteSession();
+				confirmDeleteSession(this.flowHost);
 				return;
 			case "session-rename":
-				this.openRenameInput();
+				openRenameInput(this.flowHost);
 				return;
 			case "session-sort":
 				void this.cycleSort();
 				return;
 			case "session-info":
-				void this.openSessionInfo();
+				void openSessionInfo(this.flowHost);
 				return;
 			case "session-new":
-				this.openNewSessionInput();
+				openNewSessionInput(this.flowHost);
 				return;
 			case "session-fork":
-				void this.startFork();
+				void startFork(this.flowHost);
 				return;
 			case "session-clone":
-				this.confirmCloneSession();
+				confirmCloneSession(this.flowHost);
 				return;
 			case "session-compact":
-				this.openCompactInput();
+				openCompactInput(this.flowHost);
 				return;
 			case "session-copy-last-reply":
-				void this.copyLastReply();
+				void copyLastReply(this.flowHost);
 				return;
 			case "session-export":
-				this.startExport();
+				startExport(this.flowHost);
 				return;
 			case "session-import":
-				this.openImportInput("");
+				openImportInput(this.flowHost, "");
 				return;
 			case "session-share":
-				this.confirmShareSession();
+				confirmShareSession(this.flowHost);
 				return;
 			case "session-toggle-select":
 				this.toggleSelect();
 				return;
 			case "session-pin":
-				void this.togglePin();
+				void togglePin(this.flowHost);
 				return;
 			case "changelog":
 				void this.openChangelog();
 				return;
-			default:
+			case "tree-filter-default":
+			case "tree-filter-no-tools":
+			case "tree-filter-user":
+			case "tree-filter-labeled":
+			case "tree-filter-all":
+			case "tree-dialog-close":
+				// 只在树对话框里有意义（dispatchInTreeDialog）；用户把它们绑到面板 scope 时提示一下。
 				this.setStatus(t("status.notImplemented", { action }));
 				return;
+			default: {
+				// 新增 ActionId 却忘了在上面处理时这里编译不过；运行时只可能是用户配置里写错的动作名（config 不校验名字）。
+				const unknown: never = action;
+				this.setStatus(t("status.notImplemented", { action: String(unknown) }));
+				return;
+			}
 		}
 	}
 
@@ -1068,7 +882,7 @@ export class LazyPanel implements Component, Focusable {
 	/** j/k: list panes move the cursor one row, the content pane scrolls one line. */
 	private moveCursor(delta: number): void {
 		if (this.state.focus === "content") {
-			this.scrollContent(delta);
+			this.contentViewport.scrollBy(delta);
 			return;
 		}
 		this.moveCursorTo(this.state.cursor[this.state.focus] + delta);
@@ -1077,7 +891,7 @@ export class LazyPanel implements Component, Focusable {
 	/** gg/G and absolute moves; the index is clamped to the focused list. */
 	private moveCursorTo(index: number): void {
 		const pane = this.state.focus;
-		if (pane === "content") this.setContentScroll(index);
+		if (pane === "content") this.contentViewport.scrollTo(index);
 		else if (pane === "sessions") this.setSessionsCursor(index);
 		else this.setTreeCursor(index);
 	}
@@ -1099,7 +913,7 @@ export class LazyPanel implements Component, Focusable {
 	/** Move the tree cursor (clamped, an index into the visible rows) and make the content pane follow. */
 	private setTreeCursor(index: number): void {
 		this.state.listScroll.tree = null;
-		const next = clamp(index, 0, Math.max(0, this.visibleTree.length - 1));
+		const next = this.treeView.clampIndex(index);
 		if (next === this.state.cursor.tree) {
 			this.o.requestRender();
 			return;
@@ -1107,48 +921,6 @@ export class LazyPanel implements Component, Focusable {
 		this.state.cursor.tree = next;
 		this.o.requestRender();
 		void this.syncContentToTree();
-	}
-
-	private scrollContent(delta: number): void {
-		this.setContentScroll(this.state.cursor.content + delta);
-	}
-
-	private setContentScroll(line: number): void {
-		// 普通滚动：回到常规夹取范围（清掉 zz 的越界居中标记），越界值会被夹回最后一整页。
-		this.contentCentered = false;
-		const next = clamp(line, 0, this.contentMaxScroll());
-		if (next === this.state.cursor.content) return;
-		this.state.cursor.content = next;
-		this.o.requestRender();
-	}
-
-	/** J/K from the sessions pane scroll the content pane by half a viewport. */
-	private contentPageStep(): number {
-		return Math.max(1, Math.floor(this.contentView.visible / 2));
-	}
-
-	/**
-	 * zz (content pane): scroll so the highlighted message sits in the middle of
-	 * the viewport (vim's zz). To center a message near the end of the file the
-	 * pane may scroll past the last full page — `contentCentered` lets the render
-	 * pad blanks below; any later scroll clears it. A no-op when the whole
-	 * conversation already fits (there is nothing to scroll).
-	 */
-	private centerContent(): void {
-		const target = this.state.contentHighlight;
-		if (!target || this.content.length === 0) {
-			this.setStatus(t("status.noContentSelected"));
-			return;
-		}
-		const layout = this.contentLayout();
-		const start = layout.starts.get(target);
-		if (start === undefined) return;
-		// 让选中消息的头部行落在窗口正中：起始行减去半个可见窗口，允许滚过末尾以居中末尾消息。
-		const half = Math.floor((this.contentView.visible - 1) / 2);
-		const next = clamp(start - half, 0, Math.max(0, layout.lines.length - 1));
-		this.contentCentered = true;
-		this.state.cursor.content = next;
-		this.o.requestRender();
 	}
 
 	/** y (content pane): copy the highlighted message's full text (same as TREE y). */
@@ -1159,7 +931,7 @@ export class LazyPanel implements Component, Focusable {
 			this.setStatus(t("status.noContentSelected"));
 			return Promise.resolve();
 		}
-		return this.copyEntryText(file, entryId);
+		return copyEntryText(this.flowHost, file, entryId);
 	}
 
 	private cycleFocus(delta: 1 | -1): void {
@@ -1199,9 +971,9 @@ export class LazyPanel implements Component, Focusable {
 	/** The focused pane's position as of `/`: the live search starts looking here and Esc comes back here. */
 	private snapshotOrigin(pane: PaneId): SearchOrigin {
 		if (pane === "tree") {
-			const row = this.visibleTree[this.state.cursor.tree];
+			const row = this.treeView.cursorRow();
 			// 树的匹配记的是整棵树的行号，所以原位置也换算成整棵树的行号；折叠状态一并记下。
-			const index = row ? this.tree.findIndex((r) => r.entryId === row.entryId) : 0;
+			const index = this.treeView.cursorTreeIndex();
 			return { pane, index: Math.max(0, index), ...(row ? { entryId: row.entryId } : {}), folded: new Set(this.state.treeFolded) };
 		}
 		return { pane, index: this.state.cursor[pane] };
@@ -1234,8 +1006,7 @@ export class LazyPanel implements Component, Focusable {
 		this.state.search[pane] = search;
 		// 折叠先回到搜索前的样子，再为新的目标展开（上一次按键跳到的匹配可能展开了别的段）。
 		if (pane === "tree" && origin.folded) this.state.treeFolded = new Set(origin.folded);
-		const from = matches.findIndex((m) => m >= origin.index);
-		const first = from >= 0 ? from : matches.length ? 0 : -1;
+		const first = firstMatchFrom(matches, origin.index);
 		if (first < 0) {
 			this.restoreOrigin(origin);
 			return;
@@ -1282,47 +1053,30 @@ export class LazyPanel implements Component, Focusable {
 				return;
 			case "tree": {
 				if (origin.folded) this.state.treeFolded = new Set(origin.folded);
-				this.refreshTreeView();
-				const idx = origin.entryId ? this.visibleTree.findIndex((r) => r.entryId === origin.entryId) : -1;
+				this.treeView.refresh();
+				const idx = this.treeView.indexOf(origin.entryId);
 				this.placeTreeCursor(idx >= 0 ? idx : this.state.cursor.tree);
 				return;
 			}
 			case "content":
-				this.setContentScroll(origin.index);
+				this.contentViewport.scrollTo(origin.index);
 				return;
 		}
 	}
 
 	/** Put the tree cursor on visible row `index` and sync the content pane even if the index did not change (the rows under it may have). */
 	private placeTreeCursor(index: number): void {
-		this.state.cursor.tree = clamp(index, 0, Math.max(0, this.visibleTree.length - 1));
+		this.state.cursor.tree = this.treeView.clampIndex(index);
 		this.o.requestRender();
 		void this.syncContentToTree();
 	}
 
 	/** Matches of `query` in `pane`: row indices of the sessions list / the whole tree, or body lines of the content layout. */
 	private findMatches(pane: PaneId, query: string): number[] {
-		if (pane === "content") return this.contentMatches(query);
+		if (pane === "content") return this.contentViewport.matches(query);
 		const parsed = parseSearchQuery(query);
 		if (pane === "sessions") return indicesWhere(this.sessions, (r) => matchSessionRow(r, parsed));
-		return indicesWhere(this.tree, (r) => matchTreeRow(r, parsed));
-	}
-
-	/**
-	 * Body lines of the current content layout matching `query` (free text only:
-	 * every token on the line, qualifiers mean nothing here). Cached per layout,
-	 * so a resize (which re-wraps the lines) recomputes them.
-	 */
-	private contentMatches(query: string): number[] {
-		const layout = this.contentLayout();
-		const c = this.contentSearchCache;
-		if (c && c.layout === layout && c.query === query) return c.matches;
-		const tokens = searchTokens(parseSearchQuery(query));
-		const matches = tokens.length
-			? indicesWhere(layout.lines, (line, i) => layout.searchable[i] === true && matchesTokens(stripTerminalSequences(line), tokens))
-			: [];
-		this.contentSearchCache = { layout, query, matches };
-		return matches;
+		return indicesWhere(this.treeView.rows, (r) => matchTreeRow(r, parsed));
 	}
 
 	/** Recompute a list pane's matches after its rows changed; the query stays. */
@@ -1336,16 +1090,10 @@ export class LazyPanel implements Component, Focusable {
 	/** Up-to-date matches of a pane's search (the content pane's follow the layout). */
 	private matchesOf(pane: PaneId, search: PaneSearch): number[] {
 		if (pane === "content") {
-			search.matches = this.contentMatches(search.query);
+			search.matches = this.contentViewport.matches(search.query);
 			search.current = search.matches.length ? clamp(search.current, 0, search.matches.length - 1) : -1;
 		}
 		return search.matches;
-	}
-
-	/** Row index in the whole tree of the pane's cursor row, -1 with no rows. */
-	private treeCursorIndex(): number {
-		const row = this.visibleTree[this.state.cursor.tree];
-		return row ? this.tree.findIndex((r) => r.entryId === row.entryId) : -1;
 	}
 
 	/**
@@ -1366,14 +1114,11 @@ export class LazyPanel implements Component, Focusable {
 			this.setStatus(t("status.noMatches"));
 			return;
 		}
-		let next: number;
-		if (pane === "content") {
-			next = search.current < 0 ? (delta > 0 ? 0 : matches.length - 1) : (search.current + delta + matches.length) % matches.length;
-		} else {
-			const pos = pane === "sessions" ? this.state.cursor.sessions : this.treeCursorIndex();
-			const i = delta > 0 ? matches.findIndex((m) => m > pos) : findLastIndex(matches, (m) => m < pos);
-			next = i >= 0 ? i : delta > 0 ? 0 : matches.length - 1;
-		}
+		// 列表面板从光标数起（vim 的 n / N）；CONTENT 没有光标，从上次跳到的匹配数起。
+		const next =
+			pane === "content"
+				? cycleMatch(search.current, delta, matches.length)
+				: stepMatch(matches, pane === "sessions" ? this.state.cursor.sessions : this.treeView.cursorTreeIndex(), delta);
 		search.current = next;
 		this.jumpToMatch(pane, matches[next]!);
 	}
@@ -1385,16 +1130,15 @@ export class LazyPanel implements Component, Focusable {
 				this.setSessionsCursor(index);
 				return;
 			case "tree": {
-				const row = this.tree[index];
+				const row = this.treeView.rows[index];
 				if (!row) return;
 				// 目标藏在折叠段里：展开它的祖先，右侧内容跟着高亮。
-				for (const id of foldedAncestors(this.tree, row.entryId, this.state.treeFolded)) this.state.treeFolded.delete(id);
-				this.refreshTreeView();
-				this.placeTreeCursor(this.visibleTree.findIndex((r) => r.entryId === row.entryId));
+				this.treeView.reveal(row.entryId);
+				this.placeTreeCursor(this.treeView.indexOf(row.entryId));
 				return;
 			}
 			case "content":
-				this.setContentScroll(index);
+				this.contentViewport.scrollTo(index);
 				return;
 		}
 	}
@@ -1416,12 +1160,12 @@ export class LazyPanel implements Component, Focusable {
 			return { terms, matches: new Set(matches), current: pos >= 0 ? this.state.cursor.sessions : undefined, position: pos + 1, total };
 		}
 		if (pane === "tree") {
-			const matched = new Set(matches.map((i) => this.tree[i]?.entryId));
+			const matched = new Set(matches.map((i) => this.treeView.rows[i]?.entryId));
 			const visible = new Set<number>();
-			this.visibleTree.forEach((r, i) => {
+			this.treeView.visible.forEach((r, i) => {
 				if (matched.has(r.entryId)) visible.add(i);
 			});
-			const pos = matches.indexOf(this.treeCursorIndex());
+			const pos = matches.indexOf(this.treeView.cursorTreeIndex());
 			return { terms, matches: visible, current: pos >= 0 ? this.state.cursor.tree : undefined, position: pos + 1, total };
 		}
 		const current = search.current >= 0 ? matches[search.current] : undefined;
@@ -1440,90 +1184,18 @@ export class LazyPanel implements Component, Focusable {
 	}
 
 	// -----------------------------------------------------------------------
-	// Tree node actions: copy / label
+	// Tree node under the cursor, tree reloads (y / T / Enter live in flows/tree-flows.ts)
 	// -----------------------------------------------------------------------
 
 	/** Tree row under the pane's cursor plus the file it belongs to, or undefined with a footer hint. */
 	private currentTreeNode(): TreeTarget | undefined {
-		const row = this.visibleTree[this.state.cursor.tree];
+		const row = this.treeView.cursorRow();
 		const file = this.loadedSessionFile;
 		if (!row || !file) {
 			this.setStatus(t("status.noTreeNode"));
 			return undefined;
 		}
 		return { file, row };
-	}
-
-	/** y: copy the node's full text (like /tree ctrl+x). */
-	private async copyTreeNode(target: TreeTarget | undefined): Promise<void> {
-		if (!target) return;
-		await this.copyEntryText(target.file, target.row.entryId);
-	}
-
-	/** Copy the full text of `entryId` in `file` to the clipboard (shared by TREE y and CONTENT y). */
-	private async copyEntryText(file: string, entryId: string): Promise<void> {
-		if (!this.o.actions) {
-			this.setStatus(t("status.copyUnavailable"));
-			return;
-		}
-		try {
-			const copied = await this.o.actions.copyNodeText(file, entryId);
-			if (this.disposed) return;
-			this.setStatus(copied ? t("status.copiedNode") : t("status.noTextToCopy"));
-		} catch (err) {
-			this.setStatus(t("status.copyFailed", { error: (err as Error).message }));
-		}
-	}
-
-	/** T: open the label dialog pre-filled with the node's current label. */
-	private openLabelInput(target: TreeTarget | undefined): void {
-		if (!target) return;
-		if (!this.o.actions) {
-			this.setStatus(t("status.labelUnavailable"));
-			return;
-		}
-		this.labelTarget = { file: target.file, entryId: target.row.entryId };
-		this.state.mode = "label";
-		// 弹窗标题右侧显示是给哪条消息打标签。
-		this.inputDialog.open({
-			title: labelDialogTitle(),
-			value: target.row.label ?? "",
-			subject: `${target.row.role}: ${target.row.text}`,
-			hints: labelDialogHints(),
-			onSubmit: (v) => void this.submitLabel(v),
-			onCancel: () => this.cancelLabel(),
-		});
-		this.inputDialog.focused = this._focused;
-		this.o.requestRender();
-	}
-
-	/** Enter in the label prompt: persist, then reload the tree so the row shows the new label. */
-	private async submitLabel(value: string): Promise<void> {
-		const target = this.labelTarget;
-		this.closeLabelInput();
-		if (!target || !this.o.actions) return;
-		const label = value.trim() || undefined;
-		try {
-			await this.o.actions.setNodeLabel(target.file, target.entryId, label);
-			if (this.disposed) return;
-			this.setStatus(label ? t("status.labelSet", { label }) : t("status.labelRemoved"));
-		} catch (err) {
-			this.setStatus(t("status.labelFailed", { error: (err as Error).message }));
-			return;
-		}
-		await this.reloadTree(target.file, target.entryId);
-	}
-
-	private cancelLabel(): void {
-		this.closeLabelInput();
-		this.o.requestRender();
-	}
-
-	private closeLabelInput(): void {
-		this.state.mode = this.baseMode();
-		this.inputDialog.close();
-		this.inputDialog.focused = false;
-		this.labelTarget = undefined;
 	}
 
 	/**
@@ -1537,14 +1209,27 @@ export class LazyPanel implements Component, Focusable {
 			if (this.disposed || this.loadedSessionFile !== file) return;
 			// 同一个会话：保留折叠状态（不再是段头的 id 会被 applyTreeFold 忽略）。
 			this.setTree(tree, this.state.treeFolded);
-			const idx = this.visibleTree.findIndex((r) => r.entryId === entryId);
-			this.state.cursor.tree = idx >= 0 ? idx : clamp(this.state.cursor.tree, 0, Math.max(0, this.visibleTree.length - 1));
+			this.treeView.keepCursorOn(entryId);
 			if (this.treeDialog.isOpen) this.refreshTreeDialog(entryId);
 			await this.syncContentToTree();
 		} catch (err) {
 			this.setStatus(t("status.reloadTreeFailed", { error: (err as Error).message }));
 		}
 		this.o.requestRender();
+	}
+
+	/**
+	 * `file` changed on disk (a rename appends a session_info entry): when it is
+	 * the loaded session reload its tree with the cursor kept on its node (the
+	 * `all` filter lists the new entry), otherwise follow the sessions cursor.
+	 */
+	private async refreshSession(file: string): Promise<void> {
+		if (file === this.loadedSessionFile) {
+			const entryId = this.treeView.cursorRow()?.entryId;
+			if (entryId) await this.reloadTree(file, entryId);
+		} else {
+			await this.followSessionsCursor();
+		}
 	}
 
 	// -----------------------------------------------------------------------
@@ -1558,15 +1243,15 @@ export class LazyPanel implements Component, Focusable {
 	 * segment to fold.
 	 */
 	private toggleTreeFold(): void {
-		const row = this.visibleTree[this.state.cursor.tree];
+		const row = this.treeView.cursorRow();
 		if (!row) {
 			this.setStatus(t("status.noTreeNode"));
 			return;
 		}
-		const target = this.toggleFold(this.tree, row.entryId);
+		const target = this.toggleFold(this.treeView.rows, row.entryId);
 		if (!target) return;
-		this.refreshTreeView();
-		this.state.cursor.tree = Math.max(0, this.visibleTree.findIndex((r) => r.entryId === target));
+		this.treeView.refresh();
+		this.state.cursor.tree = Math.max(0, this.treeView.indexOf(target));
 		this.o.requestRender();
 		// 光标从段内跳到了段头：右侧高亮跟着变。
 		if (target !== row.entryId) void this.syncContentToTree();
@@ -1579,15 +1264,8 @@ export class LazyPanel implements Component, Focusable {
 	 * trunk, where nothing folds.
 	 */
 	private toggleFold(base: TreeRow[], entryId: string): string | undefined {
-		const target = foldTarget(base, entryId);
-		if (!target) {
-			this.setStatus(t("status.nothingToFold"));
-			return undefined;
-		}
-		const folded = this.state.treeFolded;
-		// 光标在段头上：切换；在段内其他行：折叠所在段（此时这一段一定是展开的）。
-		if (target === entryId && folded.has(target)) folded.delete(target);
-		else folded.add(target);
+		const target = this.treeView.toggleFold(base, entryId);
+		if (!target) this.setStatus(t("status.nothingToFold"));
 		return target;
 	}
 
@@ -1602,13 +1280,13 @@ export class LazyPanel implements Component, Focusable {
 			return;
 		}
 		this.state.mode = "tree";
-		this.foldedBeforeSearch = undefined;
+		this.treeView.dropSuspendedFolds();
 		// 面板里的旧提示（比如"按 a 打开对话框"）到这里已经没用了，别留在对话框下面。
 		this.status = undefined;
 		const searchKey = labelsForFocus(this.keymap, TREE_DIALOG_SCOPE, "search")[0];
 		this.treeDialog.open({
 			// 刚打开时没有搜索，列出的行和小面板一样。
-			rows: this.visibleTree,
+			rows: this.treeView.visible,
 			folded: this.state.treeFolded,
 			initialIndex: this.state.cursor.tree,
 			filter: this.state.treeFilter,
@@ -1631,17 +1309,11 @@ export class LazyPanel implements Component, Focusable {
 		this.state.mode = "normal";
 		this.treeDialog.close();
 		this.treeDialog.focused = false;
-		// 搜索期间折叠是清空的：对话框一关搜索也就结束了，恢复搜索前的折叠状态。
-		if (this.foldedBeforeSearch) {
-			this.state.treeFolded = this.foldedBeforeSearch;
-			this.foldedBeforeSearch = undefined;
-		}
-		if (row) {
-			for (const id of foldedAncestors(this.tree, row.entryId, this.state.treeFolded)) this.state.treeFolded.delete(id);
-		}
-		this.refreshTreeView();
-		const idx = row ? this.visibleTree.findIndex((r) => r.entryId === row.entryId) : -1;
-		this.state.cursor.tree = idx >= 0 ? idx : clamp(this.state.cursor.tree, 0, Math.max(0, this.visibleTree.length - 1));
+		// 搜索期间折叠是清空的：对话框一关搜索也就结束了，恢复搜索前的折叠状态（再展开选中行所在的段）。
+		this.treeView.resumeFolds();
+		if (row) this.treeView.reveal(row.entryId);
+		else this.treeView.refresh();
+		this.treeView.keepCursorOn(row?.entryId);
 		this.o.requestRender();
 		void this.syncContentToTree();
 	}
@@ -1670,19 +1342,11 @@ export class LazyPanel implements Component, Focusable {
 			return;
 		}
 		if (matchesKeyId(data, "escape")) {
-			if (this.pending.length) this.clearPending();
+			if (this.keys.hasPending) this.keys.clear();
 			else this.closeTreeDialog();
 			return;
 		}
-		const pressed = [...this.pending, data];
-		const result = resolveKeys(this.bindings, TREE_DIALOG_SCOPE, pressed);
-		if (result.kind === "pending") {
-			this.pending = pressed;
-			this.armPendingTimer();
-			this.o.requestRender();
-			return;
-		}
-		this.clearPending();
+		const result = this.keys.feed(TREE_DIALOG_SCOPE, data);
 		if (result.kind !== "action") return;
 		// 外层 scope 里在对话框中关掉的动作（切面板、退出面板、n/N…）直接吞掉。
 		if (result.scope !== TREE_DIALOG_SCOPE && isDisabledIn(TREE_DIALOG_SCOPE, result.action)) return;
@@ -1708,13 +1372,13 @@ export class LazyPanel implements Component, Focusable {
 				this.treeDialog.focusSearch();
 				return;
 			case "tree-copy":
-				void this.copyTreeNode(this.dialogTreeNode());
+				void copyTreeNode(this.flowHost, this.dialogTreeNode());
 				return;
 			case "tree-label":
-				this.openLabelInput(this.dialogTreeNode());
+				openLabelInput(this.flowHost, this.dialogTreeNode());
 				return;
 			case "tree-restore":
-				this.restoreTreeNode(this.dialogTreeNode());
+				restoreTreeNode(this.flowHost, this.dialogTreeNode());
 				return;
 			case "tree-fold":
 				this.dialogToggleFold();
@@ -1757,15 +1421,15 @@ export class LazyPanel implements Component, Focusable {
 	/** Rows of the dialog before folding: the tree, narrowed to the search matches (re-parented) while a query is active. */
 	private dialogBaseRows(): TreeRow[] {
 		const raw = this.treeDialog.searchQuery;
-		if (!raw) return this.tree;
+		if (!raw) return this.treeView.rows;
 		const query = parseSearchQuery(raw);
-		return filterTreeRows(this.tree, (r) => matchTreeRow(r, query));
+		return filterTreeRows(this.treeView.rows, (r) => matchTreeRow(r, query));
 	}
 
 	/** Recompute what the dialog lists (search → fold) and keep its cursor on `keepEntryId` or the nearest listed ancestor. */
 	private refreshTreeDialog(keepEntryId: string | undefined): void {
 		const rows = applyTreeFold(this.dialogBaseRows(), this.state.treeFolded);
-		this.treeDialog.setRows(rows, this.state.treeFolded, nearestListedIndex(rows, this.tree, keepEntryId));
+		this.treeDialog.setRows(rows, this.state.treeFolded, nearestListedIndex(rows, this.treeView.rows, keepEntryId));
 	}
 
 	/**
@@ -1776,15 +1440,9 @@ export class LazyPanel implements Component, Focusable {
 	 */
 	private onDialogQueryChange(query: string): void {
 		const keep = this.treeDialog.selectedRow?.entryId;
-		if (query) {
-			// 第一次开始搜索时记住原来的折叠状态；之后每次改动查询都重新清空（pi 的做法）。
-			this.foldedBeforeSearch ??= new Set(this.state.treeFolded);
-			this.state.treeFolded.clear();
-		} else if (this.foldedBeforeSearch) {
-			this.state.treeFolded = this.foldedBeforeSearch;
-			this.foldedBeforeSearch = undefined;
-		}
-		this.refreshTreeView();
+		if (query) this.treeView.suspendFolds();
+		else this.treeView.resumeFolds();
+		this.treeView.refresh();
 		this.refreshTreeDialog(keep);
 	}
 
@@ -1801,7 +1459,7 @@ export class LazyPanel implements Component, Focusable {
 		}
 		const target = this.toggleFold(this.dialogBaseRows(), row.entryId);
 		if (!target) return;
-		this.refreshTreeView();
+		this.treeView.refresh();
 		this.refreshTreeDialog(target);
 	}
 
@@ -1825,10 +1483,9 @@ export class LazyPanel implements Component, Focusable {
 			const tree = await this.o.data.loadTree(file, filter);
 			if (this.disposed || this.loadedSessionFile !== file || this.state.treeFilter !== filter) return;
 			// 换过滤后全部展开；搜索前记住的折叠状态是旧树的，一并作废。
-			this.foldedBeforeSearch = undefined;
+			this.treeView.dropSuspendedFolds();
 			this.setTree(tree, new Set());
-			const idx = keep ? this.visibleTree.findIndex((r) => r.entryId === keep) : -1;
-			this.state.cursor.tree = idx >= 0 ? idx : clamp(this.state.cursor.tree, 0, Math.max(0, this.visibleTree.length - 1));
+			this.treeView.keepCursorOn(keep);
 			this.refreshTreeDialog(keep);
 		} catch (err) {
 			this.setStatus(t("status.reloadTreeFailed", { error: (err as Error).message }));
@@ -1836,7 +1493,7 @@ export class LazyPanel implements Component, Focusable {
 	}
 
 	// -----------------------------------------------------------------------
-	// Session actions: delete (d) / rename (r) / sort (s) / info (i)
+	// Sessions pane: selection, sort, the info box, changelog (@) — the dialog flows live in flows/session-flows.ts
 	// -----------------------------------------------------------------------
 
 	/** Session row under the cursor, or undefined with a footer hint. */
@@ -1844,113 +1501,6 @@ export class LazyPanel implements Component, Focusable {
 		const row = this.sessions[this.state.cursor.sessions];
 		if (!row) this.setStatus(t("status.noSessionSelected"));
 		return row;
-	}
-
-	/** Title of a session as the pane shows it: its name, else the first-message preview. */
-	private sessionTitle(row: SessionRow): string {
-		return row.name ?? row.preview ?? "(empty session)";
-	}
-
-	/**
-	 * d: ask before deleting the session under the cursor. The session pi has
-	 * open is refused up front, like pi's /resume (no dialog, just the message).
-	 */
-	private confirmDeleteSession(): void {
-		if (this.state.selectedSessionFiles.size > 0) {
-			this.confirmDeleteSelected();
-			return;
-		}
-		const row = this.currentSessionRow();
-		if (!row) return;
-		if (!this.o.actions?.deleteSession) {
-			this.setStatus(t("status.deleteUnavailable"));
-			return;
-		}
-		// 和 pi 内置 /resume 一样：当前打开的会话不能删；这里弹一个警告框告诉用户为什么。
-		if (findSessionIndex([row], this.currentSessionFile) === 0) {
-			this.openCannotDeleteAlert(this.sessionTitle(row));
-			return;
-		}
-		this.deleteTarget = row;
-		this.state.mode = "confirm";
-		this.selectDialog.open(
-			confirmDialogSpec({
-				title: deleteSessionTitle(),
-				subject: this.sessionTitle(row),
-				onConfirm: () => void this.deleteSession(),
-				onCancel: () => this.closeConfirm(),
-			}),
-		);
-		this.o.requestRender();
-	}
-
-	/**
-	 * d with a multi-selection: one confirmation for all selected sessions. The
-	 * session pi has open is left out (like a single d refuses it); when that
-	 * leaves nothing the footer says so without asking.
-	 *
-	 * 批量删除：列表顺序排好，跳过 pi 当前打开的会话，确认框标题带数量。
-	 */
-	private confirmDeleteSelected(): void {
-		if (!this.o.actions?.deleteSession) {
-			this.setStatus(t("status.deleteUnavailable"));
-			return;
-		}
-		const rows = this.sessions.filter((r) => this.state.selectedSessionFiles.has(r.file));
-		const targets = rows.filter((r) => findSessionIndex([r], this.currentSessionFile) !== 0);
-		if (targets.length === 0) {
-			// 选中的全是（其实只可能有一个）当前打开的会话：弹警告框，什么都不删。
-			const active = rows.find((r) => findSessionIndex([r], this.currentSessionFile) === 0);
-			this.openCannotDeleteAlert(active ? this.sessionTitle(active) : undefined);
-			return;
-		}
-		const skipped = rows.length - targets.length;
-		// 当前打开的会话被跳过：它不会被删，也不该继续留在选中里。
-		for (const r of rows) if (!targets.includes(r)) this.state.selectedSessionFiles.delete(r.file);
-		this.batchDeleteTargets = targets;
-		this.state.mode = "confirm";
-		this.selectDialog.open(
-			confirmDialogSpec({
-				title: deleteSessionsTitle(targets.length),
-				subject: skipped
-					? t("confirm.deleteSkipped", { subjects: targets.map((r) => this.sessionTitle(r)).join(", ") })
-					: targets.map((r) => this.sessionTitle(r)).join(", "),
-				onConfirm: () => void this.deleteSelected(),
-				onCancel: () => this.closeConfirm(),
-			}),
-		);
-		this.o.requestRender();
-	}
-
-	/**
-	 * Yes on the batch confirmation: delete one by one; the ones that fail stay
-	 * listed and selected, the first error goes to the footer.
-	 */
-	private async deleteSelected(): Promise<void> {
-		const targets = this.batchDeleteTargets ?? [];
-		this.closeConfirm();
-		const remove = this.o.actions?.deleteSession;
-		if (!remove || targets.length === 0) return;
-		this.setStatus(t("status.deletingN", { count: targets.length }));
-		let deleted = 0;
-		let firstError: string | undefined;
-		const removed: string[] = [];
-		for (const row of targets) {
-			try {
-				await remove(row.file);
-				deleted++;
-				this.state.selectedSessionFiles.delete(row.file);
-				removed.push(row.file);
-			} catch (err) {
-				firstError ??= `${this.sessionTitle(row)}: ${(err as Error).message}`;
-			}
-			if (this.disposed) return;
-		}
-		this.unpinAfterDelete(removed);
-		const failed = targets.length - deleted;
-		const summary = failed ? t("status.batchDeletedFailed", { deleted, failed, error: firstError }) : t("status.sessionsDeleted", { count: deleted });
-		if (await this.listSessions(undefined)) this.setStatus(summary);
-		await this.followSessionsCursor();
 	}
 
 	/** space: toggle the session under the cursor in the multi-selection. */
@@ -1966,70 +1516,6 @@ export class LazyPanel implements Component, Focusable {
 	private clearSelection(): void {
 		this.state.selectedSessionFiles.clear();
 		this.setStatus(t("status.selectionCleared"));
-	}
-
-	/**
-	 * p: pin / unpin the session under the cursor (or every selected session).
-	 * With a multi-selection: pin them all when any is still unpinned, otherwise
-	 * unpin them all. Newly pinned sessions go to the top in list order (the most
-	 * recent pin ends up first); the list is re-sorted with the cursor following
-	 * its session. Persisted to disk via `setPins`; a save failure is reverted.
-	 */
-	private async togglePin(): Promise<void> {
-		if (!this.o.actions?.setPins) {
-			this.setStatus(t("status.pinUnavailable"));
-			return;
-		}
-		let targets: string[];
-		if (this.state.selectedSessionFiles.size > 0) {
-			// 按列表顺序取所选会话，置顶时作为一组放到最上面。
-			targets = this.sessions.filter((r) => this.state.selectedSessionFiles.has(r.file)).map((r) => r.file);
-		} else {
-			const row = this.currentSessionRow();
-			if (!row) return;
-			targets = [row.file];
-		}
-		if (targets.length === 0) return;
-		const pinnedSet = new Set(this.state.pinnedFiles);
-		const toPin = targets.filter((f) => !pinnedSet.has(f));
-		const pinning = toPin.length > 0;
-		// 有未置顶的就整组置顶，否则整组取消置顶（和多选删除同一套"整组"语义）。
-		const next = pinning
-			? [...toPin, ...this.state.pinnedFiles]
-			: this.state.pinnedFiles.filter((f) => !targets.includes(f));
-		const prev = this.state.pinnedFiles;
-		this.state.pinnedFiles = next;
-		try {
-			await this.o.actions.setPins(next);
-			if (this.disposed) return;
-		} catch (err) {
-			this.state.pinnedFiles = prev;
-			this.setStatus(t("status.pinFailed", { error: (err as Error).message }));
-			return;
-		}
-		const keep = this.sessions[this.state.cursor.sessions]?.file;
-		const count = pinning ? toPin.length : targets.length;
-		const status = pinning ? t("status.pinned", { count }) : t("status.unpinned", { count });
-		if (await this.listSessions(keep)) this.setStatus(status);
-		await this.followSessionsCursor();
-	}
-
-	/** Drop `files` from the pin list and persist if anything changed (called after a delete). */
-	private unpinAfterDelete(files: Iterable<string>): void {
-		const drop = new Set(files);
-		if (!this.state.pinnedFiles.some((f) => drop.has(f))) return;
-		this.state.pinnedFiles = this.state.pinnedFiles.filter((f) => !drop.has(f));
-		void this.o.actions?.setPins?.(this.state.pinnedFiles);
-	}
-
-	/**
-	 * Actions that only make sense for one session (rename, fork, clone, export,
-	 * share) refuse while several sessions are selected. Returns true when refused.
-	 */
-	private refuseMultiSelect(label: string): boolean {
-		if (this.state.selectedSessionFiles.size <= 1) return false;
-		this.setStatus(t("status.multiSelectRefused", { action: t(`enter.${label}`) }));
-		return true;
 	}
 
 	/** @: show pi's changelog. Rendering the whole file is slow, so the box opens with a loading spinner first. */
@@ -2100,550 +1586,6 @@ export class LazyPanel implements Component, Focusable {
 		this.changelogSpinner = undefined;
 	}
 
-	private closeConfirm(): void {
-		this.state.mode = this.baseMode();
-		this.selectDialog.close();
-		this.deleteTarget = undefined;
-		this.batchDeleteTargets = undefined;
-		this.o.requestRender();
-	}
-
-	/**
-	 * Warn (in a box, not just the footer) that the session pi has open can't be
-	 * deleted. Reuses the select dialog + "confirm" mode so Enter / Esc / OK all
-	 * dismiss it through `closeConfirm`; nothing is ever deleted from here.
-	 */
-	private openCannotDeleteAlert(subject: string | undefined): void {
-		this.state.mode = "confirm";
-		this.selectDialog.open(
-			alertDialogSpec({
-				title: cannotDeleteActiveTitle(),
-				...(subject ? { subject } : {}),
-				onClose: () => this.closeConfirm(),
-			}),
-		);
-		this.o.requestRender();
-	}
-
-	/** Yes in the confirmation: remove the file, then re-list with the cursor clamped (TREE / CONTENT follow). */
-	private async deleteSession(): Promise<void> {
-		const row = this.deleteTarget;
-		this.closeConfirm();
-		const remove = this.o.actions?.deleteSession;
-		if (!row || !remove) return;
-		this.setStatus(t("status.deleting"));
-		let method: DeleteMethod;
-		try {
-			method = await remove(row.file);
-			if (this.disposed) return;
-		} catch (err) {
-			this.setStatus(t("status.deleteFailed", { error: (err as Error).message }));
-			return;
-		}
-		this.state.selectedSessionFiles.delete(row.file);
-		this.unpinAfterDelete([row.file]);
-		// 删掉的行没了，光标夹回范围内；光标下换了会话就重新加载右边。
-		if (await this.listSessions(undefined)) this.setStatus(method === "trash" ? t("status.movedToTrash") : t("status.deleted"));
-		await this.followSessionsCursor();
-	}
-
-	/** r: open the Rename prompt pre-filled with the session's current name. */
-	private openRenameInput(): void {
-		if (this.refuseMultiSelect("rename")) return;
-		const row = this.currentSessionRow();
-		if (!row) return;
-		if (!this.o.actions?.renameSession) {
-			this.setStatus(t("status.renameUnavailable"));
-			return;
-		}
-		this.renameTarget = row;
-		this.state.mode = "rename";
-		// 弹窗标题右侧显示是给哪个会话改名（首条消息预览，名字本身在输入框里）。
-		this.inputDialog.open({
-			title: renameDialogTitle(),
-			value: row.name ?? "",
-			subject: row.preview || row.id,
-			hints: renameDialogHints(),
-			onSubmit: (v) => void this.submitRename(v),
-			onCancel: () => this.closeRenameInput(),
-		});
-		this.inputDialog.focused = this._focused;
-		this.o.requestRender();
-	}
-
-	/** Enter in the Rename prompt: persist, then re-list so the row shows the new name (cursor stays on it). */
-	private async submitRename(value: string): Promise<void> {
-		const row = this.renameTarget;
-		this.closeRenameInput();
-		const rename = this.o.actions?.renameSession;
-		if (!row || !rename) return;
-		const name = value.trim();
-		try {
-			await rename(row.file, name);
-			if (this.disposed) return;
-		} catch (err) {
-			this.setStatus(t("status.renameFailed", { error: (err as Error).message }));
-			return;
-		}
-		if (await this.listSessions(row.file)) this.setStatus(name ? t("status.renamed", { name }) : t("status.nameRemoved"));
-		// 改名会在会话文件里追加一条 session_info：TREE 在 all 过滤下要能看到它，光标留在原节点。
-		if (row.file === this.loadedSessionFile) {
-			const entryId = this.visibleTree[this.state.cursor.tree]?.entryId;
-			if (entryId) await this.reloadTree(row.file, entryId);
-		} else {
-			await this.followSessionsCursor();
-		}
-	}
-
-	private closeRenameInput(): void {
-		this.state.mode = this.baseMode();
-		this.inputDialog.close();
-		this.inputDialog.focused = false;
-		this.renameTarget = undefined;
-		this.o.requestRender();
-	}
-
-	/** n: prompt for an optional name, then start a fresh session (/new) and close the panel. */
-	private openNewSessionInput(): void {
-		if (!this.o.actions?.newSession) {
-			this.setStatus(t("status.newUnavailable"));
-			return;
-		}
-		this.state.mode = "new";
-		this.inputDialog.open({
-			title: newSessionDialogTitle(),
-			value: "",
-			hints: newSessionDialogHints(),
-			onSubmit: (v) => void this.submitNewSession(v),
-			onCancel: () => this.closeNewSessionInput(),
-		});
-		this.inputDialog.focused = this._focused;
-		this.o.requestRender();
-	}
-
-	/** Enter in the New session prompt: create it (naming it when non-empty), then close via `enter()`. */
-	private async submitNewSession(value: string): Promise<void> {
-		const create = this.o.actions?.newSession;
-		this.closeNewSessionInput();
-		if (!create) return;
-		const name = value.trim();
-		await this.enter("new", () => create(name));
-	}
-
-	private closeNewSessionInput(): void {
-		this.state.mode = this.baseMode();
-		this.inputDialog.close();
-		this.inputDialog.focused = false;
-		this.o.requestRender();
-	}
-
-	/** c: prompt for optional focus instructions, then compact the cursor session (/compact) and open it. */
-	private openCompactInput(): void {
-		if (this.refuseMultiSelect("compact")) return;
-		const row = this.currentSessionRow();
-		if (!row) return;
-		if (!this.o.actions?.compactSession) {
-			this.setStatus(t("status.compactUnavailable"));
-			return;
-		}
-		this.compactTarget = row;
-		this.state.mode = "compact";
-		// 标题右侧显示压缩的是哪个会话（首条消息预览）；输入框留空 = 用 pi 的默认压缩指令。
-		this.inputDialog.open({
-			title: compactDialogTitle(),
-			value: "",
-			subject: row.preview || row.id,
-			hints: compactDialogHints(),
-			onSubmit: (v) => void this.submitCompact(v),
-			onCancel: () => this.closeCompactInput(),
-		});
-		this.inputDialog.focused = this._focused;
-		this.o.requestRender();
-	}
-
-	/** Enter in the Compact prompt: compact the session (blank = pi's default instructions), then close via `enter()`. */
-	private async submitCompact(value: string): Promise<void> {
-		const row = this.compactTarget;
-		const compact = this.o.actions?.compactSession;
-		this.closeCompactInput();
-		if (!row || !compact) return;
-		const instructions = value.trim();
-		await this.enter("compact", () => compact(row.file, instructions || undefined));
-	}
-
-	private closeCompactInput(): void {
-		this.state.mode = this.baseMode();
-		this.inputDialog.close();
-		this.inputDialog.focused = false;
-		this.compactTarget = undefined;
-		this.o.requestRender();
-	}
-
-	/** o: pick the user message to fork before (pi's /fork selector), then confirm and fork. */
-	private async startFork(): Promise<void> {
-		if (this.refuseMultiSelect("fork")) return;
-		const row = this.currentSessionRow();
-		if (!row) return;
-		if (!this.o.actions?.forkSession || !this.o.data.loadForkPoints) {
-			this.setStatus(t("status.forkUnavailable"));
-			return;
-		}
-		let points: ForkPoint[];
-		try {
-			points = await this.o.data.loadForkPoints(row.file);
-			if (this.disposed) return;
-		} catch (err) {
-			this.setStatus(t("status.forkFailed", { error: (err as Error).message }));
-			return;
-		}
-		if (points.length === 0) {
-			this.setStatus(t("status.noForkMessages"));
-			return;
-		}
-		this.forkTarget = { file: row.file, subject: this.sessionTitle(row), points };
-		// 默认停在最后一条 user 消息（和 pi 内置 /fork 一致）。
-		this.openForkSelector(points.length - 1);
-	}
-
-	/** The fork selector with the cursor on `index` (Esc / No on the confirmation comes back onto that message). */
-	private openForkSelector(index: number): void {
-		const target = this.forkTarget;
-		if (!target) return;
-		this.state.mode = "fork";
-		this.selectDialog.open({
-			title: forkDialogTitle(),
-			items: target.points.map((p) => p.text),
-			initialIndex: index,
-			subject: target.subject,
-			hints: forkDialogHints(),
-			// 消息多了按窗口滚动，不撑破终端。
-			maxRows: this.dialogMaxRows(),
-			onSelect: (i) => this.confirmFork(i),
-			onCancel: () => this.closeForkDialogs(),
-		});
-		this.o.requestRender();
-	}
-
-	/** A picked message → the Yes / No confirmation (CLAUDE.md rule 7) before the fork happens. */
-	private confirmFork(index: number): void {
-		const target = this.forkTarget;
-		const point = target?.points[index];
-		if (!target || !point) {
-			this.closeForkDialogs();
-			return;
-		}
-		this.state.mode = "fork";
-		this.selectDialog.open(
-			confirmDialogSpec({
-				title: forkSessionTitle(),
-				subject: point.text,
-				onConfirm: () => void this.runFork(target.file, point.entryId),
-				// Esc / No：退回选择器，光标停在刚选中的那条消息上。
-				onCancel: () => this.openForkSelector(index),
-			}),
-		);
-		this.o.requestRender();
-	}
-
-	/** Confirmed: fork before the picked message (pi puts its text back into the fork's editor), then close. */
-	private async runFork(file: string, entryId: string): Promise<void> {
-		const fork = this.o.actions?.forkSession;
-		this.closeForkDialogs();
-		if (!fork) return;
-		await this.enter("fork", () => fork(file, entryId));
-	}
-
-	private closeForkDialogs(): void {
-		this.state.mode = this.baseMode();
-		this.selectDialog.close();
-		this.forkTarget = undefined;
-		this.o.requestRender();
-	}
-
-	/** y: confirm, then clone the active branch of the session under the cursor to a new file (/clone). */
-	private confirmCloneSession(): void {
-		if (this.refuseMultiSelect("clone")) return;
-		const row = this.currentSessionRow();
-		if (!row) return;
-		if (!this.o.actions?.cloneSession) {
-			this.setStatus(t("status.cloneUnavailable"));
-			return;
-		}
-		this.cloneTarget = row;
-		this.state.mode = "clone";
-		this.selectDialog.open(
-			confirmDialogSpec({
-				title: cloneSessionTitle(),
-				subject: this.sessionTitle(row),
-				onConfirm: () => void this.runClone(),
-				onCancel: () => this.closeCloneConfirm(),
-			}),
-		);
-		this.o.requestRender();
-	}
-
-	private async runClone(): Promise<void> {
-		const row = this.cloneTarget;
-		const clone = this.o.actions?.cloneSession;
-		this.closeCloneConfirm();
-		if (!row || !clone) return;
-		await this.enter("clone", () => clone(row.file));
-	}
-
-	private closeCloneConfirm(): void {
-		this.state.mode = this.baseMode();
-		this.selectDialog.close();
-		this.cloneTarget = undefined;
-		this.o.requestRender();
-	}
-
-	/** Y: copy the last assistant reply of the session under the cursor to the clipboard (/copy). */
-	private async copyLastReply(): Promise<void> {
-		const row = this.currentSessionRow();
-		if (!row) return;
-		const copy = this.o.actions?.copyLastReply;
-		if (!copy) {
-			this.setStatus(t("status.copyUnavailable"));
-			return;
-		}
-		try {
-			const copied = await copy(row.file);
-			if (this.disposed) return;
-			this.setStatus(copied ? t("status.copiedLastReply") : t("status.noReplyToCopy"));
-		} catch (err) {
-			this.setStatus(t("status.copyFailed", { error: (err as Error).message }));
-		}
-	}
-
-	/** e: pick HTML / JSONL, then the output path, for the session under the cursor (/export). */
-	private startExport(): void {
-		if (this.refuseMultiSelect("export")) return;
-		const row = this.currentSessionRow();
-		if (!row) return;
-		if (!this.o.actions?.exportSession || !this.o.actions.exportTarget) {
-			this.setStatus(t("status.exportUnavailable"));
-			return;
-		}
-		this.exportJob = { file: row.file, subject: this.sessionTitle(row) };
-		this.openExportMenu(0);
-	}
-
-	/** The format menu with the cursor on `index` (Esc from the path prompt comes back onto the chosen format). */
-	private openExportMenu(index: number): void {
-		const job = this.exportJob;
-		if (!job) return;
-		this.state.mode = "export";
-		this.selectDialog.open({
-			title: exportFormatTitle(),
-			items: exportFormats().map((f) => f.label),
-			initialIndex: index,
-			subject: job.subject,
-			hints: exportFormatHints(),
-			onSelect: (i) => {
-				const format = exportFormats()[i]?.format;
-				if (format) this.openExportPath(format);
-			},
-			onCancel: () => this.closeExportDialogs(),
-		});
-		this.o.requestRender();
-	}
-
-	/**
-	 * The output-path prompt, pre-filled with pi's default (or `value`, what the
-	 * user typed before backing out of the overwrite confirmation).
-	 */
-	private openExportPath(format: ExportFormat, value?: string): void {
-		const job = this.exportJob;
-		const resolveTarget = this.o.actions?.exportTarget;
-		if (!job || !resolveTarget) return;
-		job.format = format;
-		this.selectDialog.close();
-		this.state.mode = "export";
-		this.inputDialog.open({
-			title: exportPathTitle(),
-			// 预填 pi 的默认路径（绝对路径），用户一眼能看到会写到哪里；改成目录就在里面用默认文件名。
-			value: value ?? resolveTarget(job.file, format, "").path,
-			subject: job.subject,
-			hints: exportPathHints(),
-			onSubmit: (v) => this.submitExportPath(v),
-			// Esc：退回格式菜单，光标停在刚选的格式上。
-			onCancel: () => {
-				this.inputDialog.close();
-				this.inputDialog.focused = false;
-				this.openExportMenu(EXPORT_FORMAT_ORDER.indexOf(format));
-			},
-		});
-		this.inputDialog.focused = this._focused;
-		this.o.requestRender();
-	}
-
-	/** Enter in the path prompt: export right away, or ask first when a file is already there. */
-	private submitExportPath(value: string): void {
-		const job = this.exportJob;
-		const format = job?.format;
-		const resolveTarget = this.o.actions?.exportTarget;
-		this.inputDialog.close();
-		this.inputDialog.focused = false;
-		if (!job || !format || !resolveTarget) {
-			this.closeExportDialogs();
-			return;
-		}
-		const target = resolveTarget(job.file, format, value);
-		if (!target.exists) {
-			void this.runExport(job.file, format, target.path);
-			return;
-		}
-		// 覆盖已有文件是破坏性操作，先确认（CLAUDE.md 第 7 条）；No / Esc 退回路径输入框，保留刚才输入的内容。
-		this.state.mode = "export";
-		this.selectDialog.open(
-			confirmDialogSpec({
-				title: overwriteFileTitle(),
-				subject: target.path,
-				onConfirm: () => void this.runExport(job.file, format, target.path),
-				onCancel: () => this.openExportPath(format, value),
-			}),
-		);
-		this.o.requestRender();
-	}
-
-	/** Write the export; the panel stays open and the footer says where the file went. */
-	private async runExport(file: string, format: ExportFormat, path: string): Promise<void> {
-		const write = this.o.actions?.exportSession;
-		this.closeExportDialogs();
-		if (!write) return;
-		this.setStatus(t("status.exporting"));
-		try {
-			const written = await write(file, format, path);
-			if (this.disposed) return;
-			this.setStatus(t("status.exportedTo", { path: written }));
-		} catch (err) {
-			if (this.disposed) return;
-			this.setStatus(t("status.exportFailed", { error: (err as Error).message }));
-		}
-	}
-
-	private closeExportDialogs(): void {
-		this.state.mode = this.baseMode();
-		this.selectDialog.close();
-		this.inputDialog.close();
-		this.inputDialog.focused = false;
-		this.exportJob = undefined;
-		this.o.requestRender();
-	}
-
-	/** I: ask for the JSONL to import (`value` = what was typed before backing out of the confirmation). */
-	private openImportInput(value: string): void {
-		if (!this.o.actions?.importSession) {
-			this.setStatus(t("status.importUnavailable"));
-			return;
-		}
-		this.selectDialog.close();
-		this.state.mode = "import";
-		this.inputDialog.open({
-			title: importDialogTitle(),
-			value,
-			subject: importDialogSubject(),
-			hints: importDialogHints(),
-			onSubmit: (v) => this.confirmImport(v),
-			onCancel: () => this.closeImportDialogs(),
-		});
-		this.inputDialog.focused = this._focused;
-		this.o.requestRender();
-	}
-
-	/** Enter in the import prompt: confirm like pi's /import ("Replace current session with …?"). */
-	private confirmImport(value: string): void {
-		this.inputDialog.close();
-		this.inputDialog.focused = false;
-		const path = value.trim();
-		if (!path) {
-			this.closeImportDialogs();
-			this.setStatus(t("status.importNoFile"));
-			return;
-		}
-		this.state.mode = "import";
-		this.selectDialog.open(
-			confirmDialogSpec({
-				title: importSessionTitle(),
-				subject: path,
-				onConfirm: () => void this.runImport(path),
-				// Esc / No：退回输入框，保留刚才输入的路径。
-				onCancel: () => this.openImportInput(value),
-			}),
-		);
-		this.o.requestRender();
-	}
-
-	/** Confirmed: copy the file into the session folder and switch to it, closing the panel via `enter()`. */
-	private async runImport(input: string): Promise<void> {
-		const load = this.o.actions?.importSession;
-		this.closeImportDialogs();
-		if (!load) return;
-		await this.enter("import", () => load(input));
-	}
-
-	private closeImportDialogs(): void {
-		this.state.mode = this.baseMode();
-		this.selectDialog.close();
-		this.inputDialog.close();
-		this.inputDialog.focused = false;
-		this.o.requestRender();
-	}
-
-	/** S: confirm (the session leaves the machine), then upload it as a secret gist (/share). */
-	private confirmShareSession(): void {
-		if (this.refuseMultiSelect("share")) return;
-		const row = this.currentSessionRow();
-		if (!row) return;
-		if (!this.o.actions?.shareSession) {
-			this.setStatus(t("status.shareUnavailable"));
-			return;
-		}
-		this.state.mode = "share";
-		this.selectDialog.open(
-			confirmDialogSpec({
-				title: shareSessionTitle(),
-				subject: this.sessionTitle(row),
-				onConfirm: () => void this.runShare(row.file),
-				onCancel: () => this.closeShareConfirm(),
-			}),
-		);
-		this.o.requestRender();
-	}
-
-	/** Upload, then put the viewer link on the clipboard (a long link may not fit the footer) and show it. */
-	private async runShare(file: string): Promise<void> {
-		const share = this.o.actions?.shareSession;
-		this.closeShareConfirm();
-		if (!share) return;
-		this.setStatus(t("status.sharing"));
-		let result: ShareResult;
-		try {
-			result = await share(file);
-			if (this.disposed) return;
-		} catch (err) {
-			if (this.disposed) return;
-			this.setStatus(t("status.shareFailed", { error: (err as Error).message }));
-			return;
-		}
-		const copy = this.o.actions?.copyText;
-		try {
-			if (!copy) throw new Error("no clipboard");
-			await copy(result.url);
-			if (this.disposed) return;
-			this.setStatus(t("status.shareUrlCopied", { url: result.url }));
-		} catch {
-			if (this.disposed) return;
-			this.setStatus(t("status.shared", { url: result.url }));
-		}
-	}
-
-	private closeShareConfirm(): void {
-		this.state.mode = this.baseMode();
-		this.selectDialog.close();
-		this.o.requestRender();
-	}
-
 	/** Rows a centered menu may show at once before it scrolls: leave room for borders + footer. */
 	private dialogMaxRows(): number {
 		return Math.max(1, this.o.getHeight() - 6);
@@ -2659,50 +1601,11 @@ export class LazyPanel implements Component, Focusable {
 		await this.followSessionsCursor();
 	}
 
-	/** i: load what /session shows for the session under the cursor and open the info box. */
-	private async openSessionInfo(): Promise<void> {
-		const row = this.currentSessionRow();
-		if (!row) return;
-		const load = this.o.data.loadSessionInfo;
-		if (!load) {
-			this.setStatus(t("status.sessionInfoUnavailable"));
-			return;
-		}
-		let info: SessionInfo | undefined;
-		try {
-			info = await load(row.file);
-		} catch (err) {
-			this.setStatus(t("status.sessionInfoFailed", { error: (err as Error).message }));
-			return;
-		}
-		if (this.disposed) return;
-		if (!info) {
-			this.setStatus(t("status.sessionInfoCannotRead", { file: row.file }));
-			return;
-		}
+	/** The read-only Session Info box (i): `onCopy` gets its text on y, Esc / q close it. */
+	private openInfo(info: SessionInfo, onCopy: (text: string) => void): void {
 		this.state.mode = "info";
-		this.infoDialog.open({
-			info,
-			onCopy: (text) => void this.copySessionInfo(text),
-			onClose: () => this.closeSessionInfo(),
-		});
+		this.infoDialog.open({ info, onCopy, onClose: () => this.closeSessionInfo() });
 		this.o.requestRender();
-	}
-
-	/** y in the info box: the whole text goes to the clipboard, the box stays open. */
-	private async copySessionInfo(text: string): Promise<void> {
-		const copy = this.o.actions?.copyText;
-		if (!copy) {
-			this.setStatus(t("status.copyUnavailable"));
-			return;
-		}
-		try {
-			await copy(text);
-			if (this.disposed) return;
-			this.setStatus(t("status.copiedSessionInfo"));
-		} catch (err) {
-			this.setStatus(t("status.copyFailed", { error: (err as Error).message }));
-		}
 	}
 
 	private closeSessionInfo(): void {
@@ -2712,131 +1615,8 @@ export class LazyPanel implements Component, Focusable {
 	}
 
 	// -----------------------------------------------------------------------
-	// Enter: resume a session / restore to a tree node
+	// Handing control to pi: Enter (resume / restore), n, o, y, c, I
 	// -----------------------------------------------------------------------
-
-	/** Enter in SESSIONS: switch pi to the session under the cursor (/resume), then close. */
-	private async resumeSession(): Promise<void> {
-		const row = this.sessions[this.state.cursor.sessions];
-		if (!row) {
-			this.setStatus(t("status.noSessionSelected"));
-			return;
-		}
-		const actions = this.o.actions;
-		if (!actions) {
-			this.setStatus(t("status.resumeUnavailable"));
-			return;
-		}
-		await this.enter("resume", () => actions.resumeSession(row.file));
-	}
-
-	/**
-	 * Enter in TREE: continue from the node under the cursor (/tree restore), then close.
-	 *
-	 * 和 pi 内置 /tree 一样先问怎么处理被放弃的分支（Summarize branch? 菜单）；光标就在
-	 * 活动叶子上时 Enter 等于直接进入该会话，不问；pi 的 branchSummary.skipPrompt 打开时也不问。
-	 */
-	private restoreTreeNode(target: TreeTarget | undefined): void {
-		if (!target) return;
-		if (!this.o.actions) {
-			this.setStatus(t("status.restoreUnavailable"));
-			return;
-		}
-		const restore: RestoreTarget = {
-			file: target.file,
-			entryId: target.row.entryId,
-			subject: `${target.row.role}: ${target.row.text}`,
-		};
-		if (target.row.isLeaf || this.o.skipSummaryPrompt) {
-			void this.runRestore(restore, { summarize: false });
-			return;
-		}
-		this.openSummaryMenu(restore, 0);
-	}
-
-	/** The three-way menu of /tree; `index` is where the cursor starts (Esc from the custom prompt comes back onto that entry). */
-	private openSummaryMenu(target: RestoreTarget, index: number): void {
-		this.restoreTarget = target;
-		this.state.mode = "restore";
-		this.selectDialog.open({
-			title: summaryMenuTitle(),
-			items: summaryMenu().map((m) => m.label),
-			initialIndex: index,
-			subject: target.subject,
-			hints: summaryMenuHints(),
-			onSelect: (i) => this.chooseSummary(i),
-			// Esc：退回 tree 面板，什么都不做（pi 是退回 tree 选择器）。
-			onCancel: () => this.closeRestoreDialogs(),
-		});
-		this.o.requestRender();
-	}
-
-	/** Enter in the menu: restore right away, or ask for the custom instructions first. */
-	private chooseSummary(index: number): void {
-		const target = this.restoreTarget;
-		const choice = SUMMARY_CHOICES[index];
-		this.closeRestoreDialogs();
-		if (!target || !choice) return;
-		switch (choice) {
-			case "none":
-				void this.runRestore(target, { summarize: false });
-				return;
-			case "summarize":
-				void this.runRestore(target, { summarize: true });
-				return;
-			case "custom":
-				this.openCustomPrompt(target);
-				return;
-		}
-	}
-
-	/** "Summarize with custom prompt": a one-line prompt for the summarizer instructions (pi uses a multi-line editor). */
-	private openCustomPrompt(target: RestoreTarget): void {
-		this.restoreTarget = target;
-		this.state.mode = "restore";
-		this.inputDialog.open({
-			title: customPromptTitle(),
-			subject: target.subject,
-			hints: customPromptHints(),
-			onSubmit: (v) => this.submitCustomPrompt(v),
-			// Esc：退回三选菜单，光标停在 custom prompt 那一项，和 pi 一致。
-			onCancel: () => {
-				this.closeRestoreDialogs();
-				this.openSummaryMenu(target, CUSTOM_PROMPT_INDEX);
-			},
-		});
-		this.inputDialog.focused = this._focused;
-		this.o.requestRender();
-	}
-
-	/** Enter in the custom prompt: summarize with the instructions (blank = pi's default prompt). */
-	private submitCustomPrompt(value: string): void {
-		const target = this.restoreTarget;
-		this.closeRestoreDialogs();
-		if (!target) return;
-		const instructions = value.trim();
-		void this.runRestore(target, instructions ? { summarize: true, customInstructions: instructions } : { summarize: true });
-	}
-
-	private closeRestoreDialogs(): void {
-		this.state.mode = this.baseMode();
-		this.selectDialog.close();
-		this.inputDialog.close();
-		this.inputDialog.focused = false;
-		this.restoreTarget = undefined;
-		this.o.requestRender();
-	}
-
-	/** Hand the choice to the actions layer; a summary takes a while, so the footer says so meanwhile. */
-	private async runRestore(target: RestoreTarget, options: RestoreOptions): Promise<void> {
-		const actions = this.o.actions;
-		if (!actions) return;
-		await this.enter(
-			"restore",
-			() => actions.restoreNode(target.file, target.entryId, options),
-			options.summarize ? t("status.summarizing") : undefined,
-		);
-	}
 
 	/**
 	 * Run an action that hands control back to pi.
@@ -2871,7 +1651,7 @@ export class LazyPanel implements Component, Focusable {
 	private close(): void {
 		if (this.disposed) return;
 		this.disposed = true;
-		this.clearPending();
+		this.keys.clear();
 		this.clearSessionLoad();
 		this.o.onClose();
 	}
@@ -2879,7 +1659,7 @@ export class LazyPanel implements Component, Focusable {
 	dispose(): void {
 		this.disposed = true;
 		this.stopChangelogSpinner();
-		this.clearPending();
+		this.keys.clear();
 		this.clearSessionLoad();
 	}
 
@@ -2931,8 +1711,8 @@ export class LazyPanel implements Component, Focusable {
 			),
 			...renderTreePane(
 				{
-					rows: this.visibleTree,
-					outline: this.treeOutline,
+					rows: this.treeView.visible,
+					outline: this.treeView.outline,
 					cursor: this.state.cursor.tree,
 					first: this.listFirst("tree", visibleRows.tree),
 					focused: this.state.focus === "tree",
@@ -2948,11 +1728,11 @@ export class LazyPanel implements Component, Focusable {
 		];
 
 		// 先排版（缓存按宽度失效），CONTENT 的搜索结果跟着这份排版算。
-		const layout = this.contentLayoutFor(rightW - 2, bodyH - 2);
+		const layout = this.contentViewport.layoutFor(rightW - 2, bodyH - 2);
 		const contentSearch = this.searchView("content");
 		const right = renderContentPane(
 			{
-				blocks: this.content,
+				blocks: this.contentViewport.blocks,
 				layout,
 				scroll: this.state.cursor.content,
 				focused: this.state.focus === "content",
@@ -2967,24 +1747,9 @@ export class LazyPanel implements Component, Focusable {
 		);
 
 		let lines = sideBySide(left, right, leftW, rightW);
-		// 弹窗按层叠顺序画：树对话框 → 输入框 / 菜单（可以开在树对话框上面）→ 帮助。
-		if (this.treeDialog.isOpen) {
-			lines = this.treeDialog.overlay(lines, width);
-		}
-		if (this.inputDialog.isOpen) {
-			lines = this.inputDialog.overlay(lines, width);
-		}
-		if (this.selectDialog.isOpen) {
-			lines = this.selectDialog.overlay(lines, width);
-		}
-		if (this.infoDialog.isOpen) {
-			lines = this.infoDialog.overlay(lines, width);
-		}
-		if (this.changelogDialog.isOpen) {
-			lines = this.changelogDialog.overlay(lines, width);
-		}
-		if (this.state.helpOpen) {
-			lines = overlayHelp(lines, { keymap: this.keymap, focus: this.state.focus, scroll: this.state.helpScroll, theme }, width);
+		// 弹窗按层叠顺序画：树对话框在最底下（输入框 / 菜单可以开在它上面），其余按 overlays 的顺序往上叠。
+		for (const overlay of this.overlaysBottomUp) {
+			if (overlay.isOpen()) lines = overlay.draw(lines, width);
 		}
 		return [...lines, this.renderBottom(width)].map((l) => fit(l, width));
 	}
@@ -3003,22 +1768,13 @@ export class LazyPanel implements Component, Focusable {
 			// 版本号常驻在 footer 最右侧（搜索状态行除外）。
 			...(this.o.version ? { version: this.o.version } : {}),
 		};
-		const pendingHint = this.pending.length ? t("status.pending", { keys: this.pending.join("") }) : undefined;
+		const pendingHint = this.keys.hasPending ? t("status.pending", { keys: this.keys.pendingKeys }) : undefined;
 		const status = pendingHint ?? this.status;
 		// 弹窗打开时 footer 只显示弹窗自己的按键提示（如 Enter save / Esc cancel / empty removes）；状态文字照常显示。
-		const dialog = this.inputDialog.isOpen
-			? this.inputDialog
-			: this.selectDialog.isOpen
-				? this.selectDialog
-				: this.infoDialog.isOpen
-					? this.infoDialog
-					: this.changelogDialog.isOpen
-						? this.changelogDialog
-						: this.treeDialog.isOpen
-							? this.treeDialog
-							: undefined;
-		if (dialog) {
-			return renderFooter({ ...footer, hints: dialog.hints, ...(status ? { status } : {}) }, width)[0]!;
+		// 帮助弹窗没有自己的提示（它本身就在列快捷键），footer 照常显示面板的。
+		const hints = this.overlays.find((ov) => ov.isOpen() && ov.hints() !== undefined)?.hints();
+		if (hints) {
+			return renderFooter({ ...footer, hints, ...(status ? { status } : {}) }, width)[0]!;
 		}
 		// 当前面板有搜索生效：显示关键字、位置 / 数量和 n / N / Esc 提示（别的面板的搜索不显示）。
 		const search = this.state.search[this.state.focus];
@@ -3045,20 +1801,17 @@ export class LazyPanel implements Component, Focusable {
 	}
 }
 
-function findLastIndex<T>(arr: T[], pred: (t: T) => boolean): number {
-	for (let i = arr.length - 1; i >= 0; i--) if (pred(arr[i]!)) return i;
-	return -1;
-}
-
-/** Indices of the elements `pred` accepts, ascending. */
-function indicesWhere<T>(arr: T[], pred: (t: T, i: number) => boolean): number[] {
-	const out: number[] = [];
-	arr.forEach((t, i) => {
-		if (pred(t, i)) out.push(i);
-	});
-	return out;
-}
-
-function clamp(n: number, min: number, max: number): number {
-	return Math.max(min, Math.min(max, n));
+/** The `Overlay` of a dialog widget that handles its own keys and brings its own footer hints. */
+function widgetOverlay(widget: {
+	readonly isOpen: boolean;
+	readonly hints: KeyHint[];
+	handleInput(data: string): void;
+	overlay(lines: string[], termW: number): string[];
+}): Overlay {
+	return {
+		isOpen: () => widget.isOpen,
+		handleInput: (data) => widget.handleInput(data),
+		draw: (lines, width) => widget.overlay(lines, width),
+		hints: () => widget.hints,
+	};
 }

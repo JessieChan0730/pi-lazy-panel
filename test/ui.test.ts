@@ -24,6 +24,9 @@ import { hitTest, listVisibleRows, panelGeometry } from "../src/ui/mouse.ts";
 import { scrollOffset, sessionAtLine, sessionFirstLine, sessionLineCount, sessionsMeta } from "../src/ui/panes/sessions-pane.ts";
 import { renderTreePane, treeMeta } from "../src/ui/panes/tree-pane.ts";
 import { layoutContent } from "../src/ui/panes/content-pane.ts";
+import { ContentViewport } from "../src/ui/content-viewport.ts";
+import { TreeView } from "../src/ui/tree-view.ts";
+import { createInitialState } from "../src/ui/state.ts";
 import { highlightLine, searchMeta } from "../src/ui/search-highlight.ts";
 import { treePrefixes } from "../src/ui/tree-lines.ts";
 import { ELLIPSIS, MARK_FOLDED, MARK_LEAF, MARK_OPEN, MAX_DEPTH, treeOutline } from "../src/ui/tree-outline.ts";
@@ -577,4 +580,90 @@ test("hitTest maps the right column to content, and the footer / outside to noth
 	assert.equal(hit(50, 19), undefined, "footer row");
 	assert.equal(hit(100, 5), undefined, "past the right edge");
 	assert.equal(hit(-1, 5), undefined, "before the left edge");
+});
+
+test("ContentViewport: scroll clamps to the last full page, zz may overscroll until the next scroll, matches follow the width", () => {
+	const state = createInitialState();
+	let changes = 0;
+	const view = new ContentViewport({ theme: plainTheme as never, state, onChange: () => changes++ });
+	// 6 one-line messages → 4 layout lines each (top border, body, bottom border, gap): 24 lines in a 9-line viewport
+	view.setBlocks(
+		Array.from({ length: 6 }, (_, i) => ({ entryId: `e${i}`, role: "user" as const, timestamp: 0, markdown: `alpha ${i}` })),
+		undefined,
+	);
+	const layout = view.layoutFor(40, 9);
+	const total = layout.lines.length;
+	assert.equal(total, 24);
+	// scrolling is clamped to the last full page and only reports real moves
+	view.scrollTo(Number.MAX_SAFE_INTEGER);
+	assert.equal(state.cursor.content, total - 9);
+	assert.equal(changes, 1);
+	view.scrollTo(total);
+	assert.equal(changes, 1, "already at the bottom: no change");
+	assert.equal(view.pageStep(), 4, "half of the 9-line viewport");
+	// highlight scrolls the message to the top (as far as the clamp allows)
+	view.highlight("e1");
+	assert.equal(state.contentHighlight, "e1");
+	assert.equal(state.cursor.content, layout.starts.get("e1"));
+	// zz on the last message: its first line lands mid-viewport, past the last full page
+	view.highlight("e5");
+	assert.equal(view.center(), true);
+	const start = view.layout().starts.get("e5")!;
+	assert.equal(state.cursor.content, start - 4);
+	assert.ok(state.cursor.content > total - 9, "overscrolled past the last full page");
+	view.layoutFor(40, 9);
+	assert.equal(state.cursor.content, start - 4, "a render keeps the overscroll");
+	view.scrollBy(0);
+	assert.equal(state.cursor.content, total - 9, "the next scroll snaps back to the last full page");
+	// nothing highlighted → zz has nothing to center on
+	view.highlight(undefined);
+	assert.equal(view.center(), false);
+	// / matches are body lines; a narrower width re-wraps the layout and the matches follow it
+	const wide = view.matches("alpha");
+	assert.equal(wide.length, 6);
+	assert.equal(view.matches("alpha"), wide, "cached for the same layout and query");
+	view.layoutFor(20, 9);
+	assert.notEqual(view.matches("alpha"), wide, "recomputed for the new layout");
+	assert.deepEqual(view.matches(""), []);
+});
+
+test("TreeView: folds hide descendants; reveal, keepCursorOn and toggleFold; the dialog search suspends the folds", () => {
+	const state = createInitialState();
+	const view = new TreeView(state);
+	const active = new Set(["root", "b", "b2"]);
+	const rows = forest().map((r) => ({ ...r, onActiveBranch: active.has(r.entryId) }));
+	const ids = () => view.visible.map((r) => r.entryId);
+	// side branches start folded (a, b1): their descendants are not listed, the outline covers the listed rows
+	view.set(rows, defaultFolded(rows));
+	assert.deepEqual(ids(), ["root", "a", "b", "b1", "b2"]);
+	assert.ok(view.outline.has("b1"));
+	// the cursor indexes the visible rows; search matches count rows of the whole tree
+	state.cursor.tree = 3;
+	assert.equal(view.cursorRow()?.entryId, "b1");
+	assert.equal(view.cursorTreeIndex(), 4);
+	// reveal unfolds what hides a row
+	view.reveal("b1x");
+	assert.deepEqual(ids(), ["root", "a", "b", "b1", "b1x", "b2"]);
+	assert.deepEqual([...state.treeFolded], ["a"]);
+	// keepCursorOn: onto a listed row, else the old position clamped
+	view.keepCursorOn("b2");
+	assert.equal(state.cursor.tree, 5);
+	view.keepCursorOn("a1");
+	assert.equal(state.cursor.tree, 5, "a1 is folded away: the cursor stays");
+	// z: inside a segment folds it (head returned), on a folded head unfolds, the trunk has nothing to fold
+	assert.equal(view.toggleFold(view.rows, "b1x"), "b1");
+	assert.equal(state.treeFolded.has("b1"), true);
+	assert.equal(view.toggleFold(view.rows, "b1"), "b1");
+	assert.equal(state.treeFolded.has("b1"), false);
+	assert.equal(view.toggleFold(view.rows, "root"), undefined);
+	// the dialog's search clears the folds, remembering the first state; resume brings it back, drop forgets it
+	view.suspendFolds();
+	view.suspendFolds();
+	assert.equal(state.treeFolded.size, 0);
+	view.resumeFolds();
+	assert.deepEqual([...state.treeFolded], ["a"]);
+	view.suspendFolds();
+	view.dropSuspendedFolds();
+	view.resumeFolds();
+	assert.equal(state.treeFolded.size, 0, "dropped: nothing to bring back");
 });
