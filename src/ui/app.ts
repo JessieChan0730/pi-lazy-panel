@@ -99,6 +99,7 @@ import {
 } from "./flows/session-flows.ts";
 import { copyEntryText, copyTreeNode, openLabelInput, restoreTreeNode, type TreeTarget } from "./flows/tree-flows.ts";
 import { fit, sideBySide } from "./frame.ts";
+import { KeySequencer } from "./key-sequencer.ts";
 import { hitTest, listVisibleRows, type MouseTarget, panelGeometry } from "./mouse.ts";
 import { type ContentLayout, layoutContent, maxScroll, renderContentPane } from "./panes/content-pane.ts";
 import { clampFirst, renderSessionsPane, scrollOffset, sessionAtLine, sessionFirstLine, sessionLineCount } from "./panes/sessions-pane.ts";
@@ -148,9 +149,6 @@ export interface LazyPanelOptions {
 	 */
 	currentSessionFile?: string;
 }
-
-/** Max time between keys of a multi-key sequence such as "gg". */
-const PENDING_TIMEOUT_MS = 1000;
 
 /** Delay before (re)loading the session under the cursor while the user is still moving. */
 const SESSION_LOAD_DEBOUNCE_MS = 40;
@@ -213,9 +211,8 @@ export class LazyPanel implements Component, Focusable {
 	private foldedBeforeSearch: Set<string> | undefined;
 	/** True while an Enter action is waiting for pi (keys are ignored, the panel is hidden). */
 	private entering = false;
-	/** Raw key chunks of an unfinished multi-key sequence. */
-	private pending: string[] = [];
-	private pendingTimer: ReturnType<typeof setTimeout> | undefined;
+	/** Keys of an unfinished multi-key sequence such as "gg" (panes and tree dialog alike). */
+	private readonly keys: KeySequencer;
 	private _focused = false;
 	/** Debounced reload of tree + content after the sessions cursor moved. */
 	private sessionLoadTimer: ReturnType<typeof setTimeout> | undefined;
@@ -243,6 +240,7 @@ export class LazyPanel implements Component, Focusable {
 		this.state = createInitialState(o.initialState);
 		this.keymap = o.keymap ?? DEFAULT_KEYMAP;
 		this.bindings = compileKeymap(this.keymap);
+		this.keys = new KeySequencer(this.bindings, () => this.o.requestRender());
 		this.ratio = o.leftColumnRatio ?? LEFT_COLUMN_RATIO;
 		this.status = o.status;
 		this.locateSessionFile = o.currentSessionFile;
@@ -574,8 +572,8 @@ export class LazyPanel implements Component, Focusable {
 
 		// Esc 优先：清掉半截序列或当前面板的搜索结果。
 		if (matchesKeyId(data, "escape")) {
-			if (this.pending.length) {
-				this.clearPending();
+			if (this.keys.hasPending) {
+				this.keys.clear();
 				return;
 			}
 			if (this.state.search[this.state.focus]) {
@@ -593,7 +591,7 @@ export class LazyPanel implements Component, Focusable {
 
 		// 搜索生效期间 n / N（global 的 search-next / search-prev）优先于面板自己的同键绑定
 		// （SESSIONS 里 n 本来是 new session），和 lazygit 搜索模式里的 n / N 一致。
-		if (this.pending.length === 0 && this.state.search[this.state.focus]) {
+		if (!this.keys.hasPending && this.state.search[this.state.focus]) {
 			const g = resolveKeys(this.bindings, "global", [data]);
 			if (g.kind === "action" && (g.action === "search-next" || g.action === "search-prev")) {
 				this.dispatch(g.action);
@@ -601,35 +599,8 @@ export class LazyPanel implements Component, Focusable {
 			}
 		}
 
-		const pressed = [...this.pending, data];
-		const result = resolveKeys(this.bindings, this.state.focus, pressed);
-		if (result.kind === "pending") {
-			this.pending = pressed;
-			this.armPendingTimer();
-			this.o.requestRender();
-			return;
-		}
-		this.clearPending();
+		const result = this.keys.feed(this.state.focus, data);
 		if (result.kind === "action") this.dispatch(result.action);
-	}
-
-	private armPendingTimer(): void {
-		if (this.pendingTimer) clearTimeout(this.pendingTimer);
-		this.pendingTimer = setTimeout(() => {
-			this.pendingTimer = undefined;
-			if (this.pending.length) {
-				this.pending = [];
-				this.o.requestRender();
-			}
-		}, PENDING_TIMEOUT_MS);
-	}
-
-	private clearPending(): void {
-		this.pending = [];
-		if (this.pendingTimer) {
-			clearTimeout(this.pendingTimer);
-			this.pendingTimer = undefined;
-		}
 	}
 
 	private handleHelpInput(data: string): void {
@@ -1507,19 +1478,11 @@ export class LazyPanel implements Component, Focusable {
 			return;
 		}
 		if (matchesKeyId(data, "escape")) {
-			if (this.pending.length) this.clearPending();
+			if (this.keys.hasPending) this.keys.clear();
 			else this.closeTreeDialog();
 			return;
 		}
-		const pressed = [...this.pending, data];
-		const result = resolveKeys(this.bindings, TREE_DIALOG_SCOPE, pressed);
-		if (result.kind === "pending") {
-			this.pending = pressed;
-			this.armPendingTimer();
-			this.o.requestRender();
-			return;
-		}
-		this.clearPending();
+		const result = this.keys.feed(TREE_DIALOG_SCOPE, data);
 		if (result.kind !== "action") return;
 		// 外层 scope 里在对话框中关掉的动作（切面板、退出面板、n/N…）直接吞掉。
 		if (result.scope !== TREE_DIALOG_SCOPE && isDisabledIn(TREE_DIALOG_SCOPE, result.action)) return;
@@ -1831,7 +1794,7 @@ export class LazyPanel implements Component, Focusable {
 	private close(): void {
 		if (this.disposed) return;
 		this.disposed = true;
-		this.clearPending();
+		this.keys.clear();
 		this.clearSessionLoad();
 		this.o.onClose();
 	}
@@ -1839,7 +1802,7 @@ export class LazyPanel implements Component, Focusable {
 	dispose(): void {
 		this.disposed = true;
 		this.stopChangelogSpinner();
-		this.clearPending();
+		this.keys.clear();
 		this.clearSessionLoad();
 	}
 
@@ -1963,7 +1926,7 @@ export class LazyPanel implements Component, Focusable {
 			// 版本号常驻在 footer 最右侧（搜索状态行除外）。
 			...(this.o.version ? { version: this.o.version } : {}),
 		};
-		const pendingHint = this.pending.length ? t("status.pending", { keys: this.pending.join("") }) : undefined;
+		const pendingHint = this.keys.hasPending ? t("status.pending", { keys: this.keys.pendingKeys }) : undefined;
 		const status = pendingHint ?? this.status;
 		// 弹窗打开时 footer 只显示弹窗自己的按键提示（如 Enter save / Esc cancel / empty removes）；状态文字照常显示。
 		const dialog = this.inputDialog.isOpen
