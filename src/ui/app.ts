@@ -57,14 +57,7 @@ import { t } from "../i18n/index.ts";
 import { clamp, findLastIndex, indicesWhere } from "../utils/indices.ts";
 import { highlightTerms, matchSessionRow, matchTreeRow, parseSearchQuery } from "../data/search.ts";
 import { findSessionIndex } from "../data/sessions.ts";
-import {
-	applyTreeFold,
-	defaultFolded,
-	filterTreeRows,
-	foldedAncestors,
-	foldTarget,
-	nearestListedIndex,
-} from "../data/tree-fold.ts";
+import { applyTreeFold, defaultFolded, filterTreeRows, nearestListedIndex } from "../data/tree-fold.ts";
 import type {
 	ActionId,
 	EnterOutcome,
@@ -106,7 +99,7 @@ import { clampFirst, renderSessionsPane, scrollOffset, sessionAtLine, sessionFir
 import { renderTreePane } from "./panes/tree-pane.ts";
 import type { ActionSource, DataSource } from "./ports.ts";
 import { createInitialState, type PanelState } from "./state.ts";
-import { type OutlinePrefix, treeOutline } from "./tree-outline.ts";
+import { TreeView } from "./tree-view.ts";
 import { ChangelogDialog } from "./widgets/changelog-dialog.ts";
 
 import { renderFooter } from "./widgets/footer.ts";
@@ -171,11 +164,8 @@ export class LazyPanel implements Component, Focusable {
 	readonly keymap: Keymap;
 	private readonly bindings: Binding[];
 	private sessions: SessionRow[] = [];
-	/** Whole (filtered) tree of the loaded session; `visibleTree` is what the pane lists once folded branches are hidden. */
-	private tree: TreeRow[] = [];
-	private visibleTree: TreeRow[] = [];
-	/** Outline prefixes of `tree` for the pane, recomputed together with `visibleTree`. */
-	private treeOutline: ReadonlyMap<string, OutlinePrefix> = new Map();
+	/** TREE pane: the whole tree of the loaded session, the visible rows once folded, their outline and the fold rules. */
+	private readonly treeView: TreeView;
 	/** CONTENT pane: blocks of the branch on show, their layout, scrolling and the `/` matches. */
 	private readonly contentViewport: ContentViewport;
 	private status: string | undefined;
@@ -203,11 +193,6 @@ export class LazyPanel implements Component, Focusable {
 	private changelogMd: string | undefined;
 	/** Ticker that rotates the changelog loading spinner while the markdown is fetched / rendered. */
 	private changelogSpinner: ReturnType<typeof setInterval> | undefined;
-	/**
-	 * Fold state from before the dialog's search started: a search shows every
-	 * match, so folds are cleared meanwhile and restored when the query is gone.
-	 */
-	private foldedBeforeSearch: Set<string> | undefined;
 	/** True while an Enter action is waiting for pi (keys are ignored, the panel is hidden). */
 	private entering = false;
 	/** Keys of an unfinished multi-key sequence such as "gg" (panes and tree dialog alike). */
@@ -227,6 +212,7 @@ export class LazyPanel implements Component, Focusable {
 		this.keymap = o.keymap ?? DEFAULT_KEYMAP;
 		this.bindings = compileKeymap(this.keymap);
 		this.keys = new KeySequencer(this.bindings, () => this.o.requestRender());
+		this.treeView = new TreeView(this.state);
 		this.contentViewport = new ContentViewport({ theme: o.theme, state: this.state, onChange: () => this.o.requestRender() });
 		this.ratio = o.leftColumnRatio ?? LEFT_COLUMN_RATIO;
 		this.status = o.status;
@@ -361,7 +347,7 @@ export class LazyPanel implements Component, Focusable {
 			this.contentViewport.setBlocks(content, undefined);
 			this.loadedSessionFile = file;
 			// Put the tree cursor on the active leaf, like /tree does.
-			const leafIdx = findLastIndex(this.visibleTree, (r) => r.onActiveBranch);
+			const leafIdx = findLastIndex(this.treeView.visible, (r) => r.onActiveBranch);
 			this.state.cursor.tree = leafIdx >= 0 ? leafIdx : 0;
 			this.state.cursor.content = 0;
 			// 树光标落在活动叶子上，右侧内容同步滚到并高亮这条消息。
@@ -399,17 +385,9 @@ export class LazyPanel implements Component, Focusable {
 
 	/** Replace the tree and its fold state, then refresh what the pane lists. */
 	private setTree(rows: TreeRow[], folded: Set<string>): void {
-		this.tree = rows;
-		this.state.treeFolded = folded;
-		this.refreshTreeView();
+		this.treeView.set(rows, folded);
 		// 树换了（换会话、打标签、换过滤）：TREE 的搜索结果按新树重算。
 		this.refreshSearch("tree");
-	}
-
-	/** 折叠状态变了 / 树重新加载后：重新算可见行和大纲前缀（光标索引指向可见行）。 */
-	private refreshTreeView(): void {
-		this.visibleTree = applyTreeFold(this.tree, this.state.treeFolded);
-		this.treeOutline = treeOutline(this.tree, this.state.treeFolded);
 	}
 
 	/**
@@ -420,7 +398,7 @@ export class LazyPanel implements Component, Focusable {
 	 * 节点在另一条分支上 → 重新加载“以该节点为叶子”的分支再高亮。
 	 */
 	private async syncContentToTree(): Promise<void> {
-		const node = this.visibleTree[this.state.cursor.tree];
+		const node = this.treeView.cursorRow();
 		const file = this.loadedSessionFile ?? this.sessions[this.state.cursor.sessions]?.file;
 		if (!node || !file) {
 			this.state.contentHighlight = undefined;
@@ -435,7 +413,7 @@ export class LazyPanel implements Component, Focusable {
 				const content = await this.o.data.loadContent(file, wantLeaf);
 				if (this.disposed) return;
 				// 光标又动了 / 会话换了：丢弃这次结果。
-				if (this.visibleTree[this.state.cursor.tree]?.entryId !== node.entryId || this.loadedSessionFile !== file) return;
+				if (this.treeView.cursorRow()?.entryId !== node.entryId || this.loadedSessionFile !== file) return;
 				this.contentViewport.setBlocks(content, wantLeaf);
 			} catch (err) {
 				this.setStatus(t("status.loadBranchFailed", { error: (err as Error).message }));
@@ -453,7 +431,7 @@ export class LazyPanel implements Component, Focusable {
 		if (!targetId) {
 			// 没有对应消息块的节点：沿 tree 往上找最近的一条有消息块的节点。
 			for (let i = this.state.cursor.tree - 1; i >= 0 && !targetId; i--) {
-				const id = this.visibleTree[i]?.entryId;
+				const id = this.treeView.visible[i]?.entryId;
 				if (id && shown.has(id)) targetId = id;
 			}
 			targetId ??= blocks[blocks.length - 1]?.entryId;
@@ -670,7 +648,7 @@ export class LazyPanel implements Component, Focusable {
 			// SESSIONS 按行命中：总数是渲染的行数（会话 2 行 + 分隔线），命中的行号再翻译回会话下标。
 			sessionsTotal: sessionLineCount(this.sessions.length, this.pinnedCount()),
 			treeFirst: this.listFirst("tree", visible.tree),
-			treeTotal: this.visibleTree.length,
+			treeTotal: this.treeView.visible.length,
 		});
 		if (target?.pane === "sessions" && target.row !== undefined) {
 			// 分隔线 / 留白行 → undefined：点它只切焦点、不移光标。
@@ -697,7 +675,7 @@ export class LazyPanel implements Component, Focusable {
 			const raw = override ?? scrollOffset(cursorLine, total, visible);
 			return clampFirst(raw, total, visible);
 		}
-		const total = this.visibleTree.length;
+		const total = this.treeView.visible.length;
 		const raw = override ?? scrollOffset(this.state.cursor.tree, total, visible);
 		return clampFirst(raw, total, visible);
 	}
@@ -717,7 +695,7 @@ export class LazyPanel implements Component, Focusable {
 	private scrollList(pane: "sessions" | "tree", delta: number): void {
 		const visible = listVisibleRows(Math.max(8, this.o.getHeight()))[pane];
 		// SESSIONS 的滚动范围是渲染行数（含分隔线）。
-		const total = pane === "sessions" ? sessionLineCount(this.sessions.length, this.pinnedCount()) : this.visibleTree.length;
+		const total = pane === "sessions" ? sessionLineCount(this.sessions.length, this.pinnedCount()) : this.treeView.visible.length;
 		const next = clampFirst(this.listFirst(pane, visible) + delta, total, visible);
 		if (next === this.state.listScroll[pane]) return;
 		this.state.listScroll[pane] = next;
@@ -916,7 +894,7 @@ export class LazyPanel implements Component, Focusable {
 	/** Move the tree cursor (clamped, an index into the visible rows) and make the content pane follow. */
 	private setTreeCursor(index: number): void {
 		this.state.listScroll.tree = null;
-		const next = clamp(index, 0, Math.max(0, this.visibleTree.length - 1));
+		const next = this.treeView.clampIndex(index);
 		if (next === this.state.cursor.tree) {
 			this.o.requestRender();
 			return;
@@ -974,9 +952,9 @@ export class LazyPanel implements Component, Focusable {
 	/** The focused pane's position as of `/`: the live search starts looking here and Esc comes back here. */
 	private snapshotOrigin(pane: PaneId): SearchOrigin {
 		if (pane === "tree") {
-			const row = this.visibleTree[this.state.cursor.tree];
+			const row = this.treeView.cursorRow();
 			// 树的匹配记的是整棵树的行号，所以原位置也换算成整棵树的行号；折叠状态一并记下。
-			const index = row ? this.tree.findIndex((r) => r.entryId === row.entryId) : 0;
+			const index = this.treeView.cursorTreeIndex();
 			return { pane, index: Math.max(0, index), ...(row ? { entryId: row.entryId } : {}), folded: new Set(this.state.treeFolded) };
 		}
 		return { pane, index: this.state.cursor[pane] };
@@ -1057,8 +1035,8 @@ export class LazyPanel implements Component, Focusable {
 				return;
 			case "tree": {
 				if (origin.folded) this.state.treeFolded = new Set(origin.folded);
-				this.refreshTreeView();
-				const idx = origin.entryId ? this.visibleTree.findIndex((r) => r.entryId === origin.entryId) : -1;
+				this.treeView.refresh();
+				const idx = this.treeView.indexOf(origin.entryId);
 				this.placeTreeCursor(idx >= 0 ? idx : this.state.cursor.tree);
 				return;
 			}
@@ -1070,7 +1048,7 @@ export class LazyPanel implements Component, Focusable {
 
 	/** Put the tree cursor on visible row `index` and sync the content pane even if the index did not change (the rows under it may have). */
 	private placeTreeCursor(index: number): void {
-		this.state.cursor.tree = clamp(index, 0, Math.max(0, this.visibleTree.length - 1));
+		this.state.cursor.tree = this.treeView.clampIndex(index);
 		this.o.requestRender();
 		void this.syncContentToTree();
 	}
@@ -1080,7 +1058,7 @@ export class LazyPanel implements Component, Focusable {
 		if (pane === "content") return this.contentViewport.matches(query);
 		const parsed = parseSearchQuery(query);
 		if (pane === "sessions") return indicesWhere(this.sessions, (r) => matchSessionRow(r, parsed));
-		return indicesWhere(this.tree, (r) => matchTreeRow(r, parsed));
+		return indicesWhere(this.treeView.rows, (r) => matchTreeRow(r, parsed));
 	}
 
 	/** Recompute a list pane's matches after its rows changed; the query stays. */
@@ -1098,12 +1076,6 @@ export class LazyPanel implements Component, Focusable {
 			search.current = search.matches.length ? clamp(search.current, 0, search.matches.length - 1) : -1;
 		}
 		return search.matches;
-	}
-
-	/** Row index in the whole tree of the pane's cursor row, -1 with no rows. */
-	private treeCursorIndex(): number {
-		const row = this.visibleTree[this.state.cursor.tree];
-		return row ? this.tree.findIndex((r) => r.entryId === row.entryId) : -1;
 	}
 
 	/**
@@ -1128,7 +1100,7 @@ export class LazyPanel implements Component, Focusable {
 		if (pane === "content") {
 			next = search.current < 0 ? (delta > 0 ? 0 : matches.length - 1) : (search.current + delta + matches.length) % matches.length;
 		} else {
-			const pos = pane === "sessions" ? this.state.cursor.sessions : this.treeCursorIndex();
+			const pos = pane === "sessions" ? this.state.cursor.sessions : this.treeView.cursorTreeIndex();
 			const i = delta > 0 ? matches.findIndex((m) => m > pos) : findLastIndex(matches, (m) => m < pos);
 			next = i >= 0 ? i : delta > 0 ? 0 : matches.length - 1;
 		}
@@ -1143,12 +1115,11 @@ export class LazyPanel implements Component, Focusable {
 				this.setSessionsCursor(index);
 				return;
 			case "tree": {
-				const row = this.tree[index];
+				const row = this.treeView.rows[index];
 				if (!row) return;
 				// 目标藏在折叠段里：展开它的祖先，右侧内容跟着高亮。
-				for (const id of foldedAncestors(this.tree, row.entryId, this.state.treeFolded)) this.state.treeFolded.delete(id);
-				this.refreshTreeView();
-				this.placeTreeCursor(this.visibleTree.findIndex((r) => r.entryId === row.entryId));
+				this.treeView.reveal(row.entryId);
+				this.placeTreeCursor(this.treeView.indexOf(row.entryId));
 				return;
 			}
 			case "content":
@@ -1174,12 +1145,12 @@ export class LazyPanel implements Component, Focusable {
 			return { terms, matches: new Set(matches), current: pos >= 0 ? this.state.cursor.sessions : undefined, position: pos + 1, total };
 		}
 		if (pane === "tree") {
-			const matched = new Set(matches.map((i) => this.tree[i]?.entryId));
+			const matched = new Set(matches.map((i) => this.treeView.rows[i]?.entryId));
 			const visible = new Set<number>();
-			this.visibleTree.forEach((r, i) => {
+			this.treeView.visible.forEach((r, i) => {
 				if (matched.has(r.entryId)) visible.add(i);
 			});
-			const pos = matches.indexOf(this.treeCursorIndex());
+			const pos = matches.indexOf(this.treeView.cursorTreeIndex());
 			return { terms, matches: visible, current: pos >= 0 ? this.state.cursor.tree : undefined, position: pos + 1, total };
 		}
 		const current = search.current >= 0 ? matches[search.current] : undefined;
@@ -1203,7 +1174,7 @@ export class LazyPanel implements Component, Focusable {
 
 	/** Tree row under the pane's cursor plus the file it belongs to, or undefined with a footer hint. */
 	private currentTreeNode(): TreeTarget | undefined {
-		const row = this.visibleTree[this.state.cursor.tree];
+		const row = this.treeView.cursorRow();
 		const file = this.loadedSessionFile;
 		if (!row || !file) {
 			this.setStatus(t("status.noTreeNode"));
@@ -1223,8 +1194,7 @@ export class LazyPanel implements Component, Focusable {
 			if (this.disposed || this.loadedSessionFile !== file) return;
 			// 同一个会话：保留折叠状态（不再是段头的 id 会被 applyTreeFold 忽略）。
 			this.setTree(tree, this.state.treeFolded);
-			const idx = this.visibleTree.findIndex((r) => r.entryId === entryId);
-			this.state.cursor.tree = idx >= 0 ? idx : clamp(this.state.cursor.tree, 0, Math.max(0, this.visibleTree.length - 1));
+			this.treeView.keepCursorOn(entryId);
 			if (this.treeDialog.isOpen) this.refreshTreeDialog(entryId);
 			await this.syncContentToTree();
 		} catch (err) {
@@ -1240,7 +1210,7 @@ export class LazyPanel implements Component, Focusable {
 	 */
 	private async refreshSession(file: string): Promise<void> {
 		if (file === this.loadedSessionFile) {
-			const entryId = this.visibleTree[this.state.cursor.tree]?.entryId;
+			const entryId = this.treeView.cursorRow()?.entryId;
 			if (entryId) await this.reloadTree(file, entryId);
 		} else {
 			await this.followSessionsCursor();
@@ -1258,15 +1228,15 @@ export class LazyPanel implements Component, Focusable {
 	 * segment to fold.
 	 */
 	private toggleTreeFold(): void {
-		const row = this.visibleTree[this.state.cursor.tree];
+		const row = this.treeView.cursorRow();
 		if (!row) {
 			this.setStatus(t("status.noTreeNode"));
 			return;
 		}
-		const target = this.toggleFold(this.tree, row.entryId);
+		const target = this.toggleFold(this.treeView.rows, row.entryId);
 		if (!target) return;
-		this.refreshTreeView();
-		this.state.cursor.tree = Math.max(0, this.visibleTree.findIndex((r) => r.entryId === target));
+		this.treeView.refresh();
+		this.state.cursor.tree = Math.max(0, this.treeView.indexOf(target));
 		this.o.requestRender();
 		// 光标从段内跳到了段头：右侧高亮跟着变。
 		if (target !== row.entryId) void this.syncContentToTree();
@@ -1279,15 +1249,8 @@ export class LazyPanel implements Component, Focusable {
 	 * trunk, where nothing folds.
 	 */
 	private toggleFold(base: TreeRow[], entryId: string): string | undefined {
-		const target = foldTarget(base, entryId);
-		if (!target) {
-			this.setStatus(t("status.nothingToFold"));
-			return undefined;
-		}
-		const folded = this.state.treeFolded;
-		// 光标在段头上：切换；在段内其他行：折叠所在段（此时这一段一定是展开的）。
-		if (target === entryId && folded.has(target)) folded.delete(target);
-		else folded.add(target);
+		const target = this.treeView.toggleFold(base, entryId);
+		if (!target) this.setStatus(t("status.nothingToFold"));
 		return target;
 	}
 
@@ -1302,13 +1265,13 @@ export class LazyPanel implements Component, Focusable {
 			return;
 		}
 		this.state.mode = "tree";
-		this.foldedBeforeSearch = undefined;
+		this.treeView.dropSuspendedFolds();
 		// 面板里的旧提示（比如"按 a 打开对话框"）到这里已经没用了，别留在对话框下面。
 		this.status = undefined;
 		const searchKey = labelsForFocus(this.keymap, TREE_DIALOG_SCOPE, "search")[0];
 		this.treeDialog.open({
 			// 刚打开时没有搜索，列出的行和小面板一样。
-			rows: this.visibleTree,
+			rows: this.treeView.visible,
 			folded: this.state.treeFolded,
 			initialIndex: this.state.cursor.tree,
 			filter: this.state.treeFilter,
@@ -1331,17 +1294,11 @@ export class LazyPanel implements Component, Focusable {
 		this.state.mode = "normal";
 		this.treeDialog.close();
 		this.treeDialog.focused = false;
-		// 搜索期间折叠是清空的：对话框一关搜索也就结束了，恢复搜索前的折叠状态。
-		if (this.foldedBeforeSearch) {
-			this.state.treeFolded = this.foldedBeforeSearch;
-			this.foldedBeforeSearch = undefined;
-		}
-		if (row) {
-			for (const id of foldedAncestors(this.tree, row.entryId, this.state.treeFolded)) this.state.treeFolded.delete(id);
-		}
-		this.refreshTreeView();
-		const idx = row ? this.visibleTree.findIndex((r) => r.entryId === row.entryId) : -1;
-		this.state.cursor.tree = idx >= 0 ? idx : clamp(this.state.cursor.tree, 0, Math.max(0, this.visibleTree.length - 1));
+		// 搜索期间折叠是清空的：对话框一关搜索也就结束了，恢复搜索前的折叠状态（再展开选中行所在的段）。
+		this.treeView.resumeFolds();
+		if (row) this.treeView.reveal(row.entryId);
+		else this.treeView.refresh();
+		this.treeView.keepCursorOn(row?.entryId);
 		this.o.requestRender();
 		void this.syncContentToTree();
 	}
@@ -1449,15 +1406,15 @@ export class LazyPanel implements Component, Focusable {
 	/** Rows of the dialog before folding: the tree, narrowed to the search matches (re-parented) while a query is active. */
 	private dialogBaseRows(): TreeRow[] {
 		const raw = this.treeDialog.searchQuery;
-		if (!raw) return this.tree;
+		if (!raw) return this.treeView.rows;
 		const query = parseSearchQuery(raw);
-		return filterTreeRows(this.tree, (r) => matchTreeRow(r, query));
+		return filterTreeRows(this.treeView.rows, (r) => matchTreeRow(r, query));
 	}
 
 	/** Recompute what the dialog lists (search → fold) and keep its cursor on `keepEntryId` or the nearest listed ancestor. */
 	private refreshTreeDialog(keepEntryId: string | undefined): void {
 		const rows = applyTreeFold(this.dialogBaseRows(), this.state.treeFolded);
-		this.treeDialog.setRows(rows, this.state.treeFolded, nearestListedIndex(rows, this.tree, keepEntryId));
+		this.treeDialog.setRows(rows, this.state.treeFolded, nearestListedIndex(rows, this.treeView.rows, keepEntryId));
 	}
 
 	/**
@@ -1468,15 +1425,9 @@ export class LazyPanel implements Component, Focusable {
 	 */
 	private onDialogQueryChange(query: string): void {
 		const keep = this.treeDialog.selectedRow?.entryId;
-		if (query) {
-			// 第一次开始搜索时记住原来的折叠状态；之后每次改动查询都重新清空（pi 的做法）。
-			this.foldedBeforeSearch ??= new Set(this.state.treeFolded);
-			this.state.treeFolded.clear();
-		} else if (this.foldedBeforeSearch) {
-			this.state.treeFolded = this.foldedBeforeSearch;
-			this.foldedBeforeSearch = undefined;
-		}
-		this.refreshTreeView();
+		if (query) this.treeView.suspendFolds();
+		else this.treeView.resumeFolds();
+		this.treeView.refresh();
 		this.refreshTreeDialog(keep);
 	}
 
@@ -1493,7 +1444,7 @@ export class LazyPanel implements Component, Focusable {
 		}
 		const target = this.toggleFold(this.dialogBaseRows(), row.entryId);
 		if (!target) return;
-		this.refreshTreeView();
+		this.treeView.refresh();
 		this.refreshTreeDialog(target);
 	}
 
@@ -1517,10 +1468,9 @@ export class LazyPanel implements Component, Focusable {
 			const tree = await this.o.data.loadTree(file, filter);
 			if (this.disposed || this.loadedSessionFile !== file || this.state.treeFilter !== filter) return;
 			// 换过滤后全部展开；搜索前记住的折叠状态是旧树的，一并作废。
-			this.foldedBeforeSearch = undefined;
+			this.treeView.dropSuspendedFolds();
 			this.setTree(tree, new Set());
-			const idx = keep ? this.visibleTree.findIndex((r) => r.entryId === keep) : -1;
-			this.state.cursor.tree = idx >= 0 ? idx : clamp(this.state.cursor.tree, 0, Math.max(0, this.visibleTree.length - 1));
+			this.treeView.keepCursorOn(keep);
 			this.refreshTreeDialog(keep);
 		} catch (err) {
 			this.setStatus(t("status.reloadTreeFailed", { error: (err as Error).message }));
@@ -1746,8 +1696,8 @@ export class LazyPanel implements Component, Focusable {
 			),
 			...renderTreePane(
 				{
-					rows: this.visibleTree,
-					outline: this.treeOutline,
+					rows: this.treeView.visible,
+					outline: this.treeView.outline,
 					cursor: this.state.cursor.tree,
 					first: this.listFirst("tree", visibleRows.tree),
 					focused: this.state.focus === "tree",

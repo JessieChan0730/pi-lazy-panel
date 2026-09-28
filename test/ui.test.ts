@@ -25,6 +25,7 @@ import { scrollOffset, sessionAtLine, sessionFirstLine, sessionLineCount, sessio
 import { renderTreePane, treeMeta } from "../src/ui/panes/tree-pane.ts";
 import { layoutContent } from "../src/ui/panes/content-pane.ts";
 import { ContentViewport } from "../src/ui/content-viewport.ts";
+import { TreeView } from "../src/ui/tree-view.ts";
 import { createInitialState } from "../src/ui/state.ts";
 import { highlightLine, searchMeta } from "../src/ui/search-highlight.ts";
 import { treePrefixes } from "../src/ui/tree-lines.ts";
@@ -624,4 +625,45 @@ test("ContentViewport: scroll clamps to the last full page, zz may overscroll un
 	view.layoutFor(20, 9);
 	assert.notEqual(view.matches("alpha"), wide, "recomputed for the new layout");
 	assert.deepEqual(view.matches(""), []);
+});
+
+test("TreeView: folds hide descendants; reveal, keepCursorOn and toggleFold; the dialog search suspends the folds", () => {
+	const state = createInitialState();
+	const view = new TreeView(state);
+	const active = new Set(["root", "b", "b2"]);
+	const rows = forest().map((r) => ({ ...r, onActiveBranch: active.has(r.entryId) }));
+	const ids = () => view.visible.map((r) => r.entryId);
+	// side branches start folded (a, b1): their descendants are not listed, the outline covers the listed rows
+	view.set(rows, defaultFolded(rows));
+	assert.deepEqual(ids(), ["root", "a", "b", "b1", "b2"]);
+	assert.ok(view.outline.has("b1"));
+	// the cursor indexes the visible rows; search matches count rows of the whole tree
+	state.cursor.tree = 3;
+	assert.equal(view.cursorRow()?.entryId, "b1");
+	assert.equal(view.cursorTreeIndex(), 4);
+	// reveal unfolds what hides a row
+	view.reveal("b1x");
+	assert.deepEqual(ids(), ["root", "a", "b", "b1", "b1x", "b2"]);
+	assert.deepEqual([...state.treeFolded], ["a"]);
+	// keepCursorOn: onto a listed row, else the old position clamped
+	view.keepCursorOn("b2");
+	assert.equal(state.cursor.tree, 5);
+	view.keepCursorOn("a1");
+	assert.equal(state.cursor.tree, 5, "a1 is folded away: the cursor stays");
+	// z: inside a segment folds it (head returned), on a folded head unfolds, the trunk has nothing to fold
+	assert.equal(view.toggleFold(view.rows, "b1x"), "b1");
+	assert.equal(state.treeFolded.has("b1"), true);
+	assert.equal(view.toggleFold(view.rows, "b1"), "b1");
+	assert.equal(state.treeFolded.has("b1"), false);
+	assert.equal(view.toggleFold(view.rows, "root"), undefined);
+	// the dialog's search clears the folds, remembering the first state; resume brings it back, drop forgets it
+	view.suspendFolds();
+	view.suspendFolds();
+	assert.equal(state.treeFolded.size, 0);
+	view.resumeFolds();
+	assert.deepEqual([...state.treeFolded], ["a"]);
+	view.suspendFolds();
+	view.dropSuspendedFolds();
+	view.resumeFolds();
+	assert.equal(state.treeFolded.size, 0, "dropped: nothing to bring back");
 });
