@@ -71,7 +71,6 @@ import type {
 	DeleteMethod,
 	EnterOutcome,
 	ExportFormat,
-	ExportTarget,
 	ForkPoint,
 	KeyHint,
 	Keymap,
@@ -83,7 +82,6 @@ import type {
 	SearchView,
 	SessionInfo,
 	SessionRow,
-	SessionSortMode,
 	ShareResult,
 	TreeFilter,
 	TreeRow,
@@ -93,6 +91,8 @@ import { hitTest, listVisibleRows, type MouseTarget, panelGeometry } from "./mou
 import { type ContentLayout, layoutContent, maxScroll, renderContentPane } from "./panes/content-pane.ts";
 import { clampFirst, renderSessionsPane, scrollOffset, sessionAtLine, sessionFirstLine, sessionLineCount } from "./panes/sessions-pane.ts";
 import { renderTreePane } from "./panes/tree-pane.ts";
+import type { ActionSource, DataSource } from "./ports.ts";
+import { createInitialState, type PanelState } from "./state.ts";
 import { type OutlinePrefix, treeOutline } from "./tree-outline.ts";
 import { alertDialogSpec, cannotDeleteActiveTitle } from "./widgets/alert-dialog.ts";
 import { ChangelogDialog } from "./widgets/changelog-dialog.ts";
@@ -129,126 +129,6 @@ import { renderSearchStatus, SearchBar } from "./widgets/search-bar.ts";
 import { SelectDialog } from "./widgets/select-dialog.ts";
 import { SessionInfoDialog } from "./widgets/session-info-dialog.ts";
 import { TreeDialog } from "./widgets/tree-dialog.ts";
-
-/** Mutable UI state of the panel. Kept in one place for easy debugging. */
-export interface PanelState {
-	focus: PaneId;
-	mode: PanelMode;
-	/** Index of the highlighted row per list pane (for content: first visible body line). */
-	cursor: Record<PaneId, number>;
-	/** entryId of the content block highlighted by the tree cursor. */
-	contentHighlight: string | undefined;
-	/** Sessions selected with <space> for batch operations. */
-	selectedSessionFiles: Set<string>;
-	/**
-	 * Pinned session files in display order (newest pin first). These sit at the
-	 * top of the sessions pane regardless of the sort mode; persisted to
-	 * `~/.pi/agent/lazy-panel-pins.json` (see config/pins.ts).
-	 */
-	pinnedFiles: string[];
-	/**
-	 * Active `/` search per pane (absent = none). Kept per pane, so switching
-	 * panes keeps each pane's query; only the focused pane's search is acted on.
-	 */
-	search: Partial<Record<PaneId, PaneSearch>>;
-	scope: ListScope;
-	sort: SessionSortMode;
-	/** Tree filter, chosen with d/t/u/l/a in the tree dialog; the pane lists the same filtered tree. */
-	treeFilter: TreeFilter;
-	/**
-	 * Folded tree rows (branch-segment heads whose descendants are hidden, see
-	 * data/tree-fold.ts). Reset to "side branches folded" whenever another
-	 * session is loaded; kept across reloads of the same session.
-	 */
-	treeFolded: Set<string>;
-	/** Whether the `?` overlay is open, and its scroll offset. */
-	helpOpen: boolean;
-	helpScroll: number;
-	/**
-	 * Wheel-scroll offset (first visible row) for the two list panes; null means
-	 * "follow the cursor" (the keyboard default that centers the cursor). The
-	 * wheel sets a number to scroll the view without moving the selection; any
-	 * cursor move clears it back to null.
-	 */
-	listScroll: { sessions: number | null; tree: number | null };
-}
-
-export function createInitialState(overrides: Partial<PanelState> = {}): PanelState {
-	return {
-		focus: "sessions",
-		mode: "normal",
-		cursor: { sessions: 0, tree: 0, content: 0 },
-		contentHighlight: undefined,
-		selectedSessionFiles: new Set(),
-		pinnedFiles: [],
-		search: {},
-		scope: "current-folder",
-		sort: "recent",
-		treeFilter: "default",
-		treeFolded: new Set(),
-		helpOpen: false,
-		helpScroll: 0,
-		listScroll: { sessions: null, tree: null },
-		...overrides,
-	};
-}
-
-/** Async loaders injected by the entry point (they wrap src/data/*). */
-export interface DataSource {
-	listSessions(scope: ListScope, sort: SessionSortMode, pinned: readonly string[]): Promise<SessionRow[]>;
-	loadTree(sessionFile: string, filter: TreeFilter): Promise<TreeRow[]>;
-	loadContent(sessionFile: string, leafEntryId?: string): Promise<ContentBlock[]>;
-	/** `i` in SESSIONS: what /session shows; undefined when the file cannot be read. */
-	loadSessionInfo?(sessionFile: string): Promise<SessionInfo | undefined>;
-	/** `o` in SESSIONS: the user messages the fork selector lists (empty = nothing to fork). */
-	loadForkPoints?(sessionFile: string): Promise<ForkPoint[]>;
-	/** `@`: pi's changelog as markdown (what /changelog shows). */
-	loadChangelog?(): Promise<string>;
-}
-
-/**
- * Side effects injected by the entry point (they wrap src/actions/*).
- * 面板本身不做 I/O：复制、打标签、恢复会话、删除、改名都通过这里交给 actions 层。
- */
-export interface ActionSource {
-	/** Copy the node's full text to the clipboard; `false` = the entry has no text. */
-	copyNodeText(sessionFile: string, entryId: string): Promise<boolean>;
-	/** Set, or clear with `undefined`, the label of a node. */
-	setNodeLabel(sessionFile: string, entryId: string, label: string | undefined): Promise<void>;
-	/** Enter in SESSIONS: make pi show this session (/resume). Rejects with the reason on failure. */
-	resumeSession(sessionFile: string): Promise<EnterOutcome>;
-	/**
-	 * Enter in TREE: continue the conversation from this node (/tree restore),
-	 * switching session first if needed; `options` is the summary choice.
-	 */
-	restoreNode(sessionFile: string, entryId: string, options: RestoreOptions): Promise<EnterOutcome>;
-	/** d in SESSIONS (after confirmation): remove the file; resolves to how it was removed. */
-	deleteSession?(sessionFile: string): Promise<DeleteMethod>;
-	/** p in SESSIONS: persist the pinned session files (display order, newest first). */
-	setPins?(pinned: readonly string[]): Promise<void>;
-	/** r in SESSIONS: set the display name ("" clears it). */
-	renameSession?(sessionFile: string, name: string): Promise<void>;
-	/** n in SESSIONS: start a fresh session, naming it when `name` is non-empty (/new). */
-	newSession?(name: string): Promise<EnterOutcome>;
-	/** o in SESSIONS (after picking a message and confirming): fork before that user message and open the fork (/fork). */
-	forkSession?(sessionFile: string, entryId: string): Promise<EnterOutcome>;
-	/** y in SESSIONS (after confirmation): clone the active branch to a new file (/clone). */
-	cloneSession?(sessionFile: string): Promise<EnterOutcome>;
-	/** c in SESSIONS: compact this conversation's active branch and open it (/compact). */
-	compactSession?(sessionFile: string, customInstructions?: string): Promise<EnterOutcome>;
-	/** Y in SESSIONS: copy the last assistant reply to the clipboard; `false` = no reply yet. */
-	copyLastReply?(sessionFile: string): Promise<boolean>;
-	/** y in the Session Info dialog: copy its text to the clipboard. */
-	copyText?(text: string): Promise<void>;
-	/** e in SESSIONS: where an export goes for what the user typed ("" = pi's default path); synchronous, no writing. */
-	exportTarget?(sessionFile: string, format: ExportFormat, input: string): ExportTarget;
-	/** e in SESSIONS (once the path is picked, and confirmed when it exists): write the export, resolving to its path (/export). */
-	exportSession?(sessionFile: string, format: ExportFormat, outputPath: string): Promise<string>;
-	/** I in SESSIONS (after confirmation): copy a session JSONL into the session folder and switch to it (/import). */
-	importSession?(input: string): Promise<EnterOutcome>;
-	/** S in SESSIONS (after confirmation): upload as a secret GitHub gist (/share). */
-	shareSession?(sessionFile: string): Promise<ShareResult>;
-}
 
 export interface LazyPanelOptions {
 	theme: Theme;

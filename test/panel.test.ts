@@ -26,7 +26,8 @@ import type {
 	TreeFilter,
 	TreeRow,
 } from "../src/types.ts";
-import { type ActionSource, type DataSource, LazyPanel } from "../src/ui/app.ts";
+import { LazyPanel } from "../src/ui/app.ts";
+import type { ActionSource, DataSource } from "../src/ui/ports.ts";
 import { cannotDeleteActiveTitle } from "../src/ui/widgets/alert-dialog.ts";
 import { compactDialogTitle } from "../src/ui/widgets/compact-dialog.ts";
 import {
