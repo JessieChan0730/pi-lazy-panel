@@ -112,7 +112,7 @@ import { renderFooter } from "./widgets/footer.ts";
 import { forkDialogHints, forkDialogTitle } from "./widgets/fork-dialog.ts";
 import { compactKeys, helpLineCount, overlayHelp } from "./widgets/help-overlay.ts";
 import { importDialogHints, importDialogSubject, importDialogTitle } from "./widgets/import-dialog.ts";
-import { InputDialog } from "./widgets/input-dialog.ts";
+import { InputDialog, type InputDialogSpec } from "./widgets/input-dialog.ts";
 import { labelDialogHints, labelDialogTitle } from "./widgets/label-dialog.ts";
 import { newSessionDialogHints, newSessionDialogTitle } from "./widgets/new-session-dialog.ts";
 import { renameDialogHints, renameDialogTitle } from "./widgets/rename-dialog.ts";
@@ -126,7 +126,7 @@ import {
 	summaryMenuTitle,
 } from "./widgets/restore-dialog.ts";
 import { renderSearchStatus, SearchBar } from "./widgets/search-bar.ts";
-import { SelectDialog } from "./widgets/select-dialog.ts";
+import { SelectDialog, type SelectDialogSpec } from "./widgets/select-dialog.ts";
 import { SessionInfoDialog } from "./widgets/session-info-dialog.ts";
 import { TreeDialog } from "./widgets/tree-dialog.ts";
 
@@ -180,6 +180,19 @@ interface RestoreTarget {
 interface TreeTarget {
 	file: string;
 	row: TreeRow;
+}
+
+/** Session `o` forks: its file, title-bar subject and the user messages to pick from. */
+interface ForkTarget {
+	file: string;
+	subject: string;
+	points: ForkPoint[];
+}
+
+/** Session `e` exports: its file and title-bar subject. */
+interface ExportJob {
+	file: string;
+	subject: string;
 }
 
 /**
@@ -236,24 +249,6 @@ export class LazyPanel implements Component, Focusable {
 	 * match, so folds are cleared meanwhile and restored when the query is gone.
 	 */
 	private foldedBeforeSearch: Set<string> | undefined;
-	/** Node being labelled while `mode === "label"`. */
-	private labelTarget: { file: string; entryId: string } | undefined;
-	/** Node being restored to while `mode === "restore"`. */
-	private restoreTarget: RestoreTarget | undefined;
-	/** Session being renamed while `mode === "rename"`. */
-	private renameTarget: SessionRow | undefined;
-	/** Session the delete confirmation is about while `mode === "confirm"`. */
-	private deleteTarget: SessionRow | undefined;
-	/** Sessions the batch delete confirmation is about (d with a multi-selection). */
-	private batchDeleteTargets: SessionRow[] | undefined;
-	/** Session being forked while `mode === "fork"`: its file, title-bar subject and the user messages to pick from. */
-	private forkTarget: { file: string; subject: string; points: ForkPoint[] } | undefined;
-	/** Session the clone confirmation is about while `mode === "clone"`. */
-	private cloneTarget: SessionRow | undefined;
-	/** Session being compacted while `mode === "compact"`. */
-	private compactTarget: SessionRow | undefined;
-	/** Session being exported while `mode === "export"`: its file, title-bar subject, and the format once picked. */
-	private exportJob: { file: string; subject: string; format?: ExportFormat } | undefined;
 	/** True while an Enter action is waiting for pi (keys are ignored, the panel is hidden). */
 	private entering = false;
 	/** Raw key chunks of an unfinished multi-key sequence. */
@@ -679,6 +674,42 @@ export class LazyPanel implements Component, Focusable {
 	/** Mode to return to when a label prompt / restore menu closes: `tree` while the dialog is still open. */
 	private baseMode(): PanelMode {
 		return this.treeDialog.isOpen ? "tree" : "normal";
+	}
+
+	/**
+	 * Show the text prompt of a flow in `mode`. The prompt and the menu are
+	 * never up together, so the menu (if any) closes first; the prompt gets the
+	 * IME cursor while the panel has focus.
+	 */
+	private openPrompt(mode: PanelMode, spec: InputDialogSpec): void {
+		this.selectDialog.close();
+		this.state.mode = mode;
+		this.inputDialog.open(spec);
+		this.inputDialog.focused = this._focused;
+		this.o.requestRender();
+	}
+
+	/** Show the menu of a flow (a picker, a confirmation, an alert) in `mode`; the text prompt (if any) closes first. */
+	private openMenu(mode: PanelMode, spec: SelectDialogSpec): void {
+		this.inputDialog.close();
+		this.inputDialog.focused = false;
+		this.state.mode = mode;
+		this.selectDialog.open(spec);
+		this.o.requestRender();
+	}
+
+	/**
+	 * End a flow: close its prompt / menu and go back to the base mode (`tree`
+	 * while the tree dialog is still open under it).
+	 *
+	 * 所有弹窗流程（打标签、恢复、删除、改名、fork、导出……）都从这里收尾；流程的目标由各自的回调闭包带着，不再存字段。
+	 */
+	private closeDialogs(): void {
+		this.state.mode = this.baseMode();
+		this.selectDialog.close();
+		this.inputDialog.close();
+		this.inputDialog.focused = false;
+		this.o.requestRender();
 	}
 
 	private openHelp(): void {
@@ -1362,48 +1393,32 @@ export class LazyPanel implements Component, Focusable {
 			this.setStatus(t("status.labelUnavailable"));
 			return;
 		}
-		this.labelTarget = { file: target.file, entryId: target.row.entryId };
-		this.state.mode = "label";
+		const { file, row } = target;
 		// 弹窗标题右侧显示是给哪条消息打标签。
-		this.inputDialog.open({
+		this.openPrompt("label", {
 			title: labelDialogTitle(),
-			value: target.row.label ?? "",
-			subject: `${target.row.role}: ${target.row.text}`,
+			value: row.label ?? "",
+			subject: `${row.role}: ${row.text}`,
 			hints: labelDialogHints(),
-			onSubmit: (v) => void this.submitLabel(v),
-			onCancel: () => this.cancelLabel(),
+			onSubmit: (v) => void this.submitLabel(file, row.entryId, v),
+			onCancel: () => this.closeDialogs(),
 		});
-		this.inputDialog.focused = this._focused;
-		this.o.requestRender();
 	}
 
 	/** Enter in the label prompt: persist, then reload the tree so the row shows the new label. */
-	private async submitLabel(value: string): Promise<void> {
-		const target = this.labelTarget;
-		this.closeLabelInput();
-		if (!target || !this.o.actions) return;
+	private async submitLabel(file: string, entryId: string, value: string): Promise<void> {
+		this.closeDialogs();
+		if (!this.o.actions) return;
 		const label = value.trim() || undefined;
 		try {
-			await this.o.actions.setNodeLabel(target.file, target.entryId, label);
+			await this.o.actions.setNodeLabel(file, entryId, label);
 			if (this.disposed) return;
 			this.setStatus(label ? t("status.labelSet", { label }) : t("status.labelRemoved"));
 		} catch (err) {
 			this.setStatus(t("status.labelFailed", { error: (err as Error).message }));
 			return;
 		}
-		await this.reloadTree(target.file, target.entryId);
-	}
-
-	private cancelLabel(): void {
-		this.closeLabelInput();
-		this.o.requestRender();
-	}
-
-	private closeLabelInput(): void {
-		this.state.mode = this.baseMode();
-		this.inputDialog.close();
-		this.inputDialog.focused = false;
-		this.labelTarget = undefined;
+		await this.reloadTree(file, entryId);
 	}
 
 	/**
@@ -1751,17 +1766,15 @@ export class LazyPanel implements Component, Focusable {
 			this.openCannotDeleteAlert(this.sessionTitle(row));
 			return;
 		}
-		this.deleteTarget = row;
-		this.state.mode = "confirm";
-		this.selectDialog.open(
+		this.openMenu(
+			"confirm",
 			confirmDialogSpec({
 				title: deleteSessionTitle(),
 				subject: this.sessionTitle(row),
-				onConfirm: () => void this.deleteSession(),
-				onCancel: () => this.closeConfirm(),
+				onConfirm: () => void this.deleteSession(row),
+				onCancel: () => this.closeDialogs(),
 			}),
 		);
-		this.o.requestRender();
 	}
 
 	/**
@@ -1787,28 +1800,25 @@ export class LazyPanel implements Component, Focusable {
 		const skipped = rows.length - targets.length;
 		// 当前打开的会话被跳过：它不会被删，也不该继续留在选中里。
 		for (const r of rows) if (!targets.includes(r)) this.state.selectedSessionFiles.delete(r.file);
-		this.batchDeleteTargets = targets;
-		this.state.mode = "confirm";
-		this.selectDialog.open(
+		this.openMenu(
+			"confirm",
 			confirmDialogSpec({
 				title: deleteSessionsTitle(targets.length),
 				subject: skipped
 					? t("confirm.deleteSkipped", { subjects: targets.map((r) => this.sessionTitle(r)).join(", ") })
 					: targets.map((r) => this.sessionTitle(r)).join(", "),
-				onConfirm: () => void this.deleteSelected(),
-				onCancel: () => this.closeConfirm(),
+				onConfirm: () => void this.deleteSelected(targets),
+				onCancel: () => this.closeDialogs(),
 			}),
 		);
-		this.o.requestRender();
 	}
 
 	/**
 	 * Yes on the batch confirmation: delete one by one; the ones that fail stay
 	 * listed and selected, the first error goes to the footer.
 	 */
-	private async deleteSelected(): Promise<void> {
-		const targets = this.batchDeleteTargets ?? [];
-		this.closeConfirm();
+	private async deleteSelected(targets: SessionRow[]): Promise<void> {
+		this.closeDialogs();
 		const remove = this.o.actions?.deleteSession;
 		if (!remove || targets.length === 0) return;
 		this.setStatus(t("status.deletingN", { count: targets.length }));
@@ -1980,37 +1990,27 @@ export class LazyPanel implements Component, Focusable {
 		this.changelogSpinner = undefined;
 	}
 
-	private closeConfirm(): void {
-		this.state.mode = this.baseMode();
-		this.selectDialog.close();
-		this.deleteTarget = undefined;
-		this.batchDeleteTargets = undefined;
-		this.o.requestRender();
-	}
-
 	/**
 	 * Warn (in a box, not just the footer) that the session pi has open can't be
 	 * deleted. Reuses the select dialog + "confirm" mode so Enter / Esc / OK all
-	 * dismiss it through `closeConfirm`; nothing is ever deleted from here.
+	 * dismiss it through `closeDialogs`; nothing is ever deleted from here.
 	 */
 	private openCannotDeleteAlert(subject: string | undefined): void {
-		this.state.mode = "confirm";
-		this.selectDialog.open(
+		this.openMenu(
+			"confirm",
 			alertDialogSpec({
 				title: cannotDeleteActiveTitle(),
 				...(subject ? { subject } : {}),
-				onClose: () => this.closeConfirm(),
+				onClose: () => this.closeDialogs(),
 			}),
 		);
-		this.o.requestRender();
 	}
 
 	/** Yes in the confirmation: remove the file, then re-list with the cursor clamped (TREE / CONTENT follow). */
-	private async deleteSession(): Promise<void> {
-		const row = this.deleteTarget;
-		this.closeConfirm();
+	private async deleteSession(row: SessionRow): Promise<void> {
+		this.closeDialogs();
 		const remove = this.o.actions?.deleteSession;
-		if (!row || !remove) return;
+		if (!remove) return;
 		this.setStatus(t("status.deleting"));
 		let method: DeleteMethod;
 		try {
@@ -2036,27 +2036,22 @@ export class LazyPanel implements Component, Focusable {
 			this.setStatus(t("status.renameUnavailable"));
 			return;
 		}
-		this.renameTarget = row;
-		this.state.mode = "rename";
 		// 弹窗标题右侧显示是给哪个会话改名（首条消息预览，名字本身在输入框里）。
-		this.inputDialog.open({
+		this.openPrompt("rename", {
 			title: renameDialogTitle(),
 			value: row.name ?? "",
 			subject: row.preview || row.id,
 			hints: renameDialogHints(),
-			onSubmit: (v) => void this.submitRename(v),
-			onCancel: () => this.closeRenameInput(),
+			onSubmit: (v) => void this.submitRename(row, v),
+			onCancel: () => this.closeDialogs(),
 		});
-		this.inputDialog.focused = this._focused;
-		this.o.requestRender();
 	}
 
 	/** Enter in the Rename prompt: persist, then re-list so the row shows the new name (cursor stays on it). */
-	private async submitRename(value: string): Promise<void> {
-		const row = this.renameTarget;
-		this.closeRenameInput();
+	private async submitRename(row: SessionRow, value: string): Promise<void> {
+		this.closeDialogs();
 		const rename = this.o.actions?.renameSession;
-		if (!row || !rename) return;
+		if (!rename) return;
 		const name = value.trim();
 		try {
 			await rename(row.file, name);
@@ -2075,46 +2070,28 @@ export class LazyPanel implements Component, Focusable {
 		}
 	}
 
-	private closeRenameInput(): void {
-		this.state.mode = this.baseMode();
-		this.inputDialog.close();
-		this.inputDialog.focused = false;
-		this.renameTarget = undefined;
-		this.o.requestRender();
-	}
-
 	/** n: prompt for an optional name, then start a fresh session (/new) and close the panel. */
 	private openNewSessionInput(): void {
 		if (!this.o.actions?.newSession) {
 			this.setStatus(t("status.newUnavailable"));
 			return;
 		}
-		this.state.mode = "new";
-		this.inputDialog.open({
+		this.openPrompt("new", {
 			title: newSessionDialogTitle(),
 			value: "",
 			hints: newSessionDialogHints(),
 			onSubmit: (v) => void this.submitNewSession(v),
-			onCancel: () => this.closeNewSessionInput(),
+			onCancel: () => this.closeDialogs(),
 		});
-		this.inputDialog.focused = this._focused;
-		this.o.requestRender();
 	}
 
 	/** Enter in the New session prompt: create it (naming it when non-empty), then close via `enter()`. */
 	private async submitNewSession(value: string): Promise<void> {
 		const create = this.o.actions?.newSession;
-		this.closeNewSessionInput();
+		this.closeDialogs();
 		if (!create) return;
 		const name = value.trim();
 		await this.enter("new", () => create(name));
-	}
-
-	private closeNewSessionInput(): void {
-		this.state.mode = this.baseMode();
-		this.inputDialog.close();
-		this.inputDialog.focused = false;
-		this.o.requestRender();
 	}
 
 	/** c: prompt for optional focus instructions, then compact the cursor session (/compact) and open it. */
@@ -2126,37 +2103,24 @@ export class LazyPanel implements Component, Focusable {
 			this.setStatus(t("status.compactUnavailable"));
 			return;
 		}
-		this.compactTarget = row;
-		this.state.mode = "compact";
 		// 标题右侧显示压缩的是哪个会话（首条消息预览）；输入框留空 = 用 pi 的默认压缩指令。
-		this.inputDialog.open({
+		this.openPrompt("compact", {
 			title: compactDialogTitle(),
 			value: "",
 			subject: row.preview || row.id,
 			hints: compactDialogHints(),
-			onSubmit: (v) => void this.submitCompact(v),
-			onCancel: () => this.closeCompactInput(),
+			onSubmit: (v) => void this.submitCompact(row, v),
+			onCancel: () => this.closeDialogs(),
 		});
-		this.inputDialog.focused = this._focused;
-		this.o.requestRender();
 	}
 
 	/** Enter in the Compact prompt: compact the session (blank = pi's default instructions), then close via `enter()`. */
-	private async submitCompact(value: string): Promise<void> {
-		const row = this.compactTarget;
+	private async submitCompact(row: SessionRow, value: string): Promise<void> {
 		const compact = this.o.actions?.compactSession;
-		this.closeCompactInput();
-		if (!row || !compact) return;
+		this.closeDialogs();
+		if (!compact) return;
 		const instructions = value.trim();
 		await this.enter("compact", () => compact(row.file, instructions || undefined));
-	}
-
-	private closeCompactInput(): void {
-		this.state.mode = this.baseMode();
-		this.inputDialog.close();
-		this.inputDialog.focused = false;
-		this.compactTarget = undefined;
-		this.o.requestRender();
 	}
 
 	/** o: pick the user message to fork before (pi's /fork selector), then confirm and fork. */
@@ -2180,17 +2144,13 @@ export class LazyPanel implements Component, Focusable {
 			this.setStatus(t("status.noForkMessages"));
 			return;
 		}
-		this.forkTarget = { file: row.file, subject: this.sessionTitle(row), points };
 		// 默认停在最后一条 user 消息（和 pi 内置 /fork 一致）。
-		this.openForkSelector(points.length - 1);
+		this.openForkSelector({ file: row.file, subject: this.sessionTitle(row), points }, points.length - 1);
 	}
 
 	/** The fork selector with the cursor on `index` (Esc / No on the confirmation comes back onto that message). */
-	private openForkSelector(index: number): void {
-		const target = this.forkTarget;
-		if (!target) return;
-		this.state.mode = "fork";
-		this.selectDialog.open({
+	private openForkSelector(target: ForkTarget, index: number): void {
+		this.openMenu("fork", {
 			title: forkDialogTitle(),
 			items: target.points.map((p) => p.text),
 			initialIndex: index,
@@ -2198,46 +2158,36 @@ export class LazyPanel implements Component, Focusable {
 			hints: forkDialogHints(),
 			// 消息多了按窗口滚动，不撑破终端。
 			maxRows: this.dialogMaxRows(),
-			onSelect: (i) => this.confirmFork(i),
-			onCancel: () => this.closeForkDialogs(),
+			onSelect: (i) => this.confirmFork(target, i),
+			onCancel: () => this.closeDialogs(),
 		});
-		this.o.requestRender();
 	}
 
 	/** A picked message → the Yes / No confirmation (CLAUDE.md rule 7) before the fork happens. */
-	private confirmFork(index: number): void {
-		const target = this.forkTarget;
-		const point = target?.points[index];
-		if (!target || !point) {
-			this.closeForkDialogs();
+	private confirmFork(target: ForkTarget, index: number): void {
+		const point = target.points[index];
+		if (!point) {
+			this.closeDialogs();
 			return;
 		}
-		this.state.mode = "fork";
-		this.selectDialog.open(
+		this.openMenu(
+			"fork",
 			confirmDialogSpec({
 				title: forkSessionTitle(),
 				subject: point.text,
 				onConfirm: () => void this.runFork(target.file, point.entryId),
 				// Esc / No：退回选择器，光标停在刚选中的那条消息上。
-				onCancel: () => this.openForkSelector(index),
+				onCancel: () => this.openForkSelector(target, index),
 			}),
 		);
-		this.o.requestRender();
 	}
 
 	/** Confirmed: fork before the picked message (pi puts its text back into the fork's editor), then close. */
 	private async runFork(file: string, entryId: string): Promise<void> {
 		const fork = this.o.actions?.forkSession;
-		this.closeForkDialogs();
+		this.closeDialogs();
 		if (!fork) return;
 		await this.enter("fork", () => fork(file, entryId));
-	}
-
-	private closeForkDialogs(): void {
-		this.state.mode = this.baseMode();
-		this.selectDialog.close();
-		this.forkTarget = undefined;
-		this.o.requestRender();
 	}
 
 	/** y: confirm, then clone the active branch of the session under the cursor to a new file (/clone). */
@@ -2249,32 +2199,22 @@ export class LazyPanel implements Component, Focusable {
 			this.setStatus(t("status.cloneUnavailable"));
 			return;
 		}
-		this.cloneTarget = row;
-		this.state.mode = "clone";
-		this.selectDialog.open(
+		this.openMenu(
+			"clone",
 			confirmDialogSpec({
 				title: cloneSessionTitle(),
 				subject: this.sessionTitle(row),
-				onConfirm: () => void this.runClone(),
-				onCancel: () => this.closeCloneConfirm(),
+				onConfirm: () => void this.runClone(row),
+				onCancel: () => this.closeDialogs(),
 			}),
 		);
-		this.o.requestRender();
 	}
 
-	private async runClone(): Promise<void> {
-		const row = this.cloneTarget;
+	private async runClone(row: SessionRow): Promise<void> {
 		const clone = this.o.actions?.cloneSession;
-		this.closeCloneConfirm();
-		if (!row || !clone) return;
+		this.closeDialogs();
+		if (!clone) return;
 		await this.enter("clone", () => clone(row.file));
-	}
-
-	private closeCloneConfirm(): void {
-		this.state.mode = this.baseMode();
-		this.selectDialog.close();
-		this.cloneTarget = undefined;
-		this.o.requestRender();
 	}
 
 	/** Y: copy the last assistant reply of the session under the cursor to the clipboard (/copy). */
@@ -2304,16 +2244,12 @@ export class LazyPanel implements Component, Focusable {
 			this.setStatus(t("status.exportUnavailable"));
 			return;
 		}
-		this.exportJob = { file: row.file, subject: this.sessionTitle(row) };
-		this.openExportMenu(0);
+		this.openExportMenu({ file: row.file, subject: this.sessionTitle(row) }, 0);
 	}
 
 	/** The format menu with the cursor on `index` (Esc from the path prompt comes back onto the chosen format). */
-	private openExportMenu(index: number): void {
-		const job = this.exportJob;
-		if (!job) return;
-		this.state.mode = "export";
-		this.selectDialog.open({
+	private openExportMenu(job: ExportJob, index: number): void {
+		this.openMenu("export", {
 			title: exportFormatTitle(),
 			items: exportFormats().map((f) => f.label),
 			initialIndex: index,
@@ -2321,51 +2257,36 @@ export class LazyPanel implements Component, Focusable {
 			hints: exportFormatHints(),
 			onSelect: (i) => {
 				const format = exportFormats()[i]?.format;
-				if (format) this.openExportPath(format);
+				if (format) this.openExportPath(job, format);
 			},
-			onCancel: () => this.closeExportDialogs(),
+			onCancel: () => this.closeDialogs(),
 		});
-		this.o.requestRender();
 	}
 
 	/**
 	 * The output-path prompt, pre-filled with pi's default (or `value`, what the
 	 * user typed before backing out of the overwrite confirmation).
 	 */
-	private openExportPath(format: ExportFormat, value?: string): void {
-		const job = this.exportJob;
+	private openExportPath(job: ExportJob, format: ExportFormat, value?: string): void {
 		const resolveTarget = this.o.actions?.exportTarget;
-		if (!job || !resolveTarget) return;
-		job.format = format;
-		this.selectDialog.close();
-		this.state.mode = "export";
-		this.inputDialog.open({
+		if (!resolveTarget) return;
+		this.openPrompt("export", {
 			title: exportPathTitle(),
 			// 预填 pi 的默认路径（绝对路径），用户一眼能看到会写到哪里；改成目录就在里面用默认文件名。
 			value: value ?? resolveTarget(job.file, format, "").path,
 			subject: job.subject,
 			hints: exportPathHints(),
-			onSubmit: (v) => this.submitExportPath(v),
+			onSubmit: (v) => this.submitExportPath(job, format, v),
 			// Esc：退回格式菜单，光标停在刚选的格式上。
-			onCancel: () => {
-				this.inputDialog.close();
-				this.inputDialog.focused = false;
-				this.openExportMenu(EXPORT_FORMAT_ORDER.indexOf(format));
-			},
+			onCancel: () => this.openExportMenu(job, EXPORT_FORMAT_ORDER.indexOf(format)),
 		});
-		this.inputDialog.focused = this._focused;
-		this.o.requestRender();
 	}
 
 	/** Enter in the path prompt: export right away, or ask first when a file is already there. */
-	private submitExportPath(value: string): void {
-		const job = this.exportJob;
-		const format = job?.format;
+	private submitExportPath(job: ExportJob, format: ExportFormat, value: string): void {
 		const resolveTarget = this.o.actions?.exportTarget;
-		this.inputDialog.close();
-		this.inputDialog.focused = false;
-		if (!job || !format || !resolveTarget) {
-			this.closeExportDialogs();
+		if (!resolveTarget) {
+			this.closeDialogs();
 			return;
 		}
 		const target = resolveTarget(job.file, format, value);
@@ -2374,22 +2295,21 @@ export class LazyPanel implements Component, Focusable {
 			return;
 		}
 		// 覆盖已有文件是破坏性操作，先确认（CLAUDE.md 第 7 条）；No / Esc 退回路径输入框，保留刚才输入的内容。
-		this.state.mode = "export";
-		this.selectDialog.open(
+		this.openMenu(
+			"export",
 			confirmDialogSpec({
 				title: overwriteFileTitle(),
 				subject: target.path,
 				onConfirm: () => void this.runExport(job.file, format, target.path),
-				onCancel: () => this.openExportPath(format, value),
+				onCancel: () => this.openExportPath(job, format, value),
 			}),
 		);
-		this.o.requestRender();
 	}
 
 	/** Write the export; the panel stays open and the footer says where the file went. */
 	private async runExport(file: string, format: ExportFormat, path: string): Promise<void> {
 		const write = this.o.actions?.exportSession;
-		this.closeExportDialogs();
+		this.closeDialogs();
 		if (!write) return;
 		this.setStatus(t("status.exporting"));
 		try {
@@ -2402,47 +2322,32 @@ export class LazyPanel implements Component, Focusable {
 		}
 	}
 
-	private closeExportDialogs(): void {
-		this.state.mode = this.baseMode();
-		this.selectDialog.close();
-		this.inputDialog.close();
-		this.inputDialog.focused = false;
-		this.exportJob = undefined;
-		this.o.requestRender();
-	}
-
 	/** I: ask for the JSONL to import (`value` = what was typed before backing out of the confirmation). */
 	private openImportInput(value: string): void {
 		if (!this.o.actions?.importSession) {
 			this.setStatus(t("status.importUnavailable"));
 			return;
 		}
-		this.selectDialog.close();
-		this.state.mode = "import";
-		this.inputDialog.open({
+		this.openPrompt("import", {
 			title: importDialogTitle(),
 			value,
 			subject: importDialogSubject(),
 			hints: importDialogHints(),
 			onSubmit: (v) => this.confirmImport(v),
-			onCancel: () => this.closeImportDialogs(),
+			onCancel: () => this.closeDialogs(),
 		});
-		this.inputDialog.focused = this._focused;
-		this.o.requestRender();
 	}
 
 	/** Enter in the import prompt: confirm like pi's /import ("Replace current session with …?"). */
 	private confirmImport(value: string): void {
-		this.inputDialog.close();
-		this.inputDialog.focused = false;
 		const path = value.trim();
 		if (!path) {
-			this.closeImportDialogs();
+			this.closeDialogs();
 			this.setStatus(t("status.importNoFile"));
 			return;
 		}
-		this.state.mode = "import";
-		this.selectDialog.open(
+		this.openMenu(
+			"import",
 			confirmDialogSpec({
 				title: importSessionTitle(),
 				subject: path,
@@ -2451,23 +2356,14 @@ export class LazyPanel implements Component, Focusable {
 				onCancel: () => this.openImportInput(value),
 			}),
 		);
-		this.o.requestRender();
 	}
 
 	/** Confirmed: copy the file into the session folder and switch to it, closing the panel via `enter()`. */
 	private async runImport(input: string): Promise<void> {
 		const load = this.o.actions?.importSession;
-		this.closeImportDialogs();
+		this.closeDialogs();
 		if (!load) return;
 		await this.enter("import", () => load(input));
-	}
-
-	private closeImportDialogs(): void {
-		this.state.mode = this.baseMode();
-		this.selectDialog.close();
-		this.inputDialog.close();
-		this.inputDialog.focused = false;
-		this.o.requestRender();
 	}
 
 	/** S: confirm (the session leaves the machine), then upload it as a secret gist (/share). */
@@ -2479,22 +2375,21 @@ export class LazyPanel implements Component, Focusable {
 			this.setStatus(t("status.shareUnavailable"));
 			return;
 		}
-		this.state.mode = "share";
-		this.selectDialog.open(
+		this.openMenu(
+			"share",
 			confirmDialogSpec({
 				title: shareSessionTitle(),
 				subject: this.sessionTitle(row),
 				onConfirm: () => void this.runShare(row.file),
-				onCancel: () => this.closeShareConfirm(),
+				onCancel: () => this.closeDialogs(),
 			}),
 		);
-		this.o.requestRender();
 	}
 
 	/** Upload, then put the viewer link on the clipboard (a long link may not fit the footer) and show it. */
 	private async runShare(file: string): Promise<void> {
 		const share = this.o.actions?.shareSession;
-		this.closeShareConfirm();
+		this.closeDialogs();
 		if (!share) return;
 		this.setStatus(t("status.sharing"));
 		let result: ShareResult;
@@ -2516,12 +2411,6 @@ export class LazyPanel implements Component, Focusable {
 			if (this.disposed) return;
 			this.setStatus(t("status.shared", { url: result.url }));
 		}
-	}
-
-	private closeShareConfirm(): void {
-		this.state.mode = this.baseMode();
-		this.selectDialog.close();
-		this.o.requestRender();
 	}
 
 	/** Rows a centered menu may show at once before it scrolls: leave room for borders + footer. */
@@ -2636,27 +2525,23 @@ export class LazyPanel implements Component, Focusable {
 
 	/** The three-way menu of /tree; `index` is where the cursor starts (Esc from the custom prompt comes back onto that entry). */
 	private openSummaryMenu(target: RestoreTarget, index: number): void {
-		this.restoreTarget = target;
-		this.state.mode = "restore";
-		this.selectDialog.open({
+		this.openMenu("restore", {
 			title: summaryMenuTitle(),
 			items: summaryMenu().map((m) => m.label),
 			initialIndex: index,
 			subject: target.subject,
 			hints: summaryMenuHints(),
-			onSelect: (i) => this.chooseSummary(i),
+			onSelect: (i) => this.chooseSummary(target, i),
 			// Esc：退回 tree 面板，什么都不做（pi 是退回 tree 选择器）。
-			onCancel: () => this.closeRestoreDialogs(),
+			onCancel: () => this.closeDialogs(),
 		});
-		this.o.requestRender();
 	}
 
 	/** Enter in the menu: restore right away, or ask for the custom instructions first. */
-	private chooseSummary(index: number): void {
-		const target = this.restoreTarget;
+	private chooseSummary(target: RestoreTarget, index: number): void {
 		const choice = SUMMARY_CHOICES[index];
-		this.closeRestoreDialogs();
-		if (!target || !choice) return;
+		this.closeDialogs();
+		if (!choice) return;
 		switch (choice) {
 			case "none":
 				void this.runRestore(target, { summarize: false });
@@ -2672,39 +2557,21 @@ export class LazyPanel implements Component, Focusable {
 
 	/** "Summarize with custom prompt": a one-line prompt for the summarizer instructions (pi uses a multi-line editor). */
 	private openCustomPrompt(target: RestoreTarget): void {
-		this.restoreTarget = target;
-		this.state.mode = "restore";
-		this.inputDialog.open({
+		this.openPrompt("restore", {
 			title: customPromptTitle(),
 			subject: target.subject,
 			hints: customPromptHints(),
-			onSubmit: (v) => this.submitCustomPrompt(v),
+			onSubmit: (v) => this.submitCustomPrompt(target, v),
 			// Esc：退回三选菜单，光标停在 custom prompt 那一项，和 pi 一致。
-			onCancel: () => {
-				this.closeRestoreDialogs();
-				this.openSummaryMenu(target, CUSTOM_PROMPT_INDEX);
-			},
+			onCancel: () => this.openSummaryMenu(target, CUSTOM_PROMPT_INDEX),
 		});
-		this.inputDialog.focused = this._focused;
-		this.o.requestRender();
 	}
 
 	/** Enter in the custom prompt: summarize with the instructions (blank = pi's default prompt). */
-	private submitCustomPrompt(value: string): void {
-		const target = this.restoreTarget;
-		this.closeRestoreDialogs();
-		if (!target) return;
+	private submitCustomPrompt(target: RestoreTarget, value: string): void {
+		this.closeDialogs();
 		const instructions = value.trim();
 		void this.runRestore(target, instructions ? { summarize: true, customInstructions: instructions } : { summarize: true });
-	}
-
-	private closeRestoreDialogs(): void {
-		this.state.mode = this.baseMode();
-		this.selectDialog.close();
-		this.inputDialog.close();
-		this.inputDialog.focused = false;
-		this.restoreTarget = undefined;
-		this.o.requestRender();
 	}
 
 	/** Hand the choice to the actions layer; a summary takes a while, so the footer says so meanwhile. */
