@@ -203,7 +203,8 @@ function renderRow(row: SessionRow, inner: number, isCursor: boolean, isCurrent:
 	const line2Raw = `  ${indent}${truncateToWidth(details, Math.max(1, inner - 2 - visibleWidth(indent)), "…", false)}`;
 
 	if (isCursor) {
-		const hl = (s: string) => theme.bg("selectedBg", fit(s, inner));
+		// 截断会在省略号前后插入完整重置码，分段补回背景，避免高亮在行中断开。
+		const hl = (s: string) => fit(s, inner).split("\x1b[0m").map((part) => theme.bg("selectedBg", part)).join("\x1b[0m");
 		// 光标行整行反白；被选中时标题额外着 accent 色。
 		const titleSpan = isSelected ? theme.bold(theme.fg("accent", titleText)) : theme.bold(titleText);
 		return [
