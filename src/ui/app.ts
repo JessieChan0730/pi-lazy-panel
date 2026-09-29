@@ -1648,7 +1648,7 @@ export class LazyPanel implements Component, Focusable {
 		this.o.requestRender();
 	}
 
-	/** The read-only Context usage box (u): `onCopy` gets its text on y, Esc / q close it. */
+	/** Context usage (u): y copies the current view; Enter previews a category, Esc returns one level. */
 	private openUsage(info: ContextUsageInfo, onCopy: (text: string) => void): void {
 		this.state.mode = "usage";
 		this.usageDialog.open({ info, onCopy, onClose: () => this.closeUsage() });

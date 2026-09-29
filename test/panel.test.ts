@@ -2117,9 +2117,9 @@ function makeSessionActionPanel(
 							compactThreshold: 0.918,
 							compactRemaining: 100_000,
 							categories: [
-								{ key: "systemPrompt", tokens: 1700, color: "accent" },
-								{ key: "toolResults", tokens: 40_000, color: "mdLink" },
-								{ key: "context", tokens: 42_513, color: "warning" },
+								{ key: "systemPrompt", tokens: 1700, color: "accent", prompt: "SYSTEM_PROMPT_SOURCE" },
+								{ key: "toolResults", tokens: 40_000, color: "mdLink", prompt: "TOOL_RESULT_SOURCE" },
+								{ key: "context", tokens: 42_513, color: "warning", prompt: "CONVERSATION_SOURCE" },
 								{ key: "other", tokens: 0, color: "customMessageLabel" },
 								{ key: "freeSpace", tokens: 115_787, color: "dim" },
 							],
@@ -2669,10 +2669,11 @@ test("u opens the context-usage box for the cursor session; y copies its text, E
 	assert.ok(body.includes("84.2k") && body.includes("200k"), body);
 	assert.ok(body.includes("System prompt") && body.includes("Tool results"), body);
 	assert.ok(body.includes("Context") && body.includes("Free space"), body);
+	for (const hint of ["j/k/↑↓ select", "Enter preview", "y copy", "Esc close"]) assert.ok(body.includes(hint), `local hint missing: ${hint}`);
 	assert.ok(h.footer().includes("USAGE") && h.footer().includes("y copy") && h.footer().includes("Esc close"), h.footer());
 	for (const l of h.panel.render(120)) assert.equal(visibleWidth(l), 120);
 
-	// y copies the whole text and keeps the box open; j/d are swallowed
+	// y copies the whole text and keeps the box open; navigation never reaches the panel
 	h.panel.handleInput("y");
 	await flush();
 	assert.equal(h.copies.length, 1);
@@ -2705,6 +2706,48 @@ test("u opens the context-usage box for the cursor session; y copies its text, E
 	assert.equal(bare.panel.state.mode, "normal");
 	assert.ok(bare.footer().includes("context usage: unavailable"), bare.footer());
 	bare.panel.dispose();
+});
+
+test("context prompt preview: Enter opens the selected category, Esc returns with selection intact", async () => {
+	const h = makeSessionActionPanel();
+	await h.panel.load();
+	h.panel.handleInput("u");
+	await flush();
+	assert.ok(h.text().some((line) => line.includes("›") && line.includes("System prompt")));
+	assert.ok(h.footer().includes("Enter preview"));
+	h.panel.handleInput("j");
+	h.panel.handleInput("\r");
+	assert.equal(h.panel.state.mode, "usage");
+	assert.ok(dialogAt(h.text(), "Prompt · Tool results"));
+	assert.ok(h.text().join("\n").includes("TOOL_RESULT_SOURCE"));
+	assert.ok(h.footer().includes("Esc back"));
+	h.panel.handleInput("y");
+	await flush();
+	assert.equal(h.copies.at(-1), "TOOL_RESULT_SOURCE");
+	const promptBody = dialogAt(h.text(), "Prompt · Tool results")!.body.join("\n");
+	for (const hint of ["j/k/↑↓ scroll", "y copy", "Esc back"]) assert.ok(promptBody.includes(hint), `local hint missing after copying: ${hint}`);
+	// Esc closes only the child; the selection and panel cursor are untouched.
+	h.panel.handleInput("\x1b");
+	assert.equal(h.panel.state.mode, "usage");
+	assert.ok(dialogAt(h.text(), CONTEXT_USAGE_TITLE));
+	assert.ok(h.text().some((line) => line.includes("›") && line.includes("Tool results")));
+	assert.equal(h.panel.state.cursor.sessions, 0);
+	h.panel.handleInput("\x1b[A");
+	h.panel.handleInput("\r");
+	assert.ok(dialogAt(h.text(), "Prompt · System prompt"));
+	h.panel.handleInput("q");
+	h.panel.handleInput("\x1b[B");
+	h.panel.handleInput("j");
+	h.panel.handleInput("\r");
+	assert.ok(dialogAt(h.text(), "Prompt · Context"));
+	h.panel.handleInput("\x1b");
+	h.panel.handleInput("\x1b");
+	assert.equal(h.panel.state.mode, "normal");
+	h.panel.handleInput("u");
+	await flush();
+	h.panel.handleInput("\r");
+	assert.ok(dialogAt(h.text(), "Prompt · System prompt"), "reopening resets the selection");
+	h.panel.dispose();
 });
 
 test("Session Info wraps a value too wide for the box (the path) onto continuation lines instead of cutting it", async () => {

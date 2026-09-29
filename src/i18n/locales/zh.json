@@ -209,7 +209,8 @@
     "scroll": "滚动",
     "page": "翻页",
     "topBottom": "顶部/底部",
-    "backToList": "返回列表"
+    "backToList": "返回列表",
+    "preview": "查看详情"
   },
   "dialog": {
     "labelTitle": "标签",
@@ -240,7 +241,8 @@
     "restoreSummarize": "总结",
     "restoreCustom": "用自定义提示总结",
     "restoreCustomTitle": "自定义总结指令",
-    "forkTitle": "从哪条消息之前分叉？"
+    "forkTitle": "从哪条消息之前分叉？",
+    "promptDetailTitle": "提示词 · {{category}}"
   },
   "confirm": {
     "yes": "是",
@@ -291,7 +293,16 @@
     "freeSpace": "空闲",
     "model": "模型",
     "messages": "消息数",
-    "cost": "累计费用"
+    "cost": "累计费用",
+    "emptyPrompt": "此分类没有提示词内容。",
+    "previewImage": "[文本预览已省略图片数据]",
+    "previewToolCall": "助手工具调用：{{name}}",
+    "previewAssistant": "助手",
+    "previewThinking": "助手思考",
+    "previewCommand": "命令",
+    "previewOutput": "输出",
+    "previewSummary": "摘要",
+    "previewUser": "用户"
   },
   "enter": {
     "resume": "恢复",

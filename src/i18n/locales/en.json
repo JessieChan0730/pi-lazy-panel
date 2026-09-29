@@ -209,7 +209,8 @@
     "scroll": "scroll",
     "page": "page",
     "topBottom": "top/bottom",
-    "backToList": "back to the list"
+    "backToList": "back to the list",
+    "preview": "preview"
   },
   "dialog": {
     "labelTitle": "Label",
@@ -240,7 +241,8 @@
     "restoreSummarize": "Summarize",
     "restoreCustom": "Summarize with custom prompt",
     "restoreCustomTitle": "Custom summarization instructions",
-    "forkTitle": "Fork before which message?"
+    "forkTitle": "Fork before which message?",
+    "promptDetailTitle": "Prompt · {{category}}"
   },
   "confirm": {
     "yes": "Yes",
@@ -291,7 +293,16 @@
     "freeSpace": "Free space",
     "model": "Model",
     "messages": "Messages",
-    "cost": "Cost so far"
+    "cost": "Cost so far",
+    "emptyPrompt": "No prompt content in this category.",
+    "previewImage": "[Image payload omitted from text preview]",
+    "previewToolCall": "Assistant tool call: {{name}}",
+    "previewAssistant": "Assistant",
+    "previewThinking": "Assistant thinking",
+    "previewCommand": "Command",
+    "previewOutput": "Output",
+    "previewSummary": "Summary",
+    "previewUser": "User"
   },
   "enter": {
     "resume": "resume",

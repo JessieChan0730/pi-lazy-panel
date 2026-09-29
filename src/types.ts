@@ -209,6 +209,8 @@ export interface ContextUsageCategory {
 	key: string;
 	tokens: number;
 	color: ContextUsageColor;
+	/** Markdown source for Enter preview; empty means no content, absent means a statistics-only row. */
+	prompt?: string;
 }
 
 /**

@@ -19,13 +19,11 @@
  *   │ Model     claude-opus-4                                │
  *   │ Messages  12                                           │
  *   └────────────────────────────────────────────────────────┘
- *    USAGE │ y copy   Esc close
+ *    USAGE │ j/k/↑↓ select   Enter preview   y copy   Esc close
  *
- * Read-only like the Session Info box: `y` hands the whole text to `onCopy`,
- * Esc / q close, every other key is swallowed. The panel loads the data
- * (data/context-usage.ts) and does the copying through the actions layer.
- *
- * 上下文占用弹窗：只管画和 y / Esc；数据由面板加载、复制走 actions 层。
+ * j/k or arrows select a category; Enter previews its prompt in a nested
+ * Markdown dialog. Esc returns to this list without losing the selection.
+ * y copies the current view; statistics-only rows have no prompt to preview.
  */
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
@@ -35,7 +33,10 @@ import { matchesKeyId } from "../../config/keys.ts";
 import { t } from "../../i18n/index.ts";
 import type { ContextUsageCategory, ContextUsageInfo, KeyHint } from "../../types.ts";
 import { formatCost, formatTokens } from "../../utils/format.ts";
-import { dialogWidth, FRAME_DIVIDER, frame, metaBudget, overlayCentered } from "../frame.ts";
+import { dialogWidth, fit, FRAME_DIVIDER, frame, metaBudget, overlayCentered } from "../frame.ts";
+
+import { renderDialogHints } from "./dialog-hints.ts";
+import { PromptDetailDialog } from "./prompt-detail-dialog.ts";
 
 /** Title on the top border (localised). */
 export function contextUsageTitle(): string {
@@ -45,6 +46,8 @@ export function contextUsageTitle(): string {
 /** Footer hints while the dialog is open. */
 export function contextUsageHints(): KeyHint[] {
 	return [
+		["j/k/↑↓", t("hint.select")],
+		["Enter", t("hint.preview")],
 		["y", t("hint.copy")],
 		["Esc", t("hint.close")],
 	];
@@ -55,7 +58,7 @@ const LABEL_WIDTH = 16;
 
 export interface ContextUsageDialogSpec {
 	info: ContextUsageInfo;
-	/** `y`: receives the dialog's text (see `contextUsageText`). */
+	/** `y`: receives the summary (`contextUsageText`) or the open category's prompt. */
 	onCopy: (text: string) => void;
 	onClose: () => void;
 }
@@ -130,8 +133,13 @@ export function contextUsageText(info: ContextUsageInfo): string {
 
 export class ContextUsageDialog {
 	private spec: ContextUsageDialogSpec | undefined;
+	private selected = -1;
+	private scroll = 0;
+	private readonly detail: PromptDetailDialog;
 
-	constructor(private readonly o: ContextUsageDialogOptions) {}
+	constructor(private readonly o: ContextUsageDialogOptions) {
+		this.detail = new PromptDetailDialog(o.theme);
+	}
 
 	/** True between `open` and `close`. */
 	get isOpen(): boolean {
@@ -140,34 +148,72 @@ export class ContextUsageDialog {
 
 	/** Footer hints while open (empty when closed). */
 	get hints(): KeyHint[] {
-		return this.spec ? contextUsageHints() : [];
+		return this.spec ? (this.detail.isOpen ? this.detail.hints : contextUsageHints()) : [];
 	}
 
 	open(spec: ContextUsageDialogSpec): void {
+		this.detail.close();
 		this.spec = spec;
+		this.selected = spec.info.categories.findIndex((category) => category.prompt !== undefined);
+		this.scroll = 0;
 	}
 
 	/** Drop the dialog without firing a callback. */
 	close(): void {
 		this.spec = undefined;
+		this.detail.close();
 	}
 
 	handleInput(data: string): void {
 		const spec = this.spec;
 		if (!spec) return;
+		// 子弹窗先消费 Esc，不能顺手把父弹窗也关掉。
+		if (this.detail.isOpen) {
+			this.detail.handleInput(data);
+			return;
+		}
 		if (matchesKeyId(data, "escape") || matchesKeyId(data, "q")) {
 			spec.onClose();
 			return;
 		}
-		if (matchesKeyId(data, "y")) spec.onCopy(contextUsageText(spec.info));
+		if (matchesKeyId(data, "j") || matchesKeyId(data, "down")) this.move(1);
+		else if (matchesKeyId(data, "k") || matchesKeyId(data, "up")) this.move(-1);
+		else if (matchesKeyId(data, "enter")) {
+			const category = spec.info.categories[this.selected];
+			if (category?.prompt !== undefined) {
+				this.detail.open({ category: categoryLabel(category.key), prompt: category.prompt, onCopy: spec.onCopy });
+			}
+		} else if (matchesKeyId(data, "y")) spec.onCopy(contextUsageText(spec.info));
 		// 其他按键一律吞掉，不能漏到下面的面板去。
 	}
 
+	private move(delta: number): void {
+		const categories = this.spec?.info.categories ?? [];
+		for (let i = this.selected + delta; i >= 0 && i < categories.length; i += delta) {
+			if (categories[i]?.prompt !== undefined) {
+				this.selected = i;
+				return;
+			}
+		}
+	}
+
 	/** Render the box itself, every line exactly `width` columns. */
-	render(width: number): string[] {
+	render(width: number, height?: number): string[] {
 		const info = this.spec?.info;
 		const inner = width - 2;
-		const body = info ? this.renderBody(info, inner) : [];
+		const hints = renderDialogHints(contextUsageHints(), this.o.theme, inner, height === undefined ? Infinity : Math.max(0, height - 4));
+		const hintHeight = hints.length ? hints.length + 1 : 0;
+		let body = info ? this.renderBody(info, inner) : [];
+		if (height !== undefined) {
+			const visible = Math.max(1, height - 2 - hintHeight);
+			const firstCategory = 2 + (info && autoCompactHint(info) ? 1 : 0) + (info?.contextWindow && inner > 2 ? 1 : 0);
+			const selectedLine = firstCategory + Math.max(0, this.selected);
+			this.scroll = Math.max(0, Math.min(this.scroll, selectedLine, body.length - visible));
+			if (selectedLine >= this.scroll + visible) this.scroll = selectedLine - visible + 1;
+			body = body.slice(this.scroll, this.scroll + visible);
+		}
+		// 提示固定在弹窗底部，不随分类列表滚动，也不受主面板状态文字挤占。
+		if (hints.length) body.push(FRAME_DIVIDER, ...hints);
 		const { theme } = this.o;
 		const subject = info?.model ?? "";
 		const meta = truncateToWidth(subject, metaBudget(width, contextUsageTitle()) - 3, "…", false);
@@ -192,10 +238,12 @@ export class ContextUsageDialog {
 		const bar = this.renderBar(info, inner - 2);
 		if (bar) lines.push(` ${bar}`);
 		lines.push("");
-		for (const category of info.categories) {
+		for (const [index, category] of info.categories.entries()) {
 			const swatch = theme.fg(category.color, "■");
 			const label = padColumns(categoryLabel(category.key), LABEL_WIDTH);
-			lines.push(` ${swatch} ${theme.fg(category.color, label)} ${theme.fg("text", amountCell(info, category))}`);
+			const selected = index === this.selected;
+			const row = `${selected ? "›" : " "} ${swatch} ${theme.fg(category.color, label)} ${theme.fg("text", amountCell(info, category))}`;
+			lines.push(selected ? theme.bg("selectedBg", fit(row, inner)) : row);
 		}
 		lines.push(FRAME_DIVIDER);
 		lines.push(` ${theme.fg("muted", padColumns(t("usage.model"), LABEL_WIDTH))} ${theme.fg("text", info.model ?? t("info.unknown"))}`);
@@ -214,7 +262,8 @@ export class ContextUsageDialog {
 
 	/** Composite the box centered over the already-rendered panel `lines`. */
 	overlay(lines: string[], termW: number): string[] {
-		const width = dialogWidth(termW);
-		return overlayCentered(lines, this.render(width), width, termW);
+		if (this.detail.isOpen) return this.detail.overlay(lines, termW);
+		const width = Math.min(termW, dialogWidth(termW));
+		return overlayCentered(lines, this.render(width, lines.length), width, termW);
 	}
 }

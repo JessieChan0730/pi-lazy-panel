@@ -34,6 +34,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { existsSync } from "node:fs";
 import type { ContextUsageCategory, ContextUsageInfo } from "../types.ts";
+import { t } from "../i18n/index.ts";
 import { resolveContentLeaf } from "./content.ts";
 
 /**
@@ -89,13 +90,13 @@ export async function loadContextUsage(sessionFile: string, options: LoadContext
 
 	const items: ContextUsageCategory[] = [];
 	if (prompt) {
-		items.push({ key: "systemPrompt", tokens: prompt.systemTokens, color: "accent" });
-		items.push({ key: "memory", tokens: prompt.memoryTokens, color: "error" });
-		items.push({ key: "skills", tokens: prompt.skillsTokens, color: "thinkingMax" });
-		items.push({ key: "tools", tokens: prompt.toolTokens, color: "success" });
+		items.push({ key: "systemPrompt", tokens: prompt.systemTokens, color: "accent", prompt: prompt.systemPrompt });
+		items.push({ key: "memory", tokens: prompt.memoryTokens, color: "error", prompt: prompt.memoryPrompt });
+		items.push({ key: "skills", tokens: prompt.skillsTokens, color: "thinkingMax", prompt: prompt.skillsPrompt });
+		items.push({ key: "tools", tokens: prompt.toolTokens, color: "success", prompt: prompt.toolsPrompt });
 	}
-	items.push({ key: "toolResults", tokens: conversation.toolResultTokens, color: "mdLink" });
-	items.push({ key: "context", tokens: conversation.contextTokens, color: "warning" });
+	items.push({ key: "toolResults", tokens: conversation.toolResultTokens, color: "mdLink", prompt: conversation.toolResultsPrompt });
+	items.push({ key: "context", tokens: conversation.contextTokens, color: "warning", prompt: conversation.contextPrompt });
 
 	// 提示侧四项视作"精确"、不参与压缩缩放（capParts 的 fixedPrefix）。
 	const fixedPrefix = prompt ? 4 : 0;
@@ -134,50 +135,100 @@ export async function loadContextUsage(sessionFile: string, options: LoadContext
 	return info;
 }
 
-/** Prompt-side token counts from the live runtime inputs (mirrors pi-cc's collectContextBreakdown). */
-function collectPrompt(live: LiveContextInputs): { systemTokens: number; memoryTokens: number; skillsTokens: number; toolTokens: number } {
+/** Structured tool definitions / arguments stay intact, even when they contain a `type` field. */
+function previewValue(value: unknown): string {
+	if (typeof value === "string") return value;
+	return `\`\`\`json\n${JSON.stringify(value, null, 2)}\n\`\`\``;
+}
+
+/** Only message content blocks get text extraction / image-payload omission. */
+function previewContent(content: string | readonly { type: string }[]): string {
+	if (typeof content === "string") return content;
+	return content.map((part) => {
+		if (part.type === "text" && "text" in part && typeof part.text === "string") return part.text;
+		if (part.type === "image") return t("usage.previewImage");
+		return previewValue(part);
+	}).join("\n\n");
+}
+
+/** Prompt-side counts and previews use the same live inputs as pi's context command. */
+function collectPrompt(live: LiveContextInputs) {
 	const options = live.systemPromptOptions ?? ({ cwd: "" } as BuildSystemPromptOptions);
 	const systemPrompt = live.systemPrompt ?? "";
 	const selected = new Set(options.selectedTools ?? ["read", "bash", "edit", "write"]);
 	let memoryTokens = 0;
-	for (const file of options.contextFiles ?? []) memoryTokens += embeddedTokens(systemPrompt, file.content);
+	const memory: string[] = [];
+	for (const file of options.contextFiles ?? []) {
+		memoryTokens += embeddedTokens(systemPrompt, file.content);
+		if (file.content && systemPrompt.includes(file.content)) memory.push(`## ${file.path}\n\n${file.content}`);
+	}
 	const skillsText = formatSkillsForPrompt(options.skills ?? []).trim();
 	const skillsTokens = embeddedTokens(systemPrompt, skillsText);
 	let toolTokens = 0;
+	const tools: string[] = [];
 	for (const tool of live.tools) {
 		if (!selected.has(tool.name)) continue;
-		toolTokens += tokenEstimate({ name: tool.name, description: tool.description, parameters: tool.parameters });
+		const definition = { name: tool.name, description: tool.description, parameters: tool.parameters };
+		toolTokens += tokenEstimate(definition);
+		tools.push(`## ${tool.name}\n\n${previewValue(definition)}`);
 	}
-	// system prompt 本体 = 整段减去已单列的记忆 / 技能，避免重复计数。
+	// 系统项展示完整原文（与 pi-cc 一致），计数仍扣除单列的记忆 / 技能。
 	const systemTokens = Math.max(0, tokenEstimate(systemPrompt) - memoryTokens - skillsTokens);
-	return { systemTokens, memoryTokens, skillsTokens, toolTokens };
+	return {
+		systemTokens, memoryTokens, skillsTokens, toolTokens,
+		systemPrompt,
+		memoryPrompt: memory.join("\n\n"),
+		skillsPrompt: skillsTokens > 0 ? skillsText : "",
+		toolsPrompt: tools.join("\n\n"),
+	};
 }
 
-/** Conversation-side token counts from the compaction-aware context entries. */
-function collectConversation(entries: SessionEntry[]): { toolResultTokens: number; contextTokens: number } {
+/** Conversation previews follow the same compaction-aware entries as the counts. */
+function collectConversation(entries: SessionEntry[]) {
 	let toolResultTokens = 0;
 	let contextTokens = 0;
+	const toolResults: string[] = [];
+	const context: string[] = [];
 	for (const entry of entries) {
 		if (entry.type === "message") {
 			const message = entry.message;
 			if (message.role === "assistant") {
 				for (const block of message.content) {
-					if (block.type === "toolCall") contextTokens += tokenEstimate(block.name) + tokenEstimate(block.arguments);
-					else if (block.type === "text") contextTokens += tokenEstimate(block.text);
-					else if (block.type === "thinking") contextTokens += tokenEstimate(block.thinking);
+					if (block.type === "toolCall") {
+						contextTokens += tokenEstimate(block.name) + tokenEstimate(block.arguments);
+						context.push(`## ${t("usage.previewToolCall", { name: block.name })}\n\n${previewValue(block.arguments)}`);
+					} else if (block.type === "text") {
+						contextTokens += tokenEstimate(block.text);
+						context.push(`## ${t("usage.previewAssistant")}\n\n${block.text}`);
+					} else if (block.type === "thinking") {
+						contextTokens += tokenEstimate(block.thinking);
+						context.push(`## ${t("usage.previewThinking")}\n\n${block.thinking}`);
+					}
 				}
-			} else if (message.role === "toolResult" || message.role === "bashExecution") {
+			} else if (message.role === "toolResult") {
 				toolResultTokens += estimateTokens(message);
+				toolResults.push(`## ${message.toolName}\n\n${previewContent(message.content)}`);
+			} else if (message.role === "bashExecution") {
+				toolResultTokens += estimateTokens(message);
+				toolResults.push(`## ${t("usage.previewCommand")}\n\n${message.command}\n\n## ${t("usage.previewOutput")}\n\n${message.output}`);
 			} else {
 				contextTokens += estimateTokens(message);
+				if (message.role === "compactionSummary" || message.role === "branchSummary") {
+					context.push(`## ${t("usage.previewSummary")}\n\n${message.summary}`);
+				} else {
+					const label = message.role === "user" ? t("usage.previewUser") : message.role;
+					context.push(`## ${label}\n\n${previewContent(message.content)}`);
+				}
 			}
 		} else if (entry.type === "compaction" || entry.type === "branch_summary") {
 			contextTokens += tokenEstimate(entry.summary);
+			context.push(`## ${t("usage.previewSummary")}\n\n${entry.summary}`);
 		} else if (entry.type === "custom_message") {
 			contextTokens += tokenEstimate(entry.content);
+			context.push(`## ${entry.customType}\n\n${previewContent(entry.content)}`);
 		}
 	}
-	return { toolResultTokens, contextTokens };
+	return { toolResultTokens, contextTokens, toolResultsPrompt: toolResults.join("\n\n"), contextPrompt: context.join("\n\n") };
 }
 
 /**

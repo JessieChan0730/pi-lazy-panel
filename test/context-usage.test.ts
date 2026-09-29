@@ -10,9 +10,13 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { formatSkillsForPrompt, SessionManager, type Skill } from "@earendil-works/pi-coding-agent";
 import { capParts, loadContextUsage, usageSegments, type LiveContextInputs } from "../src/data/context-usage.ts";
 import type { ContextUsageCategory } from "../src/types.ts";
+
+import { initI18n } from "../src/i18n/index.ts";
+
+initI18n("en");
 
 type AnyMessage = Parameters<SessionManager["appendMessage"]>[0];
 
@@ -160,4 +164,69 @@ test("usageSegments splits a bar proportionally, the last cell takes the remaind
 	const seg = usageSegments([33, 33, 34], 100, 10);
 	assert.equal(seg.reduce((s, n) => s + n, 0), 10);
 	assert.deepEqual(usageSegments([1, 1], 2, 0), [0, 0]);
+});
+
+test("context prompts preserve live sources and include only embedded memory/skills and selected tools", async (t) => {
+	const file = makeSession(tempDir(t));
+	const skill: Skill = {
+		name: "sample", description: "Sample skill", filePath: "/skills/sample/SKILL.md", baseDir: "/skills/sample",
+		disableModelInvocation: false,
+		sourceInfo: { path: "/skills/sample", source: "test", scope: "user", origin: "top-level" },
+	};
+	const skillsText = formatSkillsForPrompt([skill]).trim();
+	const live: LiveContextInputs = {
+		usage: { tokens: 20_000, contextWindow: 100_000, percent: 20 },
+		systemPrompt: `System source\n\nEmbedded memory\n\n${skillsText}`,
+		systemPromptOptions: {
+			cwd: "/x", selectedTools: ["read"], skills: [skill],
+			contextFiles: [{ path: "AGENTS.md", content: "Embedded memory" }, { path: "UNUSED.md", content: "Not embedded" }],
+		},
+		tools: [
+			{ name: "read", description: "Read source", parameters: { type: "object" }, sourceInfo: skill.sourceInfo },
+			{ name: "unused", description: "Inactive tool", parameters: { type: "object" }, sourceInfo: skill.sourceInfo },
+		],
+	};
+	const info = (await loadContextUsage(file, { live }))!;
+	assert.equal(key(info, "systemPrompt")!.prompt, live.systemPrompt);
+	assert.equal(key(info, "memory")!.prompt, "## AGENTS.md\n\nEmbedded memory");
+	assert.equal(key(info, "skills")!.prompt, skillsText);
+	assert.ok(key(info, "tools")!.prompt!.includes('"name": "read"'));
+	assert.ok(!key(info, "tools")!.prompt!.includes("Inactive tool"));
+	assert.ok(key(info, "context")!.prompt!.includes("hello there"));
+	assert.equal(key(info, "toolResults")!.prompt, "");
+	assert.equal(key(info, "other")!.prompt, undefined);
+	assert.equal(key(info, "freeSpace")!.prompt, undefined);
+	const withoutEmbedded = (await loadContextUsage(file, { live: { ...live, systemPrompt: "System only" } }))!;
+	assert.equal(key(withoutEmbedded, "memory")!.prompt, "");
+	assert.equal(key(withoutEmbedded, "skills")!.prompt, "");
+});
+
+test("conversation previews separate tool results, retain thinking/calls and respect compaction", async (t) => {
+	const dir = tempDir(t);
+	const file = makeSession(dir);
+	const manager = SessionManager.open(file);
+	const kept = manager.appendMessage(userMessage("Kept user prompt", 3));
+	manager.appendMessage({
+		...assistantMessage("", 4, USAGE),
+		content: [
+			{ type: "thinking", thinking: "Thought source" },
+			{ type: "text", text: "Assistant source" },
+			{ type: "toolCall", id: "call1", name: "read", arguments: { path: "source.ts", type: "text", text: "argument text" } },
+		],
+	} as AnyMessage);
+	manager.appendMessage({ role: "toolResult", toolCallId: "call1", toolName: "read", content: [{ type: "text", text: "Tool source" }, { type: "image", mimeType: "image/png", data: "BINARY_PAYLOAD" }], isError: false, timestamp: 5 });
+	manager.appendMessage({ role: "bashExecution", command: "echo result", output: "Bash source", exitCode: 0, cancelled: false, truncated: false, timestamp: 6 });
+	manager.appendCustomMessageEntry("extension", "Custom source", true);
+	manager.appendCompaction("Compaction source", kept, 1000);
+	const info = (await loadContextUsage(file))!;
+	const context = key(info, "context")!.prompt!;
+	const results = key(info, "toolResults")!.prompt!;
+	for (const text of ["Kept user prompt", "Thought source", "Assistant source", "source.ts", "Custom source", "Compaction source"]) assert.ok(context.includes(text), text);
+	assert.ok(!context.includes("hello there"), "compacted-away messages must not reappear");
+	assert.ok(!context.includes("Tool source"));
+	assert.ok(context.includes('"type": "text"'), "tool arguments are not interpreted as message content blocks");
+	assert.ok(results.includes("Image payload omitted"));
+	assert.ok(!results.includes("BINARY_PAYLOAD"));
+	for (const text of ["Tool source", "echo result", "Bash source"]) assert.ok(results.includes(text), text);
+	assert.equal(key(info, "systemPrompt"), undefined, "historical sessions must not invent live prompt data");
 });
