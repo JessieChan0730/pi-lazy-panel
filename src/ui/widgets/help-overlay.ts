@@ -150,8 +150,6 @@ function helpLayout(keymap: Keymap, focus: KeyScope, inner: number): { rows: Hel
 	// 描述列可用宽度 = 内宽 - 前导空格 - keys 列 - keys 后的一个空格。
 	const descW = Math.max(1, inner - keyColW - 2);
 	const rows: HelpRenderRow[] = [];
-	// 顶部留一行空白，把标题（HELP · xxx）和键位列表拉开一点距离，不显得拥挤。
-	rows.push({ kind: "blank" });
 	for (const line of lines) {
 		if (line.kind === "blank") {
 			rows.push({ kind: "blank" });
