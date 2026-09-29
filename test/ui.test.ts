@@ -685,9 +685,9 @@ test("contextUsageText: window line, one row per category, summary", () => {
 		compactRemaining: 100_000,
 		categories: [
 			{ key: "systemPrompt", tokens: 1700, color: "accent" as const },
-			{ key: "toolResults", tokens: 40_000, color: "toolTitle" as const },
+			{ key: "toolResults", tokens: 40_000, color: "mdLink" as const },
 			{ key: "context", tokens: 42_513, color: "warning" as const },
-			{ key: "other", tokens: 0, color: "muted" as const },
+			{ key: "other", tokens: 0, color: "customMessageLabel" as const },
 			{ key: "freeSpace", tokens: 115_787, color: "dim" as const },
 		],
 	};

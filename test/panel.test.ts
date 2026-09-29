@@ -2118,9 +2118,9 @@ function makeSessionActionPanel(
 							compactRemaining: 100_000,
 							categories: [
 								{ key: "systemPrompt", tokens: 1700, color: "accent" },
-								{ key: "toolResults", tokens: 40_000, color: "toolTitle" },
+								{ key: "toolResults", tokens: 40_000, color: "mdLink" },
 								{ key: "context", tokens: 42_513, color: "warning" },
-								{ key: "other", tokens: 0, color: "muted" },
+								{ key: "other", tokens: 0, color: "customMessageLabel" },
 								{ key: "freeSpace", tokens: 115_787, color: "dim" },
 							],
 						};

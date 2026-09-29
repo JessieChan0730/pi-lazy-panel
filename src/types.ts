@@ -198,7 +198,7 @@ export interface SessionInfo {
 }
 
 /** Theme colour a usage category paints its swatch / bar segment with. */
-export type ContextUsageColor = "accent" | "error" | "warning" | "success" | "toolTitle" | "muted" | "dim";
+export type ContextUsageColor = "accent" | "error" | "thinkingMax" | "success" | "mdLink" | "warning" | "customMessageLabel" | "dim";
 
 /**
  * One row of the context breakdown, keyed by an i18n suffix under `usage.`

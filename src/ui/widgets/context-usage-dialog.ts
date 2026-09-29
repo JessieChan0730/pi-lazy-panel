@@ -195,7 +195,7 @@ export class ContextUsageDialog {
 		for (const category of info.categories) {
 			const swatch = theme.fg(category.color, "■");
 			const label = padColumns(categoryLabel(category.key), LABEL_WIDTH);
-			lines.push(` ${swatch} ${theme.fg("muted", label)} ${theme.fg("text", amountCell(info, category))}`);
+			lines.push(` ${swatch} ${theme.fg(category.color, label)} ${theme.fg("text", amountCell(info, category))}`);
 		}
 		lines.push(FRAME_DIVIDER);
 		lines.push(` ${theme.fg("muted", padColumns(t("usage.model"), LABEL_WIDTH))} ${theme.fg("text", info.model ?? t("info.unknown"))}`);

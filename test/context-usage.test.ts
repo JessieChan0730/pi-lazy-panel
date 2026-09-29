@@ -73,8 +73,12 @@ test("loadContextUsage (other session): conversation itemized, the rest folds in
 	assert.equal(key(info, "systemPrompt"), undefined);
 	assert.ok(key(info, "context"), "Context is itemized from the file");
 	assert.ok(key(info, "toolResults"), "Tool results is itemized from the file");
+	assert.equal(key(info, "toolResults")!.color, "mdLink");
+	assert.equal(key(info, "context")!.color, "warning");
 	// Other holds the unattributable prompt / tools that the real request included.
 	assert.ok(key(info, "other")!.tokens > 0);
+	assert.equal(key(info, "other")!.color, "customMessageLabel");
+	assert.equal(key(info, "other")!.color === key(info, "freeSpace")!.color, false);
 	// Free space + every part sum to the whole window.
 	assert.equal(sum(info.categories), 200_000);
 	assert.equal(key(info, "freeSpace")!.tokens, 200_000 - 9700);
@@ -118,6 +122,12 @@ test("loadContextUsage (current session): live inputs itemize the prompt side (s
 	assert.ok(key(info, "skills"), "skills row exists (0 with no skills)");
 	assert.ok(key(info, "context"));
 	assert.ok(key(info, "toolResults"));
+	assert.equal(key(info, "skills")!.color, "thinkingMax");
+	assert.equal(key(info, "tools")!.color, "success");
+	assert.equal(key(info, "toolResults")!.color, "mdLink");
+	assert.equal(key(info, "context")!.color, "warning");
+	assert.notEqual(key(info, "skills")!.color, key(info, "tools")!.color);
+	assert.notEqual(key(info, "toolResults")!.color, key(info, "context")!.color);
 	// every part + Other + Free space still sum to the window.
 	assert.equal(sum(info.categories), 100_000);
 });
@@ -131,7 +141,7 @@ test("capParts scales the variable tail to the target and leaves the fixed prefi
 	const parts: ContextUsageCategory[] = [
 		{ key: "systemPrompt", tokens: 1000, color: "accent" },
 		{ key: "tools", tokens: 500, color: "success" },
-		{ key: "toolResults", tokens: 300, color: "toolTitle" },
+		{ key: "toolResults", tokens: 300, color: "mdLink" },
 		{ key: "context", tokens: 100, color: "warning" },
 	];
 	// target 1700, fixed prefix 2 (system + tools = 1500) → variable tail (400) capped to 200.

@@ -91,10 +91,10 @@ export async function loadContextUsage(sessionFile: string, options: LoadContext
 	if (prompt) {
 		items.push({ key: "systemPrompt", tokens: prompt.systemTokens, color: "accent" });
 		items.push({ key: "memory", tokens: prompt.memoryTokens, color: "error" });
-		items.push({ key: "skills", tokens: prompt.skillsTokens, color: "warning" });
+		items.push({ key: "skills", tokens: prompt.skillsTokens, color: "thinkingMax" });
 		items.push({ key: "tools", tokens: prompt.toolTokens, color: "success" });
 	}
-	items.push({ key: "toolResults", tokens: conversation.toolResultTokens, color: "toolTitle" });
+	items.push({ key: "toolResults", tokens: conversation.toolResultTokens, color: "mdLink" });
 	items.push({ key: "context", tokens: conversation.contextTokens, color: "warning" });
 
 	// 提示侧四项视作"精确"、不参与压缩缩放（capParts 的 fixedPrefix）。
@@ -110,7 +110,10 @@ export async function loadContextUsage(sessionFile: string, options: LoadContext
 
 	const parts = capParts(items, used, fixedPrefix);
 	const attributed = parts.reduce((sum, p) => sum + p.tokens, 0);
-	const categories: ContextUsageCategory[] = [...parts, { key: "other", tokens: Math.max(0, used - attributed), color: "muted" }];
+	const categories: ContextUsageCategory[] = [
+		...parts,
+		{ key: "other", tokens: Math.max(0, used - attributed), color: "customMessageLabel" },
+	];
 	if (contextWindow) categories.push({ key: "freeSpace", tokens: Math.max(0, contextWindow - used), color: "dim" });
 
 	const settings = DEFAULT_COMPACTION_SETTINGS;
