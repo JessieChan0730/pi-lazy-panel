@@ -2,7 +2,7 @@
  * Session Info dialog (`i` in the sessions pane): what `/session` prints, in a
  * box centered over the panel.
  *
- *   ┌─ Session Info ─────────────────── FilmRecall ─┐
+ *   ┌─ Session Info ─── FilmRecall · Esc close ─┐
  *   │ Name      FilmRecall                           │
  *   │ Model     claude-opus-4                        │
  *   │ Messages  128                                  │
@@ -28,12 +28,13 @@
  */
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { sliceByColumn, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { sliceByColumn, visibleWidth } from "@earendil-works/pi-tui";
 import { matchesKeyId } from "../../config/keys.ts";
 import { t } from "../../i18n/index.ts";
 import type { KeyHint, SessionInfo } from "../../types.ts";
 import { formatCost, formatDateTime, formatTokens, shortenPath } from "../../utils/format.ts";
-import { dialogWidth, frame, metaBudget, overlayCentered } from "../frame.ts";
+import { dialogWidth, frame, overlayCentered } from "../frame.ts";
+import { dialogHeader } from "./dialog-header.ts";
 
 /** Title on the top border (localised). */
 export function sessionInfoTitle(): string {
@@ -176,13 +177,10 @@ export class SessionInfoDialog {
 				body.push(` ${head} ${theme.fg("text", part)}`);
 			});
 		}
-		const subject = info?.name ?? "";
-		const meta = truncateToWidth(subject, metaBudget(width, sessionInfoTitle()) - 3, "…", false);
 		return frame(body, {
 			width,
 			height: body.length + 2,
-			title: sessionInfoTitle(),
-			...(meta ? { meta } : {}),
+			...dialogHeader(width, sessionInfoTitle(), info?.name),
 			border: (s) => theme.fg("borderAccent", s),
 			titleStyle: (s) => theme.bold(theme.fg("accent", s)),
 			metaStyle: (s) => theme.fg("dim", s),
