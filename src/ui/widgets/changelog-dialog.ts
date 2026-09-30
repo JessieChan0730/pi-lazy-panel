@@ -24,6 +24,7 @@ import { matchesKeyId } from "../../config/keys.ts";
 import { t } from "../../i18n/index.ts";
 import type { KeyHint } from "../../types.ts";
 import { frame, overlayCentered } from "../frame.ts";
+import { dialogHeader } from "./dialog-header.ts";
 
 /** Title on the top border (pi's own heading for /changelog, localised). */
 export function changelogTitle(): string {
@@ -160,8 +161,7 @@ export class ChangelogDialog {
 		return frame(body, {
 			width,
 			height,
-			title: changelogTitle(),
-			...(meta ? { meta } : {}),
+			...dialogHeader(width, changelogTitle(), meta),
 			border: (s) => theme.fg("borderAccent", s),
 			titleStyle: (s) => theme.bold(theme.fg("accent", s)),
 			metaStyle: (s) => theme.fg("dim", s),
@@ -181,7 +181,7 @@ export class ChangelogDialog {
 		return frame(body, {
 			width,
 			height,
-			title: changelogTitle(),
+			...dialogHeader(width, changelogTitle()),
 			border: (s) => theme.fg("borderAccent", s),
 			titleStyle: (s) => theme.bold(theme.fg("accent", s)),
 			metaStyle: (s) => theme.fg("dim", s),

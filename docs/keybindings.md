@@ -128,7 +128,10 @@ The pane shows the tree as a collapsible outline: `▸` a folded side branch, `�
 | `z` | `tree-fold` | Fold / unfold the branch under the cursor: toggles on a `▸` / `▾` row, and on any row inside a branch folds that branch and jumps to its head (vim's `zc`); the trunk of a linear conversation has no foldable section |
 | `y` | `tree-copy` | Copy the node text (the full text, equivalent to `Ctrl+x` in `/tree`) |
 | `T` | `tree-label` | Add / edit a label in a centered dialog, like lazygit's commit popup (`Enter` saves, `Esc` cancels, an empty value deletes it; equivalent to `Shift+T` in `/tree`) |
-| `a` | `tree-open` | Open the tree dialog: a large popup of the whole tree (search row on top, key hints at the bottom) that shares fold state with the pane; keys below |
+| `f` | `tree-filter-menu` | Open a five-row filter menu: `d` default / `t` no tool results / `u` user only / `l` labeled only / `a` all. The current filter is selected initially; `j` / `k` / arrows move, `Enter` selects, `Esc` cancels, and the five letter keys select directly. Selecting the current mode keeps it (no toggle) |
+| `a` | `tree-open` | Open the tree dialog: a large popup (search row on top, key hints at the bottom) that shares filter and fold state with the pane; keys below |
+
+The filter is synchronized in both directions: choosing `u` in the pane's `f` menu opens the large dialog in user-only mode; changing filters there also changes the pane when you return. `a` opens a larger view, not an unfiltered view. Filter changes clear folds, keep the selected node or its nearest visible ancestor, and update CONTENT. The two search queries remain independent.
 
 ## Tree dialog (press `a` in the TREE pane)
 

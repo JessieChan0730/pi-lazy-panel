@@ -40,6 +40,7 @@ import {
 } from "../src/ui/widgets/confirm-dialog.ts";
 import { exportFormatTitle, exportPathTitle } from "../src/ui/widgets/export-dialog.ts";
 import { forkDialogTitle } from "../src/ui/widgets/fork-dialog.ts";
+import { buildHelpLines, helpBoxSize, helpLineCount, renderHelpBox } from "../src/ui/widgets/help-overlay.ts";
 import { importDialogTitle } from "../src/ui/widgets/import-dialog.ts";
 import { InputDialog } from "../src/ui/widgets/input-dialog.ts";
 import { labelDialogTitle } from "../src/ui/widgets/label-dialog.ts";
@@ -240,7 +241,7 @@ test("? opens the help overlay for the focused pane and ? / Esc close it", () =>
 	h.panel.handleInput("?");
 	assert.equal(h.panel.state.helpOpen, false);
 
-	// tree pane help lists tree actions; filters moved to the tree dialog (a), / search stays
+	// Tree pane help lists the filter menu, while direct filter bindings stay in the large dialog.
 	h.panel.handleInput("l");
 	h.panel.handleInput("?");
 	lines = h.text(100);
@@ -263,6 +264,20 @@ test("? opens the help overlay for the focused pane and ? / Esc close it", () =>
 	// every rendered line keeps the exact width while the overlay is drawn
 	h.panel.handleInput("?");
 	for (const l of h.panel.render(100)) assert.equal(visibleWidth(l), 100);
+});
+
+test("help starts with a binding directly below the title in every pane", () => {
+	for (const focus of ["sessions", "tree", "content", "tree-dialog"] as const) {
+		const first = buildHelpLines(DEFAULT_KEYMAP, focus)[0];
+		assert.ok(first?.kind === "binding");
+		for (const termW of [40, 100]) {
+			const { width, height } = helpBoxSize(termW, 200, DEFAULT_KEYMAP, focus);
+			const lines = renderHelpBox({ keymap: DEFAULT_KEYMAP, focus, scroll: 0, theme: fakeTheme }, width, height);
+			assert.ok(lines[1]?.startsWith(`│ ${first.keys}`), `${focus}: ${lines[1]}`);
+			assert.equal(height, helpLineCount(DEFAULT_KEYMAP, focus, termW) + 2);
+			for (const line of lines) assert.equal(visibleWidth(line), width);
+		}
+	}
 });
 
 test("help wraps long descriptions onto continuation rows instead of truncating them", () => {
@@ -2562,7 +2577,7 @@ test("i opens the Session Info box (what /session shows); y copies its text, Esc
 	const lines = h.text();
 	const dlg = dialogAt(lines, SESSION_INFO_TITLE);
 	assert.ok(dlg, "the info box should be drawn");
-	assert.ok(dlg.title.includes("alpha"), dlg.title);
+	assert.ok(dlg.title.includes("alpha · Esc close"), dlg.title);
 	const body = dlg.body.join("\n");
 	const infoObj: SessionInfo = { name: "alpha", model: "claude-opus-4", messages: 12, tokens: 84_213, cost: 1.4211, createdAt: new Date(2026, 8, 20, 22, 18).getTime(), updatedAt: new Date(2026, 8, 20, 22, 21).getTime(), path: "/tmp/s1.jsonl", id: "id-1" };
 	// 每一行的标签 / 值排版和 sessionInfoText 一致（含 "Session path" 标签、12 列的标签列对齐）。
@@ -2594,6 +2609,7 @@ test("i opens the Session Info box (what /session shows); y copies its text, Esc
 	await flush();
 	const noName = dialogAt(h.text(), SESSION_INFO_TITLE)!;
 	assert.ok(noName.body[0]!.includes("(none)"), noName.body[0]);
+	assert.ok(noName.title.includes("Esc close"), noName.title);
 	h.panel.handleInput("q");
 	assert.equal(h.panel.state.mode, "normal");
 
@@ -3212,7 +3228,7 @@ test("@ opens pi's changelog in a big box: j/k/arrows scroll, G / g jump, Esc / 
 	assert.equal(panel.state.mode, "changelog");
 	// first the loading box shows (the whole changelog is slow to render): a spinner + hint, no content yet
 	let lines = text();
-	assert.ok(dialogAt(lines, "What's New"), "the box is drawn while loading");
+	assert.ok(dialogAt(lines, "What's New")?.title.includes("Esc close"), "the loading box shows how to close it");
 	assert.ok(
 		lines.some((l) => l.includes("Loading changelog")),
 		`a loading hint shows: ${lines.join("\n")}`,
@@ -3223,6 +3239,7 @@ test("@ opens pi's changelog in a big box: j/k/arrows scroll, G / g jump, Esc / 
 	lines = text();
 	const dlg = dialogAt(lines, "What's New");
 	assert.ok(dlg, "the dialog is drawn");
+	assert.ok(dlg.title.includes("Esc close"), dlg.title);
 	assert.ok(dlg.body.some((l) => l.includes("line 1 ")), dlg.body.join("\n"));
 	assert.ok(lines.at(-1)!.includes("j/k scroll"), lines.at(-1));
 	for (const l of panel.render(100)) assert.equal(visibleWidth(l), 100);

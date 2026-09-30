@@ -12,7 +12,7 @@ import { initI18n, t } from "../src/i18n/index.ts";
 import type { RestoreOptions, SessionRow } from "../src/types.ts";
 import type { FlowHost } from "../src/ui/flows/host.ts";
 import { confirmDeleteSession, copyLastReply, startExport, startFork } from "../src/ui/flows/session-flows.ts";
-import { restoreTreeNode, type TreeTarget } from "../src/ui/flows/tree-flows.ts";
+import { openTreeFilterMenu, restoreTreeNode, type TreeTarget } from "../src/ui/flows/tree-flows.ts";
 import type { ActionSource, DataSource } from "../src/ui/ports.ts";
 import { createInitialState } from "../src/ui/state.ts";
 import { CONFIRM_NO_INDEX, CONFIRM_YES_INDEX, deleteSessionsTitle, overwriteFileTitle } from "../src/ui/widgets/confirm-dialog.ts";
@@ -87,6 +87,7 @@ function fakeHost(opts: FakeHostOptions = {}) {
 		relist: async () => true,
 		followSessionsCursor: async () => {},
 		reloadTree: async () => {},
+		setTreeFilter: async (filter) => { state.treeFilter = filter; },
 		refreshSession: async () => {},
 	};
 	return {
@@ -105,6 +106,27 @@ function fakeHost(opts: FakeHostOptions = {}) {
 		anyOpen: () => dialogs.menu !== undefined || dialogs.prompt !== undefined,
 	};
 }
+
+test("tree filter: five choices, current mode selected, cancel preserves it and selection closes the menu", async () => {
+	const h = fakeHost();
+	h.state.treeFilter = "user-only";
+	openTreeFilterMenu(h.host, undefined);
+	assert.equal(h.anyOpen(), false);
+	assert.equal(h.statuses.at(-1), t("status.noSessionLoaded"));
+	openTreeFilterMenu(h.host, "session");
+	assert.equal(h.state.mode, "tree-filter");
+	assert.equal(h.menu().items.length, 5);
+	assert.equal(h.menu().initialIndex, 2);
+	h.menu().onCancel();
+	assert.equal(h.state.treeFilter, "user-only");
+	assert.equal(h.anyOpen(), false);
+	openTreeFilterMenu(h.host, "session");
+	h.menu().onSelect(3);
+	await flush();
+	assert.equal(h.state.treeFilter, "labeled");
+	assert.equal(h.state.mode, "normal");
+	assert.equal(h.anyOpen(), false);
+});
 
 test("export: format menu → path prompt → overwrite confirmation, each Esc / No steps back one dialog", async () => {
 	const written: string[] = [];

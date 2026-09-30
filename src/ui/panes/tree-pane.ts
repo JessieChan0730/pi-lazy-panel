@@ -44,7 +44,7 @@ export interface TreePaneProps {
 	/** First visible row; defaults to a cursor-centered window when omitted (keyboard). */
 	first?: number;
 	focused: boolean;
-	/** Active tree filter (set in the tree dialog); shown in the header when it is not the default. */
+	/** Active tree filter (shared by the pane and tree dialog); shown in the header when it is not the default. */
 	filter?: TreeFilter;
 	/** Active `/` search of this pane (indices into `rows`): matching rows are highlighted, the header shows the count. */
 	search?: SearchView;
@@ -146,7 +146,9 @@ export function renderTreeRow(row: TreeRow, prefix: string, inner: number, isCur
 		theme.fg("dim", time) +
 		branchStyle(roleStyle(role)) +
 		textStyle(text);
-	const out = isCursor ? theme.bg("selectedBg", fit(line, inner)) : fit(line, inner);
+	// 和会话列表一样，截断的完整重置码之后需要补回选中背景。
+	const fitted = fit(line, inner);
+	const out = isCursor ? fitted.split("\x1b[0m").map((part) => theme.bg("selectedBg", part)).join("\x1b[0m") : fitted;
 	// 搜索命中：整行画完后再按列把关键词加上高亮，前后的颜色和光标背景都保留。
 	return highlight ? highlightLine(out, highlight.terms, matchStyle(theme, highlight.current)) : out;
 }

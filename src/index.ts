@@ -11,6 +11,7 @@
  */
 
 import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { OverlayHandle } from "@earendil-works/pi-tui";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -42,6 +43,7 @@ import { applyTreeFilter, loadTree } from "./data/tree.ts";
 import { LazyPanel } from "./ui/app.ts";
 import type { ActionSource, DataSource } from "./ui/ports.ts";
 import { attachMouse } from "./ui/mouse-input.ts";
+import { mountPanelOverlay } from "./ui/overlay-lifecycle.ts";
 
 /** 读本插件 package.json 的版本号，展示在 footer 右下角；读不到就返回空串（不显示）。 */
 function extensionVersion(): string {
@@ -115,6 +117,7 @@ export default function (pi: ExtensionAPI) {
 			};
 			// overlay 句柄在面板显示后才拿到；Enter 等待 pi 切换时用它暂时隐藏面板。
 			let setHidden: ((hidden: boolean) => void) | undefined;
+			let onOverlayHandle: ((handle: OverlayHandle) => void) | undefined;
 			// regular 模式下 pi 不开鼠标追踪，面板自己开；关闭时再关掉（fullscreen 由 pi 管，不碰）。
 			let disableMouse: (() => void) | undefined;
 			const currentFile = ctx.sessionManager.getSessionFile();
@@ -122,9 +125,12 @@ export default function (pi: ExtensionAPI) {
 
 			await ctx.ui.custom<void>(
 				(tui, theme, _keybindings, done) => {
-					// overlay 模式默认不清理"腾空"的行（pi 的 terminal.clearOnShrink 默认 false）：关掉 ? 帮助框后
-					// 会留残影（切面板时闪一下），在有内容的当前会话里滚动时整块面板还会整体往下漂。全屏面板下打开
-					// 这个开关，让缩小后的区域被清掉。老版本 pi 可能没有这个方法，先做一次存在性判断。
+					// 等 onHandle 确认 overlay 已挂载后再强刷，避免只重绘了底下的 pi 对话。
+					onOverlayHandle = (handle) => {
+						setHidden = mountPanelOverlay(tui, handle);
+					};
+					// overlay 关闭、底层内容缩短后清理腾空区域；pi 在有 overlay 时跳过此分支，
+					// 因此显示边界的错位另由 mountPanelOverlay 强刷处理。旧版本保留存在性判断。
 					if (typeof tui.setClearOnShrink === "function") tui.setClearOnShrink(true);
 					const panel = new LazyPanel({
 						theme,
@@ -156,9 +162,7 @@ export default function (pi: ExtensionAPI) {
 					// being embedded in the editor slot (which would overflow the terminal).
 					overlay: true,
 					overlayOptions: { anchor: "top-left", width: "100%", maxHeight: "100%", margin: 0 },
-					onHandle: (handle) => {
-						setHidden = (hidden) => handle.setHidden(hidden);
-					},
+					onHandle: (handle) => onOverlayHandle?.(handle),
 				},
 			);
 			// 面板关闭后恢复终端自己的滚动 / 选择。

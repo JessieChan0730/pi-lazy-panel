@@ -10,7 +10,7 @@
  * 弹窗流程对面板的全部依赖。flows 只认这个接口、不 import app.ts：分层清楚，也能用假 host 单测。
  */
 
-import type { EnterOutcome, PanelMode, SessionInfo, SessionRow } from "../../types.ts";
+import type { EnterOutcome, PanelMode, SessionInfo, SessionRow, TreeFilter } from "../../types.ts";
 import type { ActionSource, DataSource } from "../ports.ts";
 import type { PanelState } from "../state.ts";
 import type { InputDialogSpec } from "../widgets/input-dialog.ts";
@@ -56,6 +56,8 @@ export interface FlowHost {
 	followSessionsCursor(): Promise<void>;
 	/** Re-read the tree of `file` with the cursor kept on `entryId`. */
 	reloadTree(file: string, entryId: string): Promise<void>;
+	/** Apply the filter shared by the TREE pane and its full-size dialog. */
+	setTreeFilter(filter: TreeFilter): Promise<void>;
 	/** `file` changed on disk: reload its tree (cursor kept) when it is the loaded session, else follow the sessions cursor. */
 	refreshSession(file: string): Promise<void>;
 }
