@@ -74,7 +74,7 @@ import {
 	startFork,
 	togglePin,
 } from "./flows/session-flows.ts";
-import { copyEntryText, copyTreeNode, openLabelInput, restoreTreeNode, type TreeTarget } from "./flows/tree-flows.ts";
+import { copyEntryText, copyTreeNode, openLabelInput, openTreeFilterMenu, restoreTreeNode, type TreeTarget } from "./flows/tree-flows.ts";
 import { fit, sideBySide } from "./frame.ts";
 import { KeySequencer } from "./key-sequencer.ts";
 import { hitTest, listVisibleRows, type MouseTarget, panelGeometry } from "./mouse.ts";
@@ -170,6 +170,8 @@ export class LazyPanel implements Component, Focusable {
 	private readonly contentViewport: ContentViewport;
 	private status: string | undefined;
 	private loadedSessionFile: string | undefined;
+	/** Request identity prevents an older filter load from replacing the latest choice. */
+	private pendingTreeFilter: { filter: TreeFilter } | undefined;
 	/** Session to put the cursor on at the first load (see `LazyPanelOptions.currentSessionFile`); cleared once used. */
 	private locateSessionFile: string | undefined;
 	/** Session pi has open (see `LazyPanelOptions.currentSessionFile`): the one `d` must not delete. */
@@ -297,6 +299,7 @@ export class LazyPanel implements Component, Focusable {
 			relist: (keepFile) => this.listSessions(keepFile),
 			followSessionsCursor: () => this.followSessionsCursor(),
 			reloadTree: (file, entryId) => this.reloadTree(file, entryId),
+			setTreeFilter: (filter) => this.setTreeFilter(filter),
 			refreshSession: (file) => this.refreshSession(file),
 		};
 	}
@@ -363,6 +366,7 @@ export class LazyPanel implements Component, Focusable {
 
 	/** Reload tree and content for the session under the cursor. */
 	async loadSelectedSession(): Promise<void> {
+		this.pendingTreeFilter = undefined;
 		const row = this.sessions[this.state.cursor.sessions];
 		if (!row) {
 			this.setTree([], new Set());
@@ -799,6 +803,9 @@ export class LazyPanel implements Component, Focusable {
 				return;
 			case "tree-label":
 				openLabelInput(this.flowHost, this.currentTreeNode());
+				return;
+			case "tree-filter-menu":
+				openTreeFilterMenu(this.flowHost, this.loadedSessionFile);
 				return;
 			case "tree-open":
 				this.openTreeDialog();
@@ -1465,7 +1472,8 @@ export class LazyPanel implements Component, Focusable {
 
 	/** t / u / l / a: switch to `filter`, or back to default when it is already active (pi's toggles). */
 	private toggleTreeFilter(filter: TreeFilter): Promise<void> {
-		return this.setTreeFilter(this.state.treeFilter === filter ? "default" : filter);
+		const current = this.pendingTreeFilter?.filter ?? this.state.treeFilter;
+		return this.setTreeFilter(current === filter ? "default" : filter);
 	}
 
 	/**
@@ -1475,20 +1483,35 @@ export class LazyPanel implements Component, Focusable {
 	 */
 	private async setTreeFilter(filter: TreeFilter): Promise<void> {
 		const file = this.loadedSessionFile;
-		if (!file || filter === this.state.treeFilter) return;
-		this.state.treeFilter = filter;
-		this.treeDialog.setFilter(filter);
-		const keep = this.treeDialog.selectedRow?.entryId;
+		if (!file) return;
+		// 选回已显示的模式也要取消旧请求；菜单选择是设置，不是 toggle。
+		this.pendingTreeFilter = undefined;
+		if (filter === this.state.treeFilter) return;
+		const request = { filter };
+		this.pendingTreeFilter = request;
 		try {
 			const tree = await this.o.data.loadTree(file, filter);
-			if (this.disposed || this.loadedSessionFile !== file || this.state.treeFilter !== filter) return;
-			// 换过滤后全部展开；搜索前记住的折叠状态是旧树的，一并作废。
+			if (this.disposed || this.loadedSessionFile !== file || this.pendingTreeFilter !== request) return;
+			const previousRows = this.treeView.rows;
+			const keep = this.treeDialog.isOpen ? this.treeDialog.selectedRow?.entryId : this.treeView.cursorRow()?.entryId;
+			// 加载成功才改状态，避免失败后标题与实际列表不一致。两个视图始终共用这一份过滤。
+			this.state.treeFilter = filter;
 			this.treeView.dropSuspendedFolds();
 			this.setTree(tree, new Set());
-			this.treeView.keepCursorOn(keep);
-			this.refreshTreeDialog(keep);
+			this.state.cursor.tree = nearestListedIndex(this.treeView.visible, previousRows, keep);
+			this.state.listScroll.tree = null;
+			if (this.treeDialog.isOpen) {
+				this.treeDialog.setFilter(filter);
+				this.refreshTreeDialog(this.treeView.cursorRow()?.entryId);
+			} else {
+				await this.syncContentToTree();
+			}
+			this.o.requestRender();
 		} catch (err) {
+			if (this.disposed || this.loadedSessionFile !== file || this.pendingTreeFilter !== request) return;
 			this.setStatus(t("status.reloadTreeFailed", { error: (err as Error).message }));
+		} finally {
+			if (this.pendingTreeFilter === request) this.pendingTreeFilter = undefined;
 		}
 	}
 

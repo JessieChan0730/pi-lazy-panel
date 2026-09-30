@@ -71,7 +71,8 @@ export const DEFAULT_KEYMAP: Keymap = {
 		"go-bottom": "G",
 		// 折叠 / 展开光标所在的分支段（vim 的 za）。
 		"tree-fold": "z",
-		// 小面板只显示部分数据，搜索 / 过滤放在 a 打开的完整树对话框里。
+		// f 选择过滤，a 放大同一棵树；两种视图共用过滤状态。
+		"tree-filter-menu": "f",
 		"tree-open": "a",
 		// 打标签用 T，和 pi 自带 /tree 的 shift+T 一致；这样 l 留给全局的“下一个面板”。
 		"tree-label": "T",
@@ -130,6 +131,7 @@ export const DISABLED_ACTIONS: Partial<Record<KeyScope, ActionId[]>> = {
 		"help",
 		"quit",
 		"tree-open",
+		"tree-filter-menu",
 		"changelog",
 	],
 };
@@ -179,7 +181,7 @@ export const HELP_GROUPS: HelpGroup[] = [
  */
 export const FOOTER_HINTS: Record<PaneId, ActionId[]> = {
 	sessions: ["search", "focus-next", "scope-current", "scope-all", "session-resume", "session-delete", "session-rename", "session-new", "help", "quit"],
-	tree: ["search", "focus-next", "tree-restore", "tree-fold", "tree-open", "help", "quit"],
+	tree: ["search", "focus-next", "tree-restore", "tree-fold", "tree-filter-menu", "tree-open", "help", "quit"],
 	content: ["search", "focus-next", "go-top", "go-bottom", "help", "quit"],
 };
 

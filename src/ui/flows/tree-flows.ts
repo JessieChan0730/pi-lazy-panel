@@ -20,6 +20,7 @@ import {
 	summaryMenuHints,
 	summaryMenuTitle,
 } from "../widgets/restore-dialog.ts";
+import { treeFilterDialogSpec } from "../widgets/tree-filter-dialog.ts";
 import type { FlowHost } from "./host.ts";
 
 /** A tree row plus the session it belongs to: what y / T / Enter act on (the pane's cursor row, or the dialog's). */
@@ -34,6 +35,22 @@ interface RestoreTarget {
 	entryId: string;
 	/** "role: text" of the node, shown in the dialog title bars. */
 	subject: string;
+}
+
+/** f: pick a filter even when the current filter leaves the tree empty. */
+export function openTreeFilterMenu(host: FlowHost, file: string | undefined): void {
+	if (!file) {
+		host.setStatus(t("status.noSessionLoaded"));
+		return;
+	}
+	host.openMenu("tree-filter", treeFilterDialogSpec(
+		host.state.treeFilter,
+		(filter) => {
+			host.closeDialogs();
+			void host.setTreeFilter(filter);
+		},
+		() => host.closeDialogs(),
+	));
 }
 
 /** y: copy the node's full text (like /tree ctrl+x). */

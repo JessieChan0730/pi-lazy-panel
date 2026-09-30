@@ -32,7 +32,7 @@ export interface PanelState {
 	search: Partial<Record<PaneId, PaneSearch>>;
 	scope: ListScope;
 	sort: SessionSortMode;
-	/** Tree filter, chosen with d/t/u/l/a in the tree dialog; the pane lists the same filtered tree. */
+	/** Tree filter, chosen with f in the pane or d/t/u/l/a in the tree dialog; both views share it. */
 	treeFilter: TreeFilter;
 	/**
 	 * Folded tree rows (branch-segment heads whose descendants are hidden, see

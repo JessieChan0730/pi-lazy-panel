@@ -34,6 +34,7 @@ export type PanelMode =
 	| "label"
 	| "restore"
 	| "tree"
+	| "tree-filter"
 	| "confirm"
 	| "rename"
 	| "info"
@@ -301,6 +302,7 @@ export type ActionId =
 	| "tree-copy"
 	| "tree-label"
 	| "tree-open"
+	| "tree-filter-menu"
 	| "tree-fold"
 	// tree dialog only (the dialog also uses the tree pane's actions and the global `search`)
 	| "tree-filter-default"
@@ -315,8 +317,8 @@ export type ActionId =
 // Besides the shared navigation actions (move-down / move-up / go-top / go-bottom)
 // and the global search, the content pane can copy the highlighted message
 // (`content-copy`) and center it in the viewport (`content-center`), see docs/design.md.
-// Tree filters (d/t/u/l/a) live in the tree dialog (`tree-open`), which also has
-// its own live-filtering search row; `/` in the panes jumps between matches.
+// Tree filters are shared by the pane (`tree-filter-menu`) and the tree dialog
+// (d/t/u/l/a). The dialog has its own filtering search; pane searches jump between matches.
 
 /**
  * A single key chord in pi-tui key syntax, e.g. "j", "ctrl+d", "tab".

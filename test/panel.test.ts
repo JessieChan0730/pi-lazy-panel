@@ -241,7 +241,7 @@ test("? opens the help overlay for the focused pane and ? / Esc close it", () =>
 	h.panel.handleInput("?");
 	assert.equal(h.panel.state.helpOpen, false);
 
-	// tree pane help lists tree actions; filters moved to the tree dialog (a), / search stays
+	// Tree pane help lists the filter menu, while direct filter bindings stay in the large dialog.
 	h.panel.handleInput("l");
 	h.panel.handleInput("?");
 	lines = h.text(100);

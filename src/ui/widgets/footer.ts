@@ -63,6 +63,7 @@ const HAS_SHORT: ReadonlySet<ActionId> = new Set<ActionId>([
 	"session-compact",
 	"tree-restore",
 	"tree-open",
+	"tree-filter-menu",
 	"tree-fold",
 	"tree-label",
 	"tree-copy",

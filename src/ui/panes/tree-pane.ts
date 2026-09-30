@@ -44,7 +44,7 @@ export interface TreePaneProps {
 	/** First visible row; defaults to a cursor-centered window when omitted (keyboard). */
 	first?: number;
 	focused: boolean;
-	/** Active tree filter (set in the tree dialog); shown in the header when it is not the default. */
+	/** Active tree filter (shared by the pane and tree dialog); shown in the header when it is not the default. */
 	filter?: TreeFilter;
 	/** Active `/` search of this pane (indices into `rows`): matching rows are highlighted, the header shows the count. */
 	search?: SearchView;
