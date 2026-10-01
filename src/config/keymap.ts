@@ -144,38 +144,6 @@ export function isDisabledIn(scope: KeyScope, action: ActionId): boolean {
 }
 
 /**
- * Actions merged into a single help line (`?` overlay).
- *
- * 帮助面板里同类操作合并成一行，省空间：例如 1/2/3 显示成 `1..3  Focus pane by number`。
- * 合并只影响帮助展示，不影响键位解析。组内只要有 ≥2 个动作在当前 scope 绑定了键位就合并，
- * 否则退回单条展示；用户自定义键位一样会如实显示。
- */
-export interface HelpGroup {
-	/** Member actions, in the order their keys are listed. */
-	actions: ActionId[];
-	/** i18n key (under `helpGroup.`) for the merged line's description. */
-	key: string;
-}
-
-/** Localised description of a merged help line. */
-export function helpGroupText(group: HelpGroup): string {
-	return t(`helpGroup.${group.key}`);
-}
-
-export const HELP_GROUPS: HelpGroup[] = [
-	{ actions: ["focus-prev", "focus-next"], key: "focus" },
-	{ actions: ["focus-sessions", "focus-tree", "focus-content"], key: "focusNumber" },
-	{ actions: ["scope-current", "scope-all"], key: "scope" },
-	{ actions: ["search-next", "search-prev"], key: "searchStep" },
-	{ actions: ["go-top", "go-bottom"], key: "topBottom" },
-	{ actions: ["scroll-content-down", "scroll-content-up"], key: "scrollContent" },
-	{
-		actions: ["tree-filter-default", "tree-filter-no-tools", "tree-filter-user", "tree-filter-labeled", "tree-filter-all"],
-		key: "filters",
-	},
-];
-
-/**
  * Actions shown as footer hints per pane, in display order (first few that fit).
  *
  * 只留最常用的键，长尾（排序 / 信息 / 压缩 / fork / clone / 复制 / 导出 / 导入 / 分享 / changelog）

@@ -90,7 +90,7 @@ import { ChangelogDialog } from "./widgets/changelog-dialog.ts";
 import { ContextUsageDialog } from "./widgets/context-usage-dialog.ts";
 
 import { renderFooter } from "./widgets/footer.ts";
-import { compactKeys, helpLineCount, overlayHelp } from "./widgets/help-overlay.ts";
+import { buildHelpLines, compactKeys, helpViewport, overlayHelp } from "./widgets/help-overlay.ts";
 import { InputDialog, type InputDialogSpec } from "./widgets/input-dialog.ts";
 
 import { renderSearchStatus, SearchBar } from "./widgets/search-bar.ts";
@@ -273,10 +273,13 @@ export class LazyPanel implements Component, Focusable {
 			{
 				isOpen: () => this.state.helpOpen,
 				handleInput: (data) => this.handleHelpInput(data),
-				draw: (lines, width) =>
-					overlayHelp(lines, { keymap: this.keymap, focus: this.state.focus, scroll: this.state.helpScroll, theme: this.o.theme }, width),
+				draw: (lines, width) => {
+					this.syncHelpViewport(width, lines.length);
+					return overlayHelp(lines, { keymap: this.keymap, focus: this.state.focus, cursor: this.state.helpCursor, scroll: this.state.helpScroll, theme: this.o.theme }, width);
+				},
 				hints: () => [
-					["j/k/↑↓", t("hint.scroll")],
+					["j/k/↑↓", t("hint.move")],
+					["Enter", t("help.run")],
 					[compactKeys([...new Set(["Esc", "q", ...labelsFor(this.keymap, "global", "help")])]), t("hint.close")],
 				],
 			},
@@ -566,19 +569,43 @@ export class LazyPanel implements Component, Focusable {
 	}
 
 	private handleHelpInput(data: string): void {
-		const total = helpLineCount(this.keymap, this.state.focus, this.lastWidth);
 		// 关闭：Esc、q，或用户绑定给 help 的那个键（默认 ?）。
 		const closes = matchesKeyId(data, "escape") || matchesKeyId(data, "q") || this.isAction(data, "global", "help");
 		if (closes) {
-			this.state.helpOpen = false;
-			this.state.helpScroll = 0;
+			this.closeHelp();
+			return;
 		} else if (matchesKeyId(data, "j") || matchesKeyId(data, "down")) {
-			this.state.helpScroll = Math.min(this.state.helpScroll + 1, Math.max(0, total - 1));
+			this.state.helpCursor++;
 		} else if (matchesKeyId(data, "k") || matchesKeyId(data, "up")) {
-			this.state.helpScroll = Math.max(0, this.state.helpScroll - 1);
+			this.state.helpCursor--;
+		} else if (matchesKeyId(data, "return")) {
+			this.syncHelpViewport(this.lastWidth, Math.max(8, this.o.getHeight()) - 1);
+			const entries = buildHelpLines(this.keymap, this.state.focus).filter((line) => line.kind === "binding");
+			const entry = entries[this.state.helpCursor];
+			if (!entry) return;
+			// 直接分发动作，不重放键位（搜索中的 n、自定义同键覆盖都不能改变所选命令）。
+			// 先关帮助，确认框/输入框照常由原有 flow 打开；本次 Enter 不再交给新弹窗。
+			this.closeHelp();
+			this.dispatch(entry.action);
+			return;
 		} else {
 			return;
 		}
+		this.syncHelpViewport(this.lastWidth, Math.max(8, this.o.getHeight()) - 1);
+		this.o.requestRender();
+	}
+
+	private syncHelpViewport(width: number, height: number): void {
+		const view = helpViewport(this.keymap, this.state.focus, width, height, this.state.helpCursor, this.state.helpScroll);
+		this.state.helpCursor = view.cursor;
+		this.state.helpScroll = view.scroll;
+	}
+
+	private closeHelp(): void {
+		this.state.helpOpen = false;
+		this.state.helpCursor = 0;
+		this.state.helpScroll = 0;
+		this.keys.clear();
 		this.o.requestRender();
 	}
 
@@ -630,7 +657,9 @@ export class LazyPanel implements Component, Focusable {
 	}
 
 	private openHelp(): void {
+		this.keys.clear();
 		this.state.helpOpen = true;
+		this.state.helpCursor = 0;
 		this.state.helpScroll = 0;
 		this.o.requestRender();
 	}

@@ -123,15 +123,6 @@
     "content-center": "Center the selected message in the pane",
     "content-copy": "Copy the selected message text"
   },
-  "helpGroup": {
-    "focus": "Focus previous / next pane",
-    "focusNumber": "Focus pane by number",
-    "scope": "Scope: current folder / all",
-    "searchStep": "Next / previous search match",
-    "topBottom": "Go to top / bottom",
-    "scrollContent": "Scroll content pane down / up",
-    "filters": "Filter: default / no tool results / user only / labeled only / all (t/u/l/a toggle back to default)"
-  },
   "scopeTitle": {
     "global": "Global",
     "sessions": "Sessions pane",
@@ -140,9 +131,9 @@
     "tree-dialog": "Tree dialog"
   },
   "help": {
+    "currentPane": "Current pane",
     "titlePrefix": "HELP",
-    "closeHint": "? / Esc close",
-    "scrollHint": "j/k scroll"
+    "run": "run"
   },
   "footer": {
     "search": "Search",

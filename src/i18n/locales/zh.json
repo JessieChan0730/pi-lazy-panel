@@ -123,15 +123,6 @@
     "content-center": "将选中的消息滚到面板中间",
     "content-copy": "复制选中的消息文本"
   },
-  "helpGroup": {
-    "focus": "聚焦上一个 / 下一个面板",
-    "focusNumber": "按编号聚焦面板",
-    "scope": "范围：当前目录 / 全部",
-    "searchStep": "下一个 / 上一个搜索匹配",
-    "topBottom": "跳到顶部 / 底部",
-    "scrollContent": "内容面板向下 / 向上滚动",
-    "filters": "过滤：默认 / 无工具结果 / 仅用户 / 仅标签 / 全部（t/u/l/a 再按回到默认）"
-  },
   "scopeTitle": {
     "global": "全局",
     "sessions": "会话面板",
@@ -140,9 +131,9 @@
     "tree-dialog": "对话树对话框"
   },
   "help": {
+    "currentPane": "当前面板",
     "titlePrefix": "帮助",
-    "closeHint": "? / Esc 关闭",
-    "scrollHint": "j/k 滚动"
+    "run": "执行"
   },
   "footer": {
     "search": "搜索",

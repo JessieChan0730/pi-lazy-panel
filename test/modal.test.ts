@@ -114,7 +114,7 @@ test("every dialog uses the same subdued backdrop and keeps single-line accent b
 	const widgets = [input, select, tree, info, usage, detail, changelog];
 	const base = Array.from({ length: 26 }, () => `\x1b[31m${"x".repeat(100)}\x1b[39m`);
 	const renders = widgets.map((widget) => widget.overlay(base, 100));
-	renders.push(overlayHelp(base, { keymap: DEFAULT_KEYMAP, focus: "sessions", scroll: 0, theme }, 100));
+	renders.push(overlayHelp(base, { keymap: DEFAULT_KEYMAP, focus: "sessions", cursor: 0, scroll: 0, theme }, 100));
 	usage.handleInput("\r");
 	renders.push(usage.overlay(base, 100));
 	changelog.openLoading();

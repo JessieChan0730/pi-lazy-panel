@@ -16,6 +16,7 @@ import { initI18n, t } from "../src/i18n/index.ts";
 // 测试统一按英文界面断言：先把 i18n 固定成 en（放在其它 src 模块的顶层 t() 别名之前）。
 initI18n("en");
 import type {
+	ActionId,
 	ContentBlock,
 	ContextUsageInfo,
 	ExportFormat,
@@ -234,11 +235,13 @@ test("? opens the help overlay for the focused pane and ? / Esc close it", () =>
 	let lines = h.text(100);
 	assert.ok(lines.some((l) => l.includes("HELP · Sessions pane")));
 	assert.ok(lines.some((l) => l.includes("Resume session")));
-	// 同类动作合并成一行：h/l/Tab、1..3
-	assert.ok(lines.some((l) => l.includes("h/l/Tab") && l.includes("Focus previous / next pane")));
-	assert.ok(lines.some((l) => l.includes("1..3") && l.includes("Focus pane by number")));
-	assert.equal(lines.some((l) => l.includes("Focus next pane")), false, "merged actions must not also appear alone");
-	// keys other than close/scroll are swallowed while help is open
+	// 不同动作独立成项，别名仍共用一项；长列表中的全局项由纯数据断言验证。
+	const entries = buildHelpLines(DEFAULT_KEYMAP, "sessions").filter((line) => line.kind === "binding");
+	assert.ok(entries.some((line) => line.action === "focus-next" && line.keys === "l/Tab"));
+	assert.ok(entries.some((line) => line.action === "focus-prev" && line.keys === "h"));
+	assert.equal(entries.filter((line) => line.action.startsWith("focus-")).length, 5);
+	assert.ok(lines.some((l) => l.includes("› Enter") && l.includes("Resume session")));
+	// keys other than close/move/execute are swallowed while help is open
 	h.panel.handleInput("l");
 	assert.equal(h.panel.state.focus, "sessions");
 	h.panel.handleInput("?");
@@ -269,14 +272,22 @@ test("? opens the help overlay for the focused pane and ? / Esc close it", () =>
 	for (const l of h.panel.render(100)) assert.equal(visibleWidth(l), 100);
 });
 
-test("help starts with a binding directly below the title in every pane", () => {
+test("help separates the current pane and outer scopes with padded headings", () => {
 	for (const focus of ["sessions", "tree", "content", "tree-dialog"] as const) {
-		const first = buildHelpLines(DEFAULT_KEYMAP, focus)[0];
-		assert.ok(first?.kind === "binding");
+		const logical = buildHelpLines(DEFAULT_KEYMAP, focus);
+		const first = logical.find((line) => line.kind === "binding");
+		assert.ok(first);
+		assert.deepEqual(logical.slice(0, 2), [{ kind: "blank" }, { kind: "header", text: "Current pane" }]);
 		for (const termW of [40, 100]) {
 			const { width, height } = helpBoxSize(termW, 200, DEFAULT_KEYMAP, focus);
-			const lines = renderHelpBox({ keymap: DEFAULT_KEYMAP, focus, scroll: 0, theme: fakeTheme }, width, height);
-			assert.ok(lines[1]?.startsWith(`│ ${first.keys}`), `${focus}: ${lines[1]}`);
+			const lines = renderHelpBox({ keymap: DEFAULT_KEYMAP, focus, cursor: 0, scroll: 0, theme: fakeTheme }, width, height);
+			assert.ok(lines[3]?.startsWith(`│ › ${first.keys}`), `${focus}: ${lines[3]}`);
+			for (const heading of ["-- Current pane --", "-- Global --"]) {
+				const index = lines.findIndex((line) => line.includes(heading));
+				assert.ok(index > 0, `${focus}: ${heading}`);
+				assert.equal(lines[index - 1]?.slice(1, -1).trim(), "", "blank above heading");
+				assert.ok(lines[index + 1]?.slice(1, -1).trim(), "command directly below heading");
+			}
 			assert.equal(height, helpLineCount(DEFAULT_KEYMAP, focus, termW) + 2);
 			for (const line of lines) assert.equal(visibleWidth(line), width);
 		}
@@ -301,6 +312,159 @@ test("help wraps long descriptions onto continuation rows instead of truncating 
 	);
 	// 折行后每一行仍然是精确宽度。
 	for (const l of h.panel.render(100)) assert.equal(visibleWidth(l), 100);
+});
+
+/** Select through real help keystrokes rather than assigning its cursor directly. */
+function selectHelpAction(panel: LazyPanel, action: ActionId): void {
+	if (!panel.state.helpOpen) panel.dispatch("help");
+	const entries = buildHelpLines(panel.keymap, panel.state.focus).filter((line) => line.kind === "binding");
+	const target = entries.findIndex((entry) => entry.action === action);
+	assert.ok(target >= 0, `help contains ${action}`);
+	const delta = target - panel.state.helpCursor;
+	for (let i = 0; i < Math.abs(delta); i++) panel.handleInput(delta > 0 ? "j" : "k");
+	assert.equal(panel.state.helpCursor, target);
+}
+
+test("help j/k and arrows select commands without moving the pane, skip headings, clamp and reset", () => {
+	const h = makePanel({ height: 12 });
+	h.panel.handleInput("?");
+	h.text(100);
+	for (const [key, cursor] of [["k", 0], ["\x1b[A", 0], ["j", 1], ["\x1b[B", 2], ["k", 1], ["\x1b[A", 0]] as const) {
+		h.panel.handleInput(key);
+		assert.equal(h.panel.state.helpCursor, cursor);
+		assert.equal(h.panel.state.cursor.sessions, 0);
+	}
+	selectHelpAction(h.panel, "session-share");
+	assert.ok(h.panel.state.helpScroll > 0);
+	h.panel.handleInput("j"); // skips blank + Global header straight to search
+	const lines = h.text(100);
+	assert.ok(lines.some((line) => line.includes("› /") && line.includes("Search")));
+	selectHelpAction(h.panel, "quit");
+	const last = h.panel.state.helpCursor;
+	h.panel.handleInput("\x1b[B");
+	assert.equal(h.panel.state.helpCursor, last);
+	for (const width of [40, 100, 34, 160]) {
+		assert.ok(h.text(width).some((line) => line.includes("› q/Ctrl+c")));
+		assert.equal(h.panel.state.helpCursor, last, "resizing keeps the selected command");
+	}
+	assert.equal(h.panel.handleMouse(mouseEvent("wheel", 2, 3, { height: 12, wheelDelta: 1 }))?.handled, true);
+	assert.equal(h.panel.state.cursor.sessions, 0);
+	for (const key of ["q", "\x1b", "?"]) {
+		h.panel.handleInput(key);
+		assert.equal(h.panel.state.helpOpen, false);
+		assert.equal(h.closed(), false);
+		h.panel.handleInput("?");
+		assert.equal(h.panel.state.helpCursor, 0);
+		assert.equal(h.panel.state.helpScroll, 0);
+	}
+	h.panel.dispose();
+});
+
+test("help Enter dispatches the selected pane/global action and does not leak to the next dialog", async () => {
+	const h = makeSessionActionPanel();
+	await h.panel.load();
+	selectHelpAction(h.panel, "session-delete");
+	h.panel.handleInput("\r");
+	assert.equal(h.panel.state.helpOpen, false);
+	assert.ok(h.text().some((line) => line.includes(DELETE_SESSION_TITLE)));
+	assert.deepEqual(h.deletes, [], "the help Enter only opens confirmation");
+	h.panel.handleInput("\r"); // No is selected by default
+	assert.deepEqual(h.deletes, []);
+	assert.equal(h.panel.state.mode, "normal");
+
+	selectHelpAction(h.panel, "session-rename");
+	h.panel.handleInput("\r");
+	assert.equal(h.panel.state.mode, "rename");
+	assert.equal(h.panel.state.helpOpen, false);
+	assert.deepEqual(h.renames, []);
+	h.panel.handleInput("\x1b");
+	selectHelpAction(h.panel, "focus-tree");
+	h.panel.handleInput("\r");
+	assert.equal(h.panel.state.focus, "tree");
+	selectHelpAction(h.panel, "tree-label");
+	h.panel.handleInput("\r");
+	assert.equal(h.panel.state.mode, "label");
+	assert.equal(h.panel.state.helpOpen, false);
+	h.panel.handleInput("\x1b");
+	selectHelpAction(h.panel, "focus-content");
+	h.panel.handleInput("\r");
+	assert.equal(h.panel.state.focus, "content");
+	selectHelpAction(h.panel, "go-bottom");
+	h.panel.handleInput("\r");
+	assert.equal(h.panel.state.helpOpen, false);
+	selectHelpAction(h.panel, "search");
+	h.panel.handleInput("\r");
+	assert.equal(h.panel.state.mode, "search");
+	assert.equal(h.panel.state.helpOpen, false);
+	h.panel.handleInput("\x1b");
+	h.panel.dispose();
+});
+
+test("help execution respects the chosen action with multi-key bindings and an active search", async () => {
+	const keymap = mergeKeymap(DEFAULT_KEYMAP, { global: { help: "!", "focus-tree": "zz" }, sessions: { "go-bottom": "gg", "session-delete": null } });
+	const h = makePanel({ keymap });
+	h.panel.handleInput("!");
+	assert.equal(h.panel.state.helpOpen, true);
+	selectHelpAction(h.panel, "focus-tree");
+	h.panel.handleInput("\r");
+	assert.equal(h.panel.state.focus, "tree");
+	h.panel.handleInput("!");
+	h.panel.handleInput("!");
+	assert.equal(h.panel.state.helpOpen, false, "custom help key still closes");
+	h.panel.dispose();
+
+	const s = makeSessionActionPanel();
+	await s.panel.load();
+	s.panel.handleInput("/");
+	s.panel.handleInput("a");
+	s.panel.handleInput("\r");
+	const original = s.panel.state.cursor.sessions;
+	selectHelpAction(s.panel, "session-new");
+	s.panel.handleInput("\r");
+	assert.equal(s.panel.state.mode, "new", "selected new-session is not reinterpreted as search-next (n)");
+	assert.equal(s.panel.state.cursor.sessions, original);
+	s.panel.handleInput("\x1b");
+	selectHelpAction(s.panel, "search-next");
+	s.panel.handleInput("\r");
+	assert.notEqual(s.panel.state.cursor.sessions, original);
+	assert.equal(s.panel.state.helpOpen, false);
+	await settle();
+	s.panel.dispose();
+});
+
+test("help Enter handles empty lists, action failures and help/quit actions", async () => {
+	const h = makePanel({ keymap: { global: {}, sessions: {}, tree: {}, content: {}, "tree-dialog": {} } });
+	h.panel.dispatch("help");
+	h.panel.handleInput("j");
+	h.panel.handleInput("\r");
+	assert.equal(h.panel.state.helpOpen, true);
+	assert.equal(h.panel.state.helpCursor, 0);
+	assert.equal(h.closed(), false);
+	h.panel.dispose();
+
+	const missing = makePanel();
+	selectHelpAction(missing.panel, "session-new");
+	missing.panel.handleInput("\r");
+	assert.equal(missing.panel.state.helpOpen, false);
+	assert.ok(missing.text(120).at(-1)!.includes("new: actions unavailable"));
+	selectHelpAction(missing.panel, "help");
+	missing.panel.handleInput("\r");
+	assert.equal(missing.panel.state.helpOpen, true);
+	assert.equal(missing.panel.state.helpCursor, 0);
+	selectHelpAction(missing.panel, "quit");
+	missing.panel.handleInput("\r");
+	assert.equal(missing.closed(), true);
+
+	const failure = makeSessionActionPanel({ actions: { copyLastReply: async () => {
+		throw new Error("copy failed");
+	} } });
+	await failure.panel.load();
+	selectHelpAction(failure.panel, "session-copy-last-reply");
+	failure.panel.handleInput("\r");
+	await flush();
+	assert.equal(failure.panel.state.helpOpen, false);
+	assert.ok(failure.text(160).at(-1)!.includes("copy failed"));
+	failure.panel.dispose();
 });
 
 test("/ shows the 搜索 bar, typing searches live, Enter keeps the query, Esc in the bar cancels", () => {
@@ -3699,7 +3863,8 @@ test("the help footer shows only its own controls and restores the pane hints on
 	h.panel.handleInput("?");
 	assert.equal(h.panel.state.helpOpen, true);
 	assert.ok(footer().startsWith(" HELP "));
-	assert.ok(footer().includes("j/k/↑↓ scroll"));
+	assert.ok(footer().includes("j/k/↑↓ move"));
+	assert.ok(footer().includes("Enter run"));
 	assert.ok(footer().includes("Esc/q/? close"));
 	assert.ok(!footer().includes("Enter Resume"));
 	assert.ok(!footer().includes("d Delete"));

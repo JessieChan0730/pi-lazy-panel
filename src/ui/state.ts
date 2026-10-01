@@ -40,8 +40,9 @@ export interface PanelState {
 	 * session is loaded; kept across reloads of the same session.
 	 */
 	treeFolded: Set<string>;
-	/** Whether the `?` overlay is open, and its scroll offset. */
+	/** Whether the `?` overlay is open, its selected command and rendered-row scroll offset. */
 	helpOpen: boolean;
+	helpCursor: number;
 	helpScroll: number;
 	/**
 	 * Wheel-scroll offset (first visible row) for the two list panes; null means
@@ -66,6 +67,7 @@ export function createInitialState(overrides: Partial<PanelState> = {}): PanelSt
 		treeFilter: "default",
 		treeFolded: new Set(),
 		helpOpen: false,
+		helpCursor: 0,
 		helpScroll: 0,
 		listScroll: { sessions: null, tree: null },
 		...overrides,
