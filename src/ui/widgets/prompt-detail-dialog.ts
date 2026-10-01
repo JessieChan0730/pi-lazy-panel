@@ -30,7 +30,7 @@ export class PromptDetailDialog {
 	get hints(): KeyHint[] {
 		return [
 			["j/k/↑↓", t("hint.scroll")],
-			["ctrl+d/u", t("hint.page")],
+			["d/u", t("hint.page")],
 			["g/G", t("hint.topBottom")],
 			["y", t("hint.copy")],
 			["Esc", t("hint.back")],
@@ -62,8 +62,8 @@ export class PromptDetailDialog {
 		const half = Math.max(1, Math.floor(this.visible / 2));
 		if (matchesKeyId(data, "j") || matchesKeyId(data, "down")) this.scrollBy(1);
 		else if (matchesKeyId(data, "k") || matchesKeyId(data, "up")) this.scrollBy(-1);
-		else if (matchesKeyId(data, "ctrl+d") || matchesKeyId(data, "pagedown")) this.scrollBy(half);
-		else if (matchesKeyId(data, "ctrl+u") || matchesKeyId(data, "pageup")) this.scrollBy(-half);
+		else if (matchesKeyId(data, "d") || matchesKeyId(data, "pagedown")) this.scrollBy(half);
+		else if (matchesKeyId(data, "u") || matchesKeyId(data, "pageup")) this.scrollBy(-half);
 		else if (matchesKeyId(data, "g")) this.scroll = 0;
 		else if (matchesKeyId(data, "shift+g")) this.scroll = Number.MAX_SAFE_INTEGER;
 	}

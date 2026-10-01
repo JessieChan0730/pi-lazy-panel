@@ -109,9 +109,14 @@ test("prompt detail scrolls, pages, clamps, copies the original text and resets 
 	dialog.handleInput("\x1b[B");
 	dialog.handleInput("k");
 	assert.deepEqual(dialog.render(72, 10), top);
-	for (const [down, up] of [["\x04", "\x15"], ["\x1b[6~", "\x1b[5~"]]) {
+	for (const [down, up] of [["d", "u"], ["\x1b[6~", "\x1b[5~"]]) {
 		dialog.handleInput(down!);
-		assert.notDeepEqual(dialog.render(72, 10), top);
+		const paged = dialog.render(72, 10);
+		assert.notDeepEqual(paged, top);
+		for (const key of ["\x04", "\x15"]) {
+			dialog.handleInput(key);
+			assert.deepEqual(dialog.render(72, 10), paged, "Ctrl+d/u no longer page the prompt");
+		}
 		dialog.handleInput(up!);
 		assert.deepEqual(dialog.render(72, 10), top);
 	}
@@ -160,7 +165,7 @@ test("context and prompt dialogs show local shortcuts in both languages and wrap
 				assert.ok(usageRows.every((line) => visibleWidth(line) === width));
 				const top = prompt.render(width, 18);
 				const promptHelp = localHints(top);
-				for (const hint of [`j/k/↑↓ ${t("hint.scroll")}`, `ctrl+d/u ${t("hint.page")}`, `g/G ${t("hint.topBottom")}`, `y ${t("hint.copy")}`, `Esc ${t("hint.back")}`]) assert.ok(promptHelp.join("\n").includes(hint), promptHelp.join("\n"));
+				for (const hint of [`j/k/↑↓ ${t("hint.scroll")}`, `d/u ${t("hint.page")}`, `g/G ${t("hint.topBottom")}`, `y ${t("hint.copy")}`, `Esc ${t("hint.back")}`]) assert.ok(promptHelp.join("\n").includes(hint), promptHelp.join("\n"));
 				prompt.handleInput("G");
 				const bottom = prompt.render(width, 18);
 				assert.deepEqual(localHints(bottom), promptHelp, "scrolling does not move the local help");
