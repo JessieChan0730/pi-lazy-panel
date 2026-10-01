@@ -66,7 +66,7 @@ The config file lives at `~/.pi/agent/lazy-panel.json`. Every field is optional 
 | `1` `2` `3` | `focus-sessions` / `focus-tree` / `focus-content` | Focus SESSIONS / TREE / CONTENT directly |
 | `C` | `scope-current` | List scope: current folder |
 | `A` | `scope-all` | List scope: all |
-| `?` | `help` | Shortcut help for the current pane (`?` / `Esc` / `q` closes, `j` / `k` scrolls) |
+| `?` | `help` | Commands for the current pane: `j` / `k` / `↑` / `↓` select, `Enter` closes help and runs the selected command; `?` / `Esc` / `q` closes without running |
 | `q` / `Ctrl+c` | `quit` | Quit the panel |
 | `@` | `changelog` | pi's changelog (`/changelog`) as a large popup: `j` `k` `↑` `↓` scroll, `Ctrl+d` / `Ctrl+u` half-page, `g` / `G` top / bottom, `Esc` / `q` / `@` close. The whole file renders slowly, so the popup first shows a spinning square `◰ Loading changelog…` in the center, then the content (cached, so a second `@` opens instantly). The newest version is on top (pi's own `/changelog` puts it last). Not available inside the tree dialog |
 | `Esc` | — (built-in, not configurable) | In order: discard an unfinished keystroke → clear the current pane's search → clear the SESSIONS multi-selection → quit |
@@ -75,7 +75,7 @@ The config file lives at `~/.pi/agent/lazy-panel.json`. Every field is optional 
 
 `C` and `A` are one-way: pressing `A` again when already in *All* does nothing.
 
-The `?` help popup lists every binding, sorted by frequency of use (the most common first, e.g. `Enter` before the vim movement keys). The footer only hints at a few keys per pane; the long tail (sort / info / compact / fork / clone / export / import / share / changelog) is only visible in `?`.
+The `?` help popup lists every command, sorted by frequency of use (the most common first, e.g. `Enter` before the vim movement keys). Each action has its own selectable entry; aliases for the same action stay together. Selection skips section headings and wrapped continuation lines, stops at either end, and scrolls into view automatically. Opening help starts at the first command. Enter runs the selected action in the current pane, including with custom or multi-key bindings; delete / fork / clone and other guarded operations still go through their normal confirmation flows. A configured single-key help binding also closes the popup. The footer only hints at a few keys per pane; the long tail (sort / info / compact / fork / clone / export / import / share / changelog) is only visible in `?`.
 
 ## Search (`/`)
 
