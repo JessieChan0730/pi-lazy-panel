@@ -191,6 +191,6 @@ export class ChangelogDialog {
 	/** Composite the box centered over the already-rendered panel `lines`. */
 	overlay(lines: string[], termW: number): string[] {
 		const { width, height } = ChangelogDialog.size(termW, lines.length);
-		return overlayCentered(lines, this.render(width, height), width, termW);
+		return overlayCentered(lines, this.render(width, height), width, termW, (s) => this.o.theme.fg("dim", s));
 	}
 }

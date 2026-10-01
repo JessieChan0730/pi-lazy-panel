@@ -143,8 +143,8 @@ interface Overlay {
 	handleInput(data: string): void;
 	/** Draw it over the rendered panel lines. */
 	draw(lines: string[], width: number): string[];
-	/** Footer hints while it is open; undefined keeps the panel's own footer (the help overlay lists the keys itself). */
-	hints(): KeyHint[] | undefined;
+	/** Footer hints of the overlay that currently owns the keyboard. */
+	hints(): KeyHint[];
 	/** Drawn under the other overlays: the tree dialog, which T / Enter open a prompt / menu on top of. */
 	base?: boolean;
 }
@@ -275,7 +275,10 @@ export class LazyPanel implements Component, Focusable {
 				handleInput: (data) => this.handleHelpInput(data),
 				draw: (lines, width) =>
 					overlayHelp(lines, { keymap: this.keymap, focus: this.state.focus, scroll: this.state.helpScroll, theme: this.o.theme }, width),
-				hints: () => undefined,
+				hints: () => [
+					["j/k/↑↓", t("hint.scroll")],
+					[compactKeys([...new Set(["Esc", "q", ...labelsFor(this.keymap, "global", "help")])]), t("hint.close")],
+				],
 			},
 			{
 				isOpen: () => this.treeDialog.isOpen,
@@ -1817,11 +1820,16 @@ export class LazyPanel implements Component, Focusable {
 		};
 		const pendingHint = this.keys.hasPending ? t("status.pending", { keys: this.keys.pendingKeys }) : undefined;
 		const status = pendingHint ?? this.status;
-		// 弹窗打开时 footer 只显示弹窗自己的按键提示（如 Enter save / Esc cancel / empty removes）；状态文字照常显示。
-		// 帮助弹窗没有自己的提示（它本身就在列快捷键），footer 照常显示面板的。
-		const hints = this.overlays.find((ov) => ov.isOpen() && ov.hints() !== undefined)?.hints();
-		if (hints) {
-			return renderFooter({ ...footer, hints, ...(status ? { status } : {}) }, width)[0]!;
+		// 和按键分发使用同一个最上层弹窗；不能退回显示当前不可用的面板按键。
+		const overlay = this.overlays.find((ov) => ov.isOpen());
+		if (overlay) {
+			return renderFooter({
+				...footer,
+				modal: true,
+				hints: overlay.hints(),
+				...(this.state.helpOpen ? { modeLabel: t("help.titlePrefix") } : {}),
+				...(status ? { status } : {}),
+			}, width)[0]!;
 		}
 		// 当前面板有搜索生效：显示关键字、位置 / 数量和 n / N / Esc 提示（别的面板的搜索不显示）。
 		const search = this.state.search[this.state.focus];

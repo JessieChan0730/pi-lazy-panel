@@ -102,6 +102,6 @@ export class PromptDetailDialog {
 	overlay(lines: string[], termW: number): string[] {
 		const width = Math.min(termW, Math.max(4, termW - 4));
 		const height = Math.min(lines.length, Math.max(2, lines.length - 2));
-		return overlayCentered(lines, this.render(width, height), width, termW);
+		return overlayCentered(lines, this.render(width, height), width, termW, (s) => this.theme.fg("dim", s));
 	}
 }

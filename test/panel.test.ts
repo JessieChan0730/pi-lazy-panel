@@ -540,7 +540,7 @@ test("content pane scrolls by line with j/k, gg/G, and J/K from the sessions pan
  * Panel whose tree rows come from a mutable map of labels, plus a recording ActionSource.
  * e2 is the active leaf (Enter on it restores without asking); e0 / e1 go through the summary menu.
  */
-function makeTreeActionPanel(actions?: Partial<ActionSource>, opts: { skipSummaryPrompt?: boolean } = {}) {
+function makeTreeActionPanel(actions?: Partial<ActionSource>, opts: { skipSummaryPrompt?: boolean; theme?: Theme } = {}) {
 	const labels = new Map<string, string>();
 	const copies: Array<{ file: string; entryId: string }> = [];
 	const labelCalls: Array<{ file: string; entryId: string; label: string | undefined }> = [];
@@ -580,7 +580,7 @@ function makeTreeActionPanel(actions?: Partial<ActionSource>, opts: { skipSummar
 		...actions,
 	};
 	const panel = new LazyPanel({
-		theme: fakeTheme,
+		theme: opts.theme ?? fakeTheme,
 		data,
 		actions: source,
 		getHeight: () => 20,
@@ -603,6 +603,52 @@ function makeTreeActionPanel(actions?: Partial<ActionSource>, opts: { skipSummar
 		text: (width = 100) => panel.render(width).map((l) => stripTerminalSequences(l)),
 	};
 }
+
+test("nested tree prompts demote the parent and restore each visual layer without changing selection", async () => {
+	const border = "\x1b[96m";
+	const dim = "\x1b[90m";
+	const selected = "\x1b[44m";
+	const theme = {
+		...fakeTheme,
+		fg: (color: string, text: string) => `${color === "borderAccent" ? border : color === "dim" ? dim : "\x1b[37m"}${text}\x1b[39m`,
+		bg: (_color: string, text: string) => `${selected}${text}\x1b[49m`,
+	} as unknown as Theme;
+	const h = makeTreeActionPanel(undefined, { theme });
+	try {
+		await h.panel.load();
+		h.panel.focused = true;
+		h.panel.handleInput("2");
+		const body = () => h.panel.render(100).slice(0, -1);
+		const base = body();
+		const cursor = h.panel.state.cursor.tree;
+		assert.ok(base[0]!.includes("[1] SESSIONS"));
+		assert.ok(base.join("\n").includes(selected));
+		h.panel.handleInput("a");
+		const parent = body();
+		const top = parent.findIndex((line) => line.includes(`${border}┌`));
+		assert.ok(top >= 0);
+		assert.ok(parent[0]!.includes(dim));
+		assert.ok(!parent[0]!.includes(border));
+		h.panel.handleInput("T");
+		await flush();
+		assert.equal(h.panel.state.mode, "label");
+		const nested = body();
+		assert.ok(nested[top]!.includes(dim));
+		assert.ok(!nested[top]!.includes(border), "parent border is no longer accented");
+		assert.ok(!nested.join("\n").includes(selected), "the parent's selected row is not highlighted behind the input");
+		assert.equal(nested.join("\n").split(CURSOR_MARKER).length - 1, 1);
+		assert.ok(h.text(100).at(-1)!.includes("Enter save"));
+		assert.ok(!h.text(100).at(-1)!.includes("j/k"), "footer belongs to the input, not the tree behind it");
+		h.panel.handleInput("\x1b");
+		assert.deepEqual(body(), parent, "closing the child fully restores its parent");
+		h.panel.handleInput("\x1b");
+		assert.deepEqual(body(), base, "closing the tree fully restores the panes");
+		assert.equal(h.panel.state.cursor.tree, cursor);
+		assert.equal(h.panel.state.focus, "tree");
+	} finally {
+		h.panel.dispose();
+	}
+});
 
 test("y in the tree pane copies the node under the cursor and reports the result in the footer", async () => {
 	const h = makeTreeActionPanel();
@@ -3646,13 +3692,19 @@ test("an unfinished key sequence (the g of gg) is dropped after a second", (ctx)
 	h.panel.dispose();
 });
 
-test("the footer keeps the pane's own hints while the ? help overlay is up", () => {
+test("the help footer shows only its own controls and restores the pane hints on close", () => {
 	const h = makePanel();
 	const footer = () => h.text(120).at(-1)!;
 	const before = footer();
 	h.panel.handleInput("?");
 	assert.equal(h.panel.state.helpOpen, true);
-	assert.equal(footer(), before, "help brings no footer hints of its own");
+	assert.ok(footer().startsWith(" HELP "));
+	assert.ok(footer().includes("j/k/↑↓ scroll"));
+	assert.ok(footer().includes("Esc/q/? close"));
+	assert.ok(!footer().includes("Enter Resume"));
+	assert.ok(!footer().includes("d Delete"));
+	h.panel.handleInput("\x1b");
+	assert.equal(footer(), before);
 	h.panel.dispose();
 });
 

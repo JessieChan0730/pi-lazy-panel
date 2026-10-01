@@ -214,7 +214,7 @@ export function renderHelpBox(p: HelpOverlayProps, width: number, height: number
 /** Composite the help box centered over already-rendered panel `lines`. */
 export function overlayHelp(lines: string[], p: HelpOverlayProps, termW: number): string[] {
 	const { width, height } = helpBoxSize(termW, lines.length, p.keymap, p.focus);
-	return overlayCentered(lines, renderHelpBox(p, width, height), width, termW);
+	return overlayCentered(lines, renderHelpBox(p, width, height), width, termW, (s) => p.theme.fg("dim", s));
 }
 
 /** Number of rendered help rows (wrapping included), used by the panel to clamp help scrolling. */

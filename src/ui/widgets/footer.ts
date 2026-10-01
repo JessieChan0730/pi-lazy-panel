@@ -32,6 +32,10 @@ export interface FooterProps {
 	hints?: KeyHint[];
 	/** Extension version, shown muted at the far right (e.g. "0.1.0" → "v0.1.0"). */
 	version?: string;
+	/** A modal owns the keys: prioritise its hints over secondary metadata. */
+	modal?: boolean;
+	/** Display-only label, e.g. HELP without changing the underlying panel mode. */
+	modeLabel?: string;
 }
 
 /** Scope actions are one-way, so only the one that would change something is worth a hint. */
@@ -79,25 +83,25 @@ function footerLabel(action: ActionId): string {
 
 export function renderFooter(p: FooterProps, width: number): string[] {
 	const { theme } = p;
-	const mode = theme.bold(theme.bg("selectedBg", ` ${t(`mode.${p.mode}`)} `));
+	const mode = theme.bold(theme.bg("selectedBg", ` ${p.modeLabel ?? t(`mode.${p.mode}`)} `));
 	const status = p.status ? `  ${theme.fg("warning", p.status)}` : "";
-	// 右下角的版本号（muted 弱化显示），先给它预留位置，避免按键提示占满后把它挤没。
-	const version = p.version ? theme.fg("muted", `v${p.version}`) : "";
-	const versionBudget = version ? visibleWidth(version) + 2 : 0;
+	// 弹窗期间先保留操作提示，版本号只用剩余空间；普通浏览仍保持右侧常驻。
+	const version = p.version ? theme.fg(p.modal ? "dim" : "muted", `v${p.version}`) : "";
+	const versionBudget = version && !p.modal ? visibleWidth(version) + 2 : 0;
 	const budget = width - visibleWidth(mode) - visibleWidth(status) - versionBudget - 1;
 
 	// 只显示放得下的提示，避免窄终端里被截断成半个词。
 	const parts: string[] = [];
 	let used = 0;
 	for (const [key, text] of p.hints ?? keymapHints(p)) {
-		const part = `${theme.bold(theme.fg("accent", key))} ${theme.fg("muted", text)}`;
+		const part = `${theme.bold(theme.fg("accent", key))} ${theme.fg(p.modal ? "text" : "muted", text)}`;
 		const w = visibleWidth(part) + (parts.length ? 3 : 0);
 		if (used + w > budget) break;
 		parts.push(part);
 		used += w;
 	}
 	const left = `${mode} ${parts.join("   ")}${status}`;
-	if (!version) return [fit(left, width)];
+	if (!version || (p.modal && visibleWidth(left) + visibleWidth(version) + 2 > width)) return [fit(left, width)];
 	// 版本号靠右：中间用空格撑开，整体再 fit 到宽度（放不下时优先保留左侧提示，版本被截断）。
 	const gap = Math.max(1, width - visibleWidth(left) - visibleWidth(version));
 	return [fit(`${left}${" ".repeat(gap)}${version}`, width)];

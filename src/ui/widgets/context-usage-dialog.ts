@@ -264,6 +264,6 @@ export class ContextUsageDialog {
 	overlay(lines: string[], termW: number): string[] {
 		if (this.detail.isOpen) return this.detail.overlay(lines, termW);
 		const width = Math.min(termW, dialogWidth(termW));
-		return overlayCentered(lines, this.render(width, lines.length), width, termW);
+		return overlayCentered(lines, this.render(width, lines.length), width, termW, (s) => this.o.theme.fg("dim", s));
 	}
 }
