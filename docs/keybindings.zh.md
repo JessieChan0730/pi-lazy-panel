@@ -59,6 +59,10 @@
 
 ## 全局快捷键
 
+`j` / `↓`（`move-down`）和 `k` / `↑`（`move-up`）是全局绑定，三个面板和树对话框共用。修改或解绑默认值请配置 `keymap.global`；在面板里设为 `null` 只移除该面板的覆盖，不会屏蔽继承的全局绑定。
+
+帮助弹窗固定 28 行（含边框），小终端自动缩小。通过 `j/k/↑/↓` 选择命令并上下滚动。底边按需显示「↑ 上方还有更多」「↓ 下方还有更多」，到达对应边界后提示消失。
+
 | 键 | 配置名称 | 操作 |
 | --- | --- | --- |
 | `l` / `Tab` | `focus-next` | 聚焦下一个面板 |
@@ -97,7 +101,7 @@ lazygit 风格，每个面板各记各的：列表行永不过滤，光标在匹
 
 | 键 | 配置名称 | 操作 |
 | --- | --- | --- |
-| `j` `k` `↑` `↓` | `move-down` / `move-up` | 移动光标 |
+| `j` `k` `↑` `↓` | `move-down` / `move-up`（global） | 移动光标 |
 | `gg` / `G` | `go-top` / `go-bottom` | 顶部 / 底部 |
 | `J` / `K` | `scroll-content-down` / `scroll-content-up` | 滚动右侧 CONTENT 面板 |
 | `Enter` | `session-resume` | 恢复会话：pi 切换过去、面板关闭；失败（文件缺失、切换取消）停留在 footer |
@@ -123,7 +127,7 @@ lazygit 风格，每个面板各记各的：列表行永不过滤，光标在匹
 
 | 键 | 配置名称 | 操作 |
 | --- | --- | --- |
-| `j` `k` `↑` `↓` | `move-down` / `move-up` | 移动光标 |
+| `j` `k` `↑` `↓` | `move-down` / `move-up`（global） | 移动光标 |
 | `gg` / `G` | `go-top` / `go-bottom` | 顶部 / 底部 |
 | `Enter` | `tree-restore` | 恢复到节点，和 `/tree` 一样：居中菜单问 *No summary / Summarize / Summarize with custom prompt*（`j`/`k`/`↑`/`↓` 移动，`Enter` 选，`Esc` 退回树）；自定义提示是单行输入（`Enter` 摘要，`Esc` 退回菜单）。需要时先切换到该会话。节点本身就是叶子（`Enter` 直接关闭面板）或 pi 的 `branchSummary.skipPrompt` 开启时不弹菜单 |
 | `z` | `tree-fold` | 折叠 / 展开光标所在分支：在 `▸` / `▾` 行上切换，在分支内任意行则折叠该分支并跳到段头（vim 的 `zc`）；线性对话的主干没有可折叠的段 |
@@ -142,7 +146,7 @@ lazygit 风格，每个面板各记各的：列表行永不过滤，光标在匹
 
 | 键 | 配置名称（scope） | 操作 |
 | --- | --- | --- |
-| `j` `k` `↑` `↓` | `move-down` / `move-up`（tree） | 移动对话框的光标 |
+| `j` `k` `↑` `↓` | `move-down` / `move-up`（global） | 移动对话框的光标 |
 | `gg` / `G` | `go-top` / `go-bottom`（tree） | 顶部 / 底部 |
 | `/` | `search`（global） | 聚焦搜索行；输入实时过滤行，和 `/tree` 一样：每个词都要出现在行的 label / 正文里（大小写不敏感），`tag:x` 收窄到 label，`role:user` 到角色，`after:2026-09-01` / `before:2026-09-20` 到日期。`Esc` 把按键交回列表并保留关键字（行保持收窄）；再按 `/` 编辑它，删光文本即清除。搜索行里 `Enter` 无含义。关键字生效时全部匹配都显示（折叠被清除，和 `/tree` 一样）；关键字清空或关闭对话框后折叠恢复 |
 | `Enter` | `tree-restore`（tree） | 恢复到该行，和面板完全一样（含摘要菜单） |
@@ -158,7 +162,7 @@ lazygit 风格，每个面板各记各的：列表行永不过滤，光标在匹
 
 | 键 | 配置名称 | 操作 |
 | --- | --- | --- |
-| `j` `k` `↑` `↓` | `move-down` / `move-up` | 滚动 |
+| `j` `k` `↑` `↓` | `move-down` / `move-up`（global） | 滚动 |
 | `gg` / `G` | `go-top` / `go-bottom` | 顶部 / 底部 |
 | `zz` | `content-center` | 把选中的消息滚到面板中间（vim 的 `zz`）；内容不足以滚动时为空操作 |
 | `y` | `content-copy` | 复制选中消息的全文到剪贴板（等同 TREE 面板的 `y`） |

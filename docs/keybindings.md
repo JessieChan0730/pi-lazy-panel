@@ -59,6 +59,10 @@ The config file lives at `~/.pi/agent/lazy-panel.json`. Every field is optional 
 
 ## Global keybindings
 
+`j` / `↓` (`move-down`) and `k` / `↑` (`move-up`) are global bindings shared by all panes and the tree dialog. To rebind or remove their defaults, configure `keymap.global`; setting them to `null` in a pane only removes that pane's override, not the inherited binding.
+
+Help uses a fixed 28-row popup (including borders), shrinking on smaller terminals. Use `j/k/↑/↓` to select and scroll through commands. The bottom border shows “↑ More above” / “↓ More below” only when content is hidden in that direction.
+
 | Key | Config name | Action |
 | --- | --- | --- |
 | `l` / `Tab` | `focus-next` | Focus the next pane |
@@ -97,7 +101,7 @@ When the panel opens, the cursor lands on the session pi currently has open (so 
 
 | Key | Config name | Action |
 | --- | --- | --- |
-| `j` `k` `↑` `↓` | `move-down` / `move-up` | Move the cursor |
+| `j` `k` `↑` `↓` | `move-down` / `move-up` (global) | Move the cursor |
 | `gg` / `G` | `go-top` / `go-bottom` | Top / bottom |
 | `J` / `K` | `scroll-content-down` / `scroll-content-up` | Scroll the CONTENT pane on the right |
 | `Enter` | `session-resume` | Resume the session: pi switches to it and the panel closes; on failure (missing file, switch cancelled) it stays with a footer message |
@@ -123,7 +127,7 @@ The pane shows the tree as a collapsible outline: `▸` a folded side branch, `�
 
 | Key | Config name | Action |
 | --- | --- | --- |
-| `j` `k` `↑` `↓` | `move-down` / `move-up` | Move the cursor |
+| `j` `k` `↑` `↓` | `move-down` / `move-up` (global) | Move the cursor |
 | `gg` / `G` | `go-top` / `go-bottom` | Top / bottom |
 | `Enter` | `tree-restore` | Restore to the node, like `/tree`: a centered menu asks *No summary / Summarize / Summarize with custom prompt* (`j`/`k`/`↑`/`↓` move, `Enter` selects, `Esc` returns to the tree); the custom prompt is a single-line input (`Enter` summarizes, `Esc` returns to the menu). Switches to the session first if needed. No menu appears when the node is itself a leaf (`Enter` just closes the panel) or when pi's `branchSummary.skipPrompt` is on |
 | `z` | `tree-fold` | Fold / unfold the branch under the cursor: toggles on a `▸` / `▾` row, and on any row inside a branch folds that branch and jumps to its head (vim's `zc`); the trunk of a linear conversation has no foldable section |
@@ -142,7 +146,7 @@ In the table below the parenthesis after "Config name" marks which scope it belo
 
 | Key | Config name (scope) | Action |
 | --- | --- | --- |
-| `j` `k` `↑` `↓` | `move-down` / `move-up` (tree) | Move the dialog's cursor |
+| `j` `k` `↑` `↓` | `move-down` / `move-up` (global) | Move the dialog's cursor |
 | `gg` / `G` | `go-top` / `go-bottom` (tree) | Top / bottom |
 | `/` | `search` (global) | Focus the search row; typing filters rows live, like `/tree`: every word must appear in the row's label / body (case-insensitive), `tag:x` narrows to the label, `role:user` to the role, `after:2026-09-01` / `before:2026-09-20` to the date. `Esc` hands keystrokes back to the list and keeps the keyword (rows stay narrowed); press `/` again to edit it, and deleting all the text clears it. `Enter` in the search row has no meaning. While a keyword is active all matches are shown (folds are cleared, like `/tree`); once the keyword is cleared or the dialog is closed the fold state is restored |
 | `Enter` | `tree-restore` (tree) | Restore to that row, exactly like the pane (including the summary menu) |
@@ -158,7 +162,7 @@ Scrolling, search, plus centering and copying the selected message (the one the 
 
 | Key | Config name | Action |
 | --- | --- | --- |
-| `j` `k` `↑` `↓` | `move-down` / `move-up` | Scroll |
+| `j` `k` `↑` `↓` | `move-down` / `move-up` (global) | Scroll |
 | `gg` / `G` | `go-top` / `go-bottom` | Top / bottom |
 | `zz` | `content-center` | Scroll the selected message to the middle of the pane (vim's `zz`); a no-op when the content already fits without scrolling |
 | `y` | `content-copy` | Copy the selected message's full text to the clipboard (same as `y` in the TREE pane) |
