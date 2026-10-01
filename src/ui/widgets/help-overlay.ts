@@ -121,17 +121,17 @@ export function helpBoxWidth(termW: number): number {
 	return Math.max(30, Math.min(termW - 4, 64));
 }
 
-/** Size of the box for a given terminal size (height grows with the wrapped row count). */
-export function helpBoxSize(termW: number, termH: number, keymap: Keymap, focus: KeyScope): { width: number; height: number } {
+/** Fixed box height, reduced only when the terminal is too short. */
+export function helpBoxSize(termW: number, termH: number): { width: number; height: number } {
 	const width = helpBoxWidth(termW);
-	const rowCount = helpLayout(keymap, focus, width - 2).rows.length;
-	const height = Math.max(6, Math.min(termH - 2, rowCount + 2));
+	// 固定高度，不随面板命令数量变化；小终端为上下隔离带留出空间。
+	const height = Math.min(28, Math.max(3, termH - 2), Math.max(1, termH));
 	return { width, height };
 }
 
 /** Keep the selected entry visible after a move or resize; never select a continuation row. */
 export function helpViewport(keymap: Keymap, focus: KeyScope, termW: number, termH: number, cursor: number, scroll: number): { cursor: number; scroll: number } {
-	const { width, height } = helpBoxSize(termW, termH, keymap, focus);
+	const { width, height } = helpBoxSize(termW, termH);
 	const { rows, count } = helpLayout(keymap, focus, width - 2);
 	cursor = clamp(cursor, 0, Math.max(0, count - 1));
 	const visible = Math.max(1, height - 2);
@@ -173,7 +173,7 @@ export function renderHelpBox(p: HelpOverlayProps, width: number, height: number
 	}
 
 	const more = maxScroll > 0 ? `${start + 1}-${Math.min(rows.length, start + visible)}/${rows.length}` : "";
-	return frame(body, {
+	const box = frame(body, {
 		width,
 		height,
 		title: `${t("help.titlePrefix")} · ${scopeTitle(p.focus)}`,
@@ -182,11 +182,22 @@ export function renderHelpBox(p: HelpOverlayProps, width: number, height: number
 		titleStyle: (s) => theme.bold(theme.fg("accent", s)),
 		metaStyle: (s) => theme.fg("dim", s),
 	});
+	// 提示嵌在底边，不占命令行数，避免滚动时视口高度跳动。
+	const hints = [start > 0 ? t("help.moreAbove") : "", start < maxScroll ? t("help.moreBelow") : ""].filter(Boolean);
+	if (hints.length && width >= 4 && height >= 2) {
+		const hint = ` ${fit(hints.join("  "), Math.min(visibleWidth(hints.join("  ")), inner - 2))} `;
+		const remaining = Math.max(0, inner - visibleWidth(hint));
+		const left = Math.floor(remaining / 2);
+		box[box.length - 1] = theme.fg("borderAccent", `└${"─".repeat(left)}`) +
+			theme.fg("accent", hint) +
+			theme.fg("borderAccent", `${"─".repeat(remaining - left)}┘`);
+	}
+	return box;
 }
 
 /** Composite the help box centered over already-rendered panel `lines`. */
 export function overlayHelp(lines: string[], p: HelpOverlayProps, termW: number): string[] {
-	const { width, height } = helpBoxSize(termW, lines.length, p.keymap, p.focus);
+	const { width, height } = helpBoxSize(termW, lines.length);
 	return overlayCentered(lines, renderHelpBox(p, width, height), width, termW, (s) => p.theme.fg("dim", s));
 }
 

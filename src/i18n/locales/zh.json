@@ -132,6 +132,8 @@
   },
   "help": {
     "currentPane": "当前面板",
+    "moreAbove": "↑ 上方还有更多",
+    "moreBelow": "↓ 下方还有更多",
     "titlePrefix": "帮助",
     "run": "执行"
   },

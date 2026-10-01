@@ -279,7 +279,8 @@ test("help separates the current pane and outer scopes with padded headings", ()
 		assert.ok(first);
 		assert.deepEqual(logical.slice(0, 2), [{ kind: "blank" }, { kind: "header", text: "Current pane" }]);
 		for (const termW of [40, 100]) {
-			const { width, height } = helpBoxSize(termW, 200, DEFAULT_KEYMAP, focus);
+			const { width } = helpBoxSize(termW, 200);
+			const height = helpLineCount(DEFAULT_KEYMAP, focus, termW) + 2;
 			const lines = renderHelpBox({ keymap: DEFAULT_KEYMAP, focus, cursor: 0, scroll: 0, theme: fakeTheme }, width, height);
 			assert.ok(lines[3]?.startsWith(`│ › ${first.keys}`), `${focus}: ${lines[3]}`);
 			for (const heading of ["-- Current pane --", "-- Global --"]) {
@@ -336,9 +337,9 @@ test("help j/k and arrows select commands without moving the pane, skip headings
 	}
 	selectHelpAction(h.panel, "session-share");
 	assert.ok(h.panel.state.helpScroll > 0);
-	h.panel.handleInput("j"); // skips blank + Global header straight to search
+	h.panel.handleInput("j"); // skips blank + Global header straight to move-down
 	const lines = h.text(100);
-	assert.ok(lines.some((line) => line.includes("› /") && line.includes("Search")));
+	assert.ok(lines.some((line) => line.includes("› j/↓")));
 	selectHelpAction(h.panel, "quit");
 	const last = h.panel.state.helpCursor;
 	h.panel.handleInput("\x1b[B");

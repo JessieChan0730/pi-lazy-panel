@@ -132,6 +132,8 @@
   },
   "help": {
     "currentPane": "Current pane",
+    "moreAbove": "↑ More above",
+    "moreBelow": "↓ More below",
     "titlePrefix": "HELP",
     "run": "run"
   },

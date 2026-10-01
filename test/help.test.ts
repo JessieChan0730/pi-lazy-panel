@@ -19,6 +19,48 @@ const theme = {
 
 const empty: Keymap = { global: {}, sessions: {}, tree: {}, content: {}, "tree-dialog": {} };
 
+test("help has a fixed height, shrinks in small terminals and pads short lists", () => {
+	assert.equal(helpBoxSize(100, 200).height, 28);
+	assert.equal(helpBoxSize(100, 15).height, 13);
+	for (const termH of [1, 2, 3, 4, 8]) assert.ok(helpBoxSize(40, termH).height <= termH);
+	for (const focus of ["sessions", "tree", "content"] as const) {
+		const { width, height } = helpBoxSize(100, 200);
+		const lines = renderHelpBox({ keymap: DEFAULT_KEYMAP, focus, cursor: 0, scroll: 0, theme }, width, height);
+		assert.equal(lines.length, 28);
+		const logical = buildHelpLines(DEFAULT_KEYMAP, focus);
+		const global = logical.findIndex((line) => line.kind === "header" && line.text === "Global");
+		for (const action of ["move-down", "move-up"]) {
+			assert.ok(logical.findIndex((line) => line.kind === "binding" && line.action === action) > global);
+			assert.equal(logical.filter((line) => line.kind === "binding" && line.action === action).length, 1);
+		}
+	}
+	const { width, height } = helpBoxSize(100, 200);
+	assert.equal(renderHelpBox({ keymap: empty, focus: "content", cursor: 0, scroll: 0, theme }, width, height).length, 28);
+});
+
+test("help bottom border hints track hidden content without taking body rows", () => {
+	try {
+		for (const locale of ["en", "zh"] as const) {
+			initI18n(locale);
+			const above = locale === "en" ? "↑ More above" : "↑ 上方还有更多";
+			const below = locale === "en" ? "↓ More below" : "↓ 下方还有更多";
+			for (const [scroll, hasAbove, hasBelow] of [[0, false, true], [5, true, true], [999, true, false]] as const) {
+				const lines = renderHelpBox({ keymap: DEFAULT_KEYMAP, focus: "sessions", cursor: 0, scroll, theme }, 64, 12);
+				const bottom = stripTerminalSequences(lines.at(-1)!);
+				assert.equal(bottom.includes(above), hasAbove);
+				assert.equal(bottom.includes(below), hasBelow);
+				assert.equal(lines.length, 12);
+				assert.ok(lines.every((line) => visibleWidth(line) === 64));
+			}
+			const short = renderHelpBox({ keymap: empty, focus: "sessions", cursor: 0, scroll: 0, theme }, 64, 28);
+			assert.ok(!stripTerminalSequences(short.at(-1)!).includes("↑"));
+			assert.ok(!stripTerminalSequences(short.at(-1)!).includes("↓"));
+		}
+	} finally {
+		initI18n("en");
+	}
+});
+
 test("help entries retain individual action IDs, aliases and configured bindings", () => {
 	const keymap = mergeKeymap(DEFAULT_KEYMAP, { sessions: { "go-top": "ctrl+w h", "session-delete": null } });
 	const entries = buildHelpLines(keymap, "sessions").filter((line) => line.kind === "binding");
@@ -40,7 +82,7 @@ test("help selection follows wrapped entries across sections and terminal resize
 			for (const cursor of [...entries.keys(), ...[...entries.keys()].reverse()]) {
 				for (const [termW, termH] of [[100, 18], [34, 9], [50, 13], [100, 200]] as const) {
 					const view = helpViewport(DEFAULT_KEYMAP, "tree", termW, termH, cursor, scroll);
-					const { width, height } = helpBoxSize(termW, termH, DEFAULT_KEYMAP, "tree");
+					const { width, height } = helpBoxSize(termW, termH);
 					const lines = renderHelpBox({ keymap: DEFAULT_KEYMAP, focus: "tree", ...view, theme }, width, height);
 					const plain = lines.map(stripTerminalSequences);
 					assert.equal(view.cursor, cursor, "wrapping does not change the selected action");
@@ -60,7 +102,7 @@ test("help selection follows wrapped entries across sections and terminal resize
 
 test("wrapped continuation rows share the selected background, not independent cursor markers", () => {
 	const keymap: Keymap = { ...empty, tree: { "tree-fold": "z" } };
-	const { width, height } = helpBoxSize(40, 100, keymap, "tree");
+	const { width, height } = helpBoxSize(40, 100);
 	const lines = renderHelpBox({ keymap, focus: "tree", cursor: 0, scroll: 0, theme }, width, height);
 	const selected = lines.filter((line) => line.includes(SELECTED));
 	assert.ok(selected.length > 1, "the description wraps");
@@ -95,7 +137,7 @@ test("help viewport clamps selection and scroll, including an empty keymap", () 
 test("an oversized entry keeps its first row visible even when its description is taller than the viewport", () => {
 	const keymap: Keymap = { ...empty, tree: { "move-up": "k", "tree-fold": "z" } };
 	const view = helpViewport(keymap, "tree", 34, 8, 1, 999);
-	const { width, height } = helpBoxSize(34, 8, keymap, "tree");
+	const { width, height } = helpBoxSize(34, 8);
 	const lines = renderHelpBox({ keymap, focus: "tree", ...view, theme }, width, height).map(stripTerminalSequences);
 	assert.ok(lines[1]?.includes("› z"));
 	assert.ok(helpLineCount(keymap, "tree", 34) > height);

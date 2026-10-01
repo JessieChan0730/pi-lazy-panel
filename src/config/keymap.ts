@@ -19,6 +19,8 @@ export const DEFAULT_KEYMAP: Keymap = {
 	// 每个 scope 里 key 的书写顺序 = ? 帮助里的展示顺序（buildScopeLines 遍历 Object.keys），
 	// 所以按使用频率排：高频在前。键位解析和顺序无关，footer 另有 FOOTER_HINTS 顺序，互不影响。
 	global: {
+		"move-down": ["j", "down"],
+		"move-up": ["k", "up"],
 		search: "/",
 		// 面板切换参考 lazygit：h/l 前后切换，1/2/3 直接跳到对应编号的面板。
 		"focus-next": ["l", "tab"],
@@ -39,8 +41,6 @@ export const DEFAULT_KEYMAP: Keymap = {
 
 	sessions: {
 		"session-resume": "return",
-		"move-down": ["j", "down"],
-		"move-up": ["k", "up"],
 		"go-top": "gg",
 		"go-bottom": "G",
 		"session-new": "n",
@@ -67,8 +67,6 @@ export const DEFAULT_KEYMAP: Keymap = {
 
 	tree: {
 		"tree-restore": "return",
-		"move-down": ["j", "down"],
-		"move-up": ["k", "up"],
 		"go-top": "gg",
 		"go-bottom": "G",
 		// 折叠 / 展开光标所在的分支段（vim 的 za）。
@@ -83,8 +81,6 @@ export const DEFAULT_KEYMAP: Keymap = {
 
 	// 只读面板：上下滚动 + 顶部/底部（搜索 / 帮助等走 global）；zz 把选中消息居中、y 复制选中消息。
 	content: {
-		"move-down": ["j", "down"],
-		"move-up": ["k", "up"],
 		"go-top": "gg",
 		"go-bottom": "G",
 		// vim 的 zz：把当前选中的消息滚到面板中间；y 复制选中消息的全文。
@@ -92,7 +88,7 @@ export const DEFAULT_KEYMAP: Keymap = {
 		"content-copy": "y",
 	},
 
-	// 树对话框（a 打开）：这里只放对话框独有的键；j/k、gg/G、Enter、y、T、z 沿用 tree 面板的绑定，
+	// 树对话框（a 打开）：这里只放对话框独有的键；gg/G、Enter、y、T、z 沿用 tree 面板的绑定，j/k 沿用 global，
 	// `/` 沿用 global 的 search（在对话框里是聚焦顶部的搜索框）。过滤键和 pi /tree 的 ctrl+d/t/u/l/a 一一对应，
 	// 所以 l 在对话框里是 labeled 过滤而不是"下一个面板"（h 没有对话框绑定，切面板在这里被关掉）。
 	[TREE_DIALOG_SCOPE]: {
