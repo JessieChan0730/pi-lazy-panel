@@ -433,7 +433,42 @@ test("help execution respects the chosen action with multi-key bindings and an a
 	s.panel.dispose();
 });
 
-test("help Enter handles empty lists, action failures and help/quit actions", async () => {
+test("help navigation skips its own hint, still executes the next command and closes with the configured key", () => {
+	for (const help of ["?", "!"]) {
+		const keymap = mergeKeymap(DEFAULT_KEYMAP, { global: { help } });
+		const h = makePanel({ keymap });
+		selectHelpAction(h.panel, "scope-all");
+		const entries = buildHelpLines(keymap, "sessions").filter((line) => line.kind === "binding");
+		h.panel.handleInput("j");
+		assert.equal(entries[h.panel.state.helpCursor]?.action, "changelog");
+		h.panel.handleInput("k");
+		assert.equal(entries[h.panel.state.helpCursor]?.action, "scope-all");
+		h.panel.handleInput(help);
+		assert.equal(h.panel.state.helpOpen, false, "the configured help key still closes");
+		selectHelpAction(h.panel, "scope-all");
+		h.panel.handleInput("j");
+		h.panel.handleInput("\r");
+		assert.equal(h.panel.state.helpOpen, false, "Enter executes changelog, not help");
+		assert.ok(h.text().at(-1)!.includes(t("status.changelogUnavailable")));
+		h.panel.dispose();
+	}
+});
+
+test("Enter does nothing when help is the only listed shortcut", () => {
+	const keymap = { global: { help: "!" }, sessions: {}, tree: {}, content: {}, "tree-dialog": {} };
+	const h = makePanel({ keymap });
+	h.panel.handleInput("!");
+	for (const key of ["j", "k", "\r"]) h.panel.handleInput(key);
+	assert.equal(h.panel.state.helpOpen, true);
+	assert.equal(h.panel.state.helpCursor, 0);
+	assert.equal(h.closed(), false);
+	assert.ok(!h.text().some((line) => line.includes("›")));
+	h.panel.handleInput("!");
+	assert.equal(h.panel.state.helpOpen, false);
+	h.panel.dispose();
+});
+
+test("help Enter handles empty lists, action failures and quit actions", async () => {
 	const h = makePanel({ keymap: { global: {}, sessions: {}, tree: {}, content: {}, "tree-dialog": {} } });
 	h.panel.dispatch("help");
 	h.panel.handleInput("j");
@@ -448,10 +483,6 @@ test("help Enter handles empty lists, action failures and help/quit actions", as
 	missing.panel.handleInput("\r");
 	assert.equal(missing.panel.state.helpOpen, false);
 	assert.ok(missing.text(120).at(-1)!.includes("new: actions unavailable"));
-	selectHelpAction(missing.panel, "help");
-	missing.panel.handleInput("\r");
-	assert.equal(missing.panel.state.helpOpen, true);
-	assert.equal(missing.panel.state.helpCursor, 0);
 	selectHelpAction(missing.panel, "quit");
 	missing.panel.handleInput("\r");
 	assert.equal(missing.closed(), true);
@@ -1255,7 +1286,7 @@ test("tree dialog filters d/t/u/l/a reload the tree (toggling back to default), 
 	await flush();
 	assert.equal(h.panel.state.treeFilter, "labeled");
 	assert.ok(title().includes("0/0 · labeled"), title());
-	assert.ok(h.text().some((l) => l.includes("No entries.")), h.text().join("\n"));
+	assert.ok(h.text().some((l) => l.includes(t("pane.treeEmpty"))), h.text().join("\n"));
 	h.panel.handleInput("a");
 	await flush();
 	assert.equal(h.panel.state.treeFilter, "all");
@@ -2415,7 +2446,12 @@ function makeSessionActionPanel(
 			shares.push(file);
 			return { url: "https://pi.dev/session/#abc", gistUrl: "https://gist.github.com/me/abc" };
 		},
-		setPins: async (p) => void pins.push([...p]),
+		updateSessionState: async ({ type, files }) => {
+			const prev = pins.at(-1) ?? [];
+			const next = type === "pin" ? [...files.filter((f) => !prev.includes(f)), ...prev] : prev.filter((f) => !files.includes(f));
+			pins.push(next);
+			return { pinned: next, archived: [] };
+		},
 		...(opts.actions ?? {}),
 	};
 	const panel = new LazyPanel({
@@ -3973,7 +4009,7 @@ test("session actions report loader / action failures in the footer and leave no
 	await run({ data: { loadSessionInfo: async () => undefined } }, ["i"], t("status.sessionInfoCannotRead", { file: "/tmp/s1.jsonl" }));
 	await run({ actions: { copyText: boom } }, ["i", "y"], t("status.copyFailed", { error: "boom" }), "info");
 	// p: saving the pins fails → the pin is rolled back
-	const pinned = await run({ actions: { setPins: boom } }, ["p"], t("status.pinFailed", { error: "boom" }));
+	const pinned = await run({ actions: { updateSessionState: boom } }, ["p"], t("status.pinFailed", { error: "boom" }));
 	assert.deepEqual(pinned.panel.state.pinnedFiles, [], "the failed pin is rolled back");
 	// d with a selection but no actions wired
 	await run({ actions: null }, [" ", "d"], t("status.deleteUnavailable"));

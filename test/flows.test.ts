@@ -58,6 +58,7 @@ function fakeHost(opts: FakeHostOptions = {}) {
 		},
 		currentSessionFile: opts.currentSessionFile,
 		skipSummaryPrompt: false,
+		archiveViewHint: () => "X view archive",
 		isDisposed: opts.disposed ?? (() => false),
 		setStatus: (text) => {
 			if (text !== undefined) statuses.push(text);

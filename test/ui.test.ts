@@ -21,9 +21,9 @@ import {
 import type { TreeRow } from "../src/types.ts";
 import { fit, FRAME_DIVIDER, frame, metaBudget, overlayCentered, sideBySide } from "../src/ui/frame.ts";
 import { hitTest, listVisibleRows, panelGeometry } from "../src/ui/mouse.ts";
-import { scrollOffset, sessionAtLine, sessionFirstLine, sessionLineCount, sessionsMeta } from "../src/ui/panes/sessions-pane.ts";
+import { renderSessionsPane, scrollOffset, sessionAtLine, sessionFirstLine, sessionLineCount, sessionsMeta } from "../src/ui/panes/sessions-pane.ts";
 import { renderTreePane, treeMeta } from "../src/ui/panes/tree-pane.ts";
-import { layoutContent } from "../src/ui/panes/content-pane.ts";
+import { layoutContent, renderContentPane } from "../src/ui/panes/content-pane.ts";
 import { ContentViewport } from "../src/ui/content-viewport.ts";
 import { TreeView } from "../src/ui/tree-view.ts";
 import { createInitialState } from "../src/ui/state.ts";
@@ -33,7 +33,7 @@ import { ELLIPSIS, MARK_FOLDED, MARK_LEAF, MARK_OPEN, MAX_DEPTH, treeOutline } f
 import { treeSearchHints, TreeDialog } from "../src/ui/widgets/tree-dialog.ts";
 import { contextUsageText } from "../src/ui/widgets/context-usage-dialog.ts";
 import { formatCost, formatTokens, normalizeNewlines, shortenPath, singleLine } from "../src/utils/format.ts";
-import { initI18n } from "../src/i18n/index.ts";
+import { initI18n, t } from "../src/i18n/index.ts";
 
 // 测试统一按英文界面断言。
 initI18n("en");
@@ -48,6 +48,39 @@ const plainTheme = {
 	inverse: (s: string) => s,
 	strikethrough: (s: string) => s,
 };
+
+test("pane empty states share the first body row and inset, without sentence punctuation", () => {
+	const width = 60;
+	const height = 6;
+	const base = { focused: false, theme: plainTheme as never };
+	try {
+		for (const locale of ["en", "zh"] as const) {
+			initI18n(locale);
+			const cases: Array<[string[], string]> = [
+				[renderSessionsPane({ ...base, rows: [], cursor: 0, scope: "all", sort: "recent", selected: new Set() }, width, height), t("pane.sessionsEmpty")],
+				[renderTreePane({ ...base, rows: [], cursor: 0 }, width, height), t("pane.treeEmpty")],
+				[renderContentPane({ ...base, blocks: [], scroll: 0 }, width, height), t("pane.contentEmpty")],
+			];
+			// app.ts 传入的未选会话、加载中、没有内容也保持相同几何。
+			for (const emptyMessage of [t("pane.selectSession"), t("pane.loading"), t("pane.nothingToShow")]) {
+				cases.push(
+					[renderTreePane({ ...base, rows: [], cursor: 0, emptyMessage }, width, height), emptyMessage],
+					[renderContentPane({ ...base, blocks: [], scroll: 0, emptyMessage }, width, height), emptyMessage],
+				);
+			}
+			for (const [rendered, message] of cases) {
+				const lines = rendered.map(stripTerminalSequences);
+				assert.equal(lines.length, height);
+				assert.ok(lines.every((line) => visibleWidth(line) === width));
+				assert.equal(lines[1]!.slice(1, -1).trimEnd(), ` ${message}`, "no top gap, one-column left inset");
+				assert.doesNotMatch(message, /[.。]$/u);
+				assert.ok(lines.slice(2, -1).every((line) => line.slice(1, -1).trim() === ""), "no extra empty-state hints");
+			}
+		}
+	} finally {
+		initI18n("en");
+	}
+});
 
 test("formatTokens / formatCost", () => {
 	assert.equal(formatTokens(84213), "84.2k");

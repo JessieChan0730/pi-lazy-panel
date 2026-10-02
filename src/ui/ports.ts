@@ -17,6 +17,10 @@ import type {
 	ForkPoint,
 	ListScope,
 	RestoreOptions,
+	SessionFileChange,
+	SessionFileState,
+	SessionFileUpdate,
+	SessionListFilter,
 	SessionInfo,
 	SessionRow,
 	SessionSortMode,
@@ -27,7 +31,10 @@ import type {
 
 /** Async loaders injected by the entry point (they wrap src/data/*). */
 export interface DataSource {
-	listSessions(scope: ListScope, sort: SessionSortMode, pinned: readonly string[]): Promise<SessionRow[]>;
+	/** Apply visibility before pinning / threaded sorting. */
+	listSessions(scope: ListScope, sort: SessionSortMode, pinned: readonly string[], filter: SessionListFilter): Promise<SessionRow[]>;
+	/** Reload shared metadata before listing so other pi windows' changes are seen. */
+	loadSessionState?(): Promise<SessionFileState>;
 	loadTree(sessionFile: string, filter: TreeFilter): Promise<TreeRow[]>;
 	loadContent(sessionFile: string, leafEntryId?: string): Promise<ContentBlock[]>;
 	/** `i` in SESSIONS: what /session shows; undefined when the file cannot be read. */
@@ -58,8 +65,8 @@ export interface ActionSource {
 	restoreNode(sessionFile: string, entryId: string, options: RestoreOptions): Promise<EnterOutcome>;
 	/** d in SESSIONS (after confirmation): remove the file; resolves to how it was removed. */
 	deleteSession?(sessionFile: string): Promise<DeleteMethod>;
-	/** p in SESSIONS: persist the pinned session files (display order, newest first). */
-	setPins?(pinned: readonly string[]): Promise<void>;
+	/** Atomically merge a pin / archive / deletion change into the latest metadata. */
+	updateSessionState?(change: SessionFileChange): Promise<SessionFileUpdate>;
 	/** r in SESSIONS: set the display name ("" clears it). */
 	renameSession?(sessionFile: string, name: string): Promise<void>;
 	/** n in SESSIONS: start a fresh session, naming it when `name` is non-empty (/new). */

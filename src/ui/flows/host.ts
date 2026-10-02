@@ -17,7 +17,7 @@ import type { InputDialogSpec } from "../widgets/input-dialog.ts";
 import type { SelectDialogSpec } from "../widgets/select-dialog.ts";
 
 export interface FlowHost {
-	/** Panel state; flows only touch the multi-selection (`selectedSessionFiles`) and the pins (`pinnedFiles`). */
+	/** Shared UI state, including the persisted pin / archive snapshot. */
 	readonly state: PanelState;
 	readonly data: DataSource;
 	/** Side effects; undefined = none wired, which each flow reports in the footer. */
@@ -28,6 +28,8 @@ export interface FlowHost {
 	readonly skipSummaryPrompt: boolean;
 	/** True once the panel is gone: async flows stop before touching it again. */
 	isDisposed(): boolean;
+	/** Localised hint using the configured archive-view key (empty when unbound). */
+	archiveViewHint(): string;
 	/** Footer status text (undefined clears it). */
 	setStatus(text: string | undefined): void;
 	/** Listed sessions, in display order. */

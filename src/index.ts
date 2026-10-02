@@ -12,7 +12,7 @@
 
 import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { OverlayHandle } from "@earendil-works/pi-tui";
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -33,14 +33,14 @@ import {
 } from "./actions/session-actions.ts";
 import { copyNodeText, labelNode, restoreNode } from "./actions/tree-actions.ts";
 import { loadConfig } from "./config/config.ts";
-import { loadPins, savePins } from "./config/pins.ts";
+import { loadSessionFileState, updateSessionFileState } from "./config/archive.ts";
 import { loadPiSettings } from "./config/pi-settings.ts";
 import { COMMAND_NAME } from "./constants.ts";
 import { loadChangelog } from "./data/changelog.ts";
 import { loadContent, loadForkPoints, loadSessionInfo } from "./data/content.ts";
 import { loadContextUsage } from "./data/context-usage.ts";
 import { initI18n, t } from "./i18n/index.ts";
-import { listSessions, sortSessions } from "./data/sessions.ts";
+import { filterSessions, listSessions, sortSessions } from "./data/sessions.ts";
 import { applyTreeFilter, loadTree } from "./data/tree.ts";
 import { LazyPanel } from "./ui/app.ts";
 import type { ActionSource, DataSource } from "./ui/ports.ts";
@@ -76,18 +76,9 @@ export default function (pi: ExtensionAPI) {
 			// pi 自己的 branchSummary.skipPrompt 打开时，TREE Enter 和内置 /tree 一样不弹摘要菜单；
 			// treeFilterMode 是内置 /tree 的默认过滤，面板的 TREE 也从它开始。
 			const piSettings = loadPiSettings(ctx.cwd, getAgentDir(), ctx.isProjectTrusted());
-			// 置顶列表：读一次，顺手清掉在插件外面已经删掉的会话文件（下次打开生效）。
-			const rawPins = loadPins(getAgentDir());
-			const pins = rawPins.filter((file) => existsSync(file));
-			if (pins.length !== rawPins.length) {
-				try {
-					savePins(getAgentDir(), pins);
-				} catch {
-					// 清理失败无所谓，留到下次；不阻塞面板打开。
-				}
-			}
 			const data: DataSource = {
-				listSessions: async (scope, sort, pinned) => sortSessions(await listSessions({ cwd: ctx.cwd, scope }), sort, pinned),
+				loadSessionState: async () => loadSessionFileState(getAgentDir()),
+				listSessions: async (scope, sort, pinned, filter) => sortSessions(filterSessions(await listSessions({ cwd: ctx.cwd, scope }), filter), sort, pinned),
 				loadTree: async (file, filter) => applyTreeFilter(await loadTree(file), filter),
 				loadContent: (file, leafEntryId) =>
 					loadContent(leafEntryId ? { sessionFile: file, leafEntryId } : { sessionFile: file }),
@@ -111,7 +102,7 @@ export default function (pi: ExtensionAPI) {
 				resumeSession: (file) => resumeSession(ctx, file),
 				restoreNode: (file, entryId, options) => restoreNode(ctx, file, entryId, options),
 				deleteSession: (file) => deleteSession(ctx, file),
-				setPins: async (pinned) => savePins(getAgentDir(), [...pinned]),
+				updateSessionState: (change) => updateSessionFileState(getAgentDir(), change),
 				renameSession: (file, name) => renameSession(pi, ctx, file, name),
 				newSession: (name) => newSession(ctx, name),
 				forkSession: (file, entryId) => forkSession(ctx, file, entryId),
@@ -151,7 +142,7 @@ export default function (pi: ExtensionAPI) {
 						onClose: () => done(),
 						setHidden: (hidden) => setHidden?.(hidden),
 						keymap: config.keymap,
-						initialState: { scope: config.defaultScope, sort: config.defaultSort, treeFilter: piSettings.treeFilter, pinnedFiles: pins },
+						initialState: { scope: config.defaultScope, sort: config.defaultSort, treeFilter: piSettings.treeFilter },
 						leftColumnRatio: config.leftColumnRatio,
 						skipSummaryPrompt: piSettings.skipBranchSummaryPrompt,
 						// 打开时 SESSIONS 光标落到 pi 当前打开的会话上；新会话没有文件 / 还没列出时留在第一行。
