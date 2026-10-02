@@ -1255,7 +1255,7 @@ test("tree dialog filters d/t/u/l/a reload the tree (toggling back to default), 
 	await flush();
 	assert.equal(h.panel.state.treeFilter, "labeled");
 	assert.ok(title().includes("0/0 · labeled"), title());
-	assert.ok(h.text().some((l) => l.includes("No entries.")), h.text().join("\n"));
+	assert.ok(h.text().some((l) => l.includes(t("pane.treeEmpty"))), h.text().join("\n"));
 	h.panel.handleInput("a");
 	await flush();
 	assert.equal(h.panel.state.treeFilter, "all");

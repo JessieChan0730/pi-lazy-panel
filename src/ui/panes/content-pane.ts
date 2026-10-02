@@ -104,7 +104,7 @@ export function renderContentPane(p: ContentPaneProps, width: number, height: nu
 	const visible = Math.max(1, height - 2);
 	let body: string[];
 	if (p.blocks.length === 0) {
-		body = ["", theme.fg("muted", `  ${p.emptyMessage ?? t("pane.contentEmpty")}`)];
+		body = [theme.fg("muted", ` ${p.emptyMessage ?? t("pane.contentEmpty")}`)];
 	} else {
 		const all = (p.layout ?? layoutContent(p.blocks, inner, theme, p.highlightEntryId)).lines;
 		// 允许滚过最后一整页（`zz` 居中最后几条消息时会这样，下方由 frame 补空行）；
