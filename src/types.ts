@@ -26,7 +26,7 @@ export type SessionSortMode = (typeof SESSION_SORT_MODES)[number];
  * dialog (`a` in the tree pane) is open, `confirm` / `rename` / `info` = the
  * delete confirmation, the Rename prompt or the Session Info dialog is open;
  * `export` / `import` / `share` = the dialogs of SESSIONS `e` / `I` / `S`;
- * `changelog` = the `@` changelog dialog.
+ * `changelog` = the `@` changelog dialog, `usage` = the `u` context-usage box.
  */
 export type PanelMode =
 	| "normal"
@@ -38,6 +38,7 @@ export type PanelMode =
 	| "confirm"
 	| "rename"
 	| "info"
+	| "usage"
 	| "new"
 	| "fork"
 	| "clone"
@@ -196,6 +197,48 @@ export interface SessionInfo {
 	parentName?: string;
 }
 
+/** Theme colour a usage category paints its swatch / bar segment with. */
+export type ContextUsageColor = "accent" | "error" | "thinkingMax" | "success" | "mdLink" | "warning" | "customMessageLabel" | "dim";
+
+/**
+ * One row of the context breakdown, keyed by an i18n suffix under `usage.`
+ * (systemPrompt / memory / skills / tools / toolResults / context / other /
+ * freeSpace). Tokens are estimates reconciled against the provider total.
+ */
+export interface ContextUsageCategory {
+	key: string;
+	tokens: number;
+	color: ContextUsageColor;
+	/** Markdown source for Enter preview; empty means no content, absent means a statistics-only row. */
+	prompt?: string;
+}
+
+/**
+ * Data shown in the Context usage dialog (`u`): how full the model's context
+ * window is for a session, and what fills it — pi's footer percentage, broken
+ * down like pi-cc's `/context`. `contextWindow` / `percent` are undefined when
+ * the model (hence the window) is unknown; then only token counts are shown.
+ */
+export interface ContextUsageInfo {
+	model?: string;
+	/** Messages on the active branch. */
+	messages: number;
+	/** Accumulated cost so far, when known. */
+	cost?: number;
+	/** Total context tokens in use (provider-resolved, floored by the itemized prompt side). */
+	used: number;
+	/** Context window size of the session's model. */
+	contextWindow?: number;
+	/** `used / contextWindow`, 0..1; undefined when the window is unknown. */
+	percent?: number;
+	/** Fraction of the window at which pi auto-compacts (`shouldCompact` threshold); undefined when the window is unknown. */
+	compactThreshold?: number;
+	/** Tokens still free before the auto-compaction threshold; undefined when unknown. */
+	compactRemaining?: number;
+	/** Breakdown rows in display order, ending with Other and (when the window is known) Free space. */
+	categories: ContextUsageCategory[];
+}
+
 // ---------------------------------------------------------------------------
 // Search
 // ---------------------------------------------------------------------------
@@ -297,6 +340,7 @@ export type ActionId =
 	| "session-sort"
 	| "session-new"
 	| "session-info"
+	| "session-context-usage"
 	// tree pane
 	| "tree-restore"
 	| "tree-copy"

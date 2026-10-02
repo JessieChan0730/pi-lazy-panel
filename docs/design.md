@@ -84,6 +84,7 @@
 ~~n: 新建一个对话，显示输入框，必须输入新对话的名称（/name）,输出完成后，回车关闭这个插件，并且进入到聊天界面~~（2026-09-23 完成：居中输入框输入名字，**名字可以留空**（对应 /name 的可选 `[name]` 参数，空则不设置名称，不再强制必须输入），回车新建并关闭面板进入新对话）
 v: 暂定
 ~~i: 弹出对话框展示 Session Info 信息，就是 /seesion 中的内容（这个对话框弹出的时候使用y，可以复制对话框中全部的内容）~~（2026-09-23 完成：居中弹窗列 Name / Model / Messages / Tokens / Cost / Created / Updated / Path / ID，y 复制全部（路径用完整路径），Esc / q 关闭）
+~~u: 弹出对话框展示上下文占用详情（pi footer 那个百分比的展开视图）~~（2026-09-28 完成，随后按反馈借鉴 pi 的 npm:pi-cc-extensions 的 /context 重做：居中只读弹窗——`已用 / 窗口 · 百分比` + 彩色堆叠进度条，随后每个类别按占整个窗口的比例列一行：System prompt / Memory / Skills / Tools definition / Tool results / Context / Other / Free space（空闲），再加 Model / Messages / Cost 概要。当前会话给完整拆分：提示侧（系统提示词 / 记忆 / 技能 / 工具定义）来自 pi 运行态 `getSystemPrompt` / `getSystemPromptOptions` / `getAllTools`，对话侧（Tool results / Context）从 `buildContextEntries` 估算，总占用用 `getContextUsage` 的数字并按 pi-cc 的 resolveUsedTokens / capParts 对齐；其他会话只能从文件算对话侧、其余归 Other，窗口按 model id 反查、查不到只显示 token。y 复制全部、Esc / q 关闭；多选时拒绝。footer 不列 u，只进 ? 帮助。回车进入看某一类详情暂未做）
 ~~c: 压缩选中的对话（/compact），压缩完进对话~~（2026-09-24 完成：先弹居中输入框输入可选的聚焦指令（对应 /compact [instructions]，可留空用 pi 默认），回车后压缩光标会话的活动分支并进入它——`ctx.compact` 只作用于当前会话，所以其他会话先 switchSession 切过去（这就是"进对话"），再在新 ctx 上压缩；压缩要跑模型、可能十几秒，期间面板隐藏、pi 自己的 footer 显示旋转 spinner（正方形），成功后关面板、失败留 footer；选中多个会话时拒绝。不弹确认框，和 pi 自带 /compact 一致（只追加一条 compaction 条目、不删数据）)
 
 ### 左侧列表第二个面板(tree)

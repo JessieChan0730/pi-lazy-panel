@@ -15,6 +15,18 @@ function actionOf(r: ResolveResult): string | undefined {
 	return r.kind === "action" ? r.action : undefined;
 }
 
+test("movement inherits global bindings and pane overrides retain priority", () => {
+	const bindings = compileKeymap(DEFAULT_KEYMAP);
+	for (const scope of ["sessions", "tree", "content", "tree-dialog"] as const) {
+		for (const key of ["j", "\x1b[B"]) assert.deepEqual(resolveKeys(bindings, scope, [key]), { kind: "action", action: "move-down", scope: "global" });
+		for (const key of ["k", "\x1b[A"]) assert.deepEqual(resolveKeys(bindings, scope, [key]), { kind: "action", action: "move-up", scope: "global" });
+	}
+	const custom = compileKeymap(mergeKeymap(DEFAULT_KEYMAP, { tree: { "move-up": "j" } }));
+	assert.deepEqual(resolveKeys(custom, "tree-dialog", ["j"]), { kind: "action", action: "move-up", scope: "tree" });
+	const unbound = compileKeymap(mergeKeymap(DEFAULT_KEYMAP, { global: { "move-down": null } }));
+	assert.deepEqual(resolveKeys(unbound, "sessions", ["j"]), { kind: "none" });
+});
+
 test("normalizeKeyStep: uppercase means shift, modifiers are ordered, named keys are recognised", () => {
 	assert.equal(normalizeKeyStep("G"), "shift+g");
 	assert.equal(normalizeKeyStep("shift+g"), "shift+g");
@@ -96,7 +108,7 @@ test("tree dialog scope: its keys shadow the tree pane's and the global ones, ev
 	assert.deepEqual(resolveKeys(bindings, "tree-dialog", ["?"]), { kind: "action", action: "help", scope: "global" });
 	// shared keys come from the tree pane, / from global, gg still goes through pending
 	assert.deepEqual(resolveKeys(bindings, "tree-dialog", ["z"]), { kind: "action", action: "tree-fold", scope: "tree" });
-	assert.deepEqual(resolveKeys(bindings, "tree-dialog", ["j"]), { kind: "action", action: "move-down", scope: "tree" });
+	assert.deepEqual(resolveKeys(bindings, "tree-dialog", ["j"]), { kind: "action", action: "move-down", scope: "global" });
 	assert.deepEqual(resolveKeys(bindings, "tree-dialog", ["/"]), { kind: "action", action: "search", scope: "global" });
 	assert.deepEqual(resolveKeys(bindings, "tree-dialog", ["g"]), { kind: "pending" });
 	assert.equal(actionOf(resolveKeys(bindings, "tree-dialog", ["g", "g"])), "go-top");

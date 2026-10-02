@@ -5,7 +5,7 @@
  * pi-tui requires from `Component.render()`.
  */
 
-import { compositeTuiLine, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { compositeTuiLine, stripTerminalSequences, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 export type Style = (s: string) => string;
 
@@ -88,14 +88,27 @@ function topBorder(o: FrameOptions, inner: number): string {
  * already-rendered `base` lines of a `termW`-column terminal. Shared by the
  * help overlay and the dialogs; box rows beyond `base` are dropped.
  *
- * 居中叠加：帮助弹窗和打标签弹窗都用这个把自己画到面板上面。
+ * Pass `backdrop` for a modal: restyle the base and clear a one-cell gutter
+ * outside the box, clipped to the available space without moving the box.
+ *
+ * 弹窗只弱化底图：先清掉选中背景、反色和隐藏层的输入光标，再套主题色。
+ * 上层原样叠加，嵌套时不会越叠越暗，关闭后也不影响原来的面板状态。
  */
-export function overlayCentered(base: string[], box: string[], width: number, termW: number): string[] {
+export function overlayCentered(base: string[], box: string[], width: number, termW: number, backdrop?: Style): string[] {
 	const top = Math.max(0, Math.floor((base.length - box.length) / 2));
 	const left = Math.max(0, Math.floor((termW - width) / 2));
-	const out = [...base];
+	const out = backdrop ? base.map((line) => backdrop(stripTerminalSequences(line))) : [...base];
+	if (backdrop && box.length && width > 0 && termW > 0) {
+		const gutterLeft = Math.max(0, left - 1);
+		const gutterWidth = Math.min(termW, left + width + 1) - gutterLeft;
+		const blank = " ".repeat(gutterWidth);
+		for (let i = Math.max(0, top - 1); i < Math.min(out.length, top + box.length + 1); i++) {
+			out[i] = compositeTuiLine(out[i] ?? "", blank, gutterLeft, gutterWidth, termW);
+		}
+	}
 	for (let i = 0; i < box.length && top + i < out.length; i++) {
-		out[top + i] = compositeTuiLine(out[top + i] ?? "", box[i]!, left, width, termW);
+		// 宽字符恰好跨过终端右边界时，pi-tui 会整字裁掉，再补齐留下的那一列。
+		out[top + i] = fit(compositeTuiLine(out[top + i] ?? "", box[i]!, left, width, termW), termW);
 	}
 	return out;
 }

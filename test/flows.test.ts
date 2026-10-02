@@ -9,9 +9,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { initI18n, t } from "../src/i18n/index.ts";
-import type { RestoreOptions, SessionRow } from "../src/types.ts";
+import type { ContextUsageInfo, RestoreOptions, SessionRow } from "../src/types.ts";
 import type { FlowHost } from "../src/ui/flows/host.ts";
-import { confirmDeleteSession, copyLastReply, startExport, startFork } from "../src/ui/flows/session-flows.ts";
+import { confirmDeleteSession, copyLastReply, openContextUsage, startExport, startFork } from "../src/ui/flows/session-flows.ts";
 import { openTreeFilterMenu, restoreTreeNode, type TreeTarget } from "../src/ui/flows/tree-flows.ts";
 import type { ActionSource, DataSource } from "../src/ui/ports.ts";
 import { createInitialState } from "../src/ui/state.ts";
@@ -45,6 +45,7 @@ function fakeHost(opts: FakeHostOptions = {}) {
 	const dialogs: { prompt: InputDialogSpec | undefined; menu: SelectDialogSpec | undefined } = { prompt: undefined, menu: undefined };
 	const statuses: string[] = [];
 	const entered: string[] = [];
+	let usageOpened: { info: ContextUsageInfo; onCopy: (text: string) => void } | undefined;
 	const host: FlowHost = {
 		state,
 		data: { listSessions: async () => rows, loadTree: async () => [], loadContent: async () => [], ...opts.data },
@@ -79,6 +80,9 @@ function fakeHost(opts: FakeHostOptions = {}) {
 			dialogs.menu = undefined;
 		},
 		openInfo: () => {},
+		openUsage: (info, onCopy) => {
+			usageOpened = { info, onCopy };
+		},
 		dialogMaxRows: () => 10,
 		enter: async (what, run) => {
 			entered.push(what);
@@ -104,6 +108,7 @@ function fakeHost(opts: FakeHostOptions = {}) {
 			return dialogs.prompt;
 		},
 		anyOpen: () => dialogs.menu !== undefined || dialogs.prompt !== undefined,
+		usageOpened: () => usageOpened,
 	};
 }
 
@@ -271,4 +276,34 @@ test("a flow that finishes after the panel is gone leaves it alone", async () =>
 	});
 	await copyLastReply(h.host);
 	assert.deepEqual(h.statuses, [], "no footer update after dispose");
+});
+
+test("context usage: loads the cursor session, opens the box, and y copies its text", async () => {
+	const info: ContextUsageInfo = { messages: 3, used: 100, contextWindow: 200, percent: 0.5, categories: [{ key: "context", tokens: 40, color: "warning" }, { key: "freeSpace", tokens: 160, color: "dim" }] };
+	const usageCalls: string[] = [];
+	const copied: string[] = [];
+	const h = fakeHost({
+		data: {
+			loadContextUsage: async (file) => {
+				usageCalls.push(file);
+				return info;
+			},
+		},
+		actions: { copyText: async (text) => void copied.push(text) },
+	});
+	await openContextUsage(h.host);
+	assert.deepEqual(usageCalls, ["/tmp/s1.jsonl"]);
+	const opened = h.usageOpened();
+	assert.ok(opened, "the usage box opened");
+	assert.equal(opened.info, info);
+	opened.onCopy("some text");
+	await flush();
+	assert.deepEqual(copied, ["some text"]);
+	assert.ok(h.statuses.includes(t("status.copiedContextUsage")), h.statuses.join(","));
+
+	// no loader injected: footer only, nothing opens
+	const bare = fakeHost();
+	await openContextUsage(bare.host);
+	assert.equal(bare.usageOpened(), undefined);
+	assert.ok(bare.statuses.includes(t("status.usageUnavailable")), bare.statuses.join(","));
 });

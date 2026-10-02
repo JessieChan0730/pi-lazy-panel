@@ -16,6 +16,7 @@
     "confirm": "确认",
     "rename": "重命名",
     "info": "信息",
+    "usage": "占用",
     "new": "新建",
     "fork": "分叉",
     "clone": "克隆",
@@ -106,6 +107,7 @@
     "session-sort": "循环排序：最近 / 创建 / 标题 / 线程",
     "session-new": "新建会话",
     "session-info": "会话信息",
+    "session-context-usage": "上下文占用详情",
     "tree-restore": "恢复对话到此节点（会询问分支摘要）",
     "tree-copy": "复制节点文本",
     "tree-label": "添加 / 编辑标签",
@@ -121,15 +123,6 @@
     "content-center": "将选中的消息滚到面板中间",
     "content-copy": "复制选中的消息文本"
   },
-  "helpGroup": {
-    "focus": "聚焦上一个 / 下一个面板",
-    "focusNumber": "按编号聚焦面板",
-    "scope": "范围：当前目录 / 全部",
-    "searchStep": "下一个 / 上一个搜索匹配",
-    "topBottom": "跳到顶部 / 底部",
-    "scrollContent": "内容面板向下 / 向上滚动",
-    "filters": "过滤：默认 / 无工具结果 / 仅用户 / 仅标签 / 全部（t/u/l/a 再按回到默认）"
-  },
   "scopeTitle": {
     "global": "全局",
     "sessions": "会话面板",
@@ -138,9 +131,11 @@
     "tree-dialog": "对话树对话框"
   },
   "help": {
+    "currentPane": "当前面板",
+    "moreAbove": "↑ 上方还有更多",
+    "moreBelow": "↓ 下方还有更多",
     "titlePrefix": "帮助",
-    "closeHint": "? / Esc 关闭",
-    "scrollHint": "j/k 滚动"
+    "run": "执行"
   },
   "footer": {
     "search": "搜索",
@@ -207,7 +202,8 @@
     "scroll": "滚动",
     "page": "翻页",
     "topBottom": "顶部/底部",
-    "backToList": "返回列表"
+    "backToList": "返回列表",
+    "preview": "查看详情"
   },
   "dialog": {
     "labelTitle": "标签",
@@ -216,6 +212,7 @@
     "importTitle": "导入会话",
     "importSubject": "输入 .jsonl 文件路径",
     "sessionInfoTitle": "会话信息",
+    "contextUsageTitle": "上下文占用",
     "changelogTitle": "更新日志",
     "changelogLoading": "正在加载更新日志…",
     "compactTitle": "压缩",
@@ -237,7 +234,8 @@
     "restoreSummarize": "总结",
     "restoreCustom": "用自定义提示总结",
     "restoreCustomTitle": "自定义总结指令",
-    "forkTitle": "从哪条消息之前分叉？"
+    "forkTitle": "从哪条消息之前分叉？",
+    "promptDetailTitle": "提示词 · {{category}}"
   },
   "confirm": {
     "yes": "是",
@@ -272,6 +270,32 @@
     "matches": "{{position}}/{{total}} 个匹配",
     "total": "{{total}} 个匹配",
     "none": "没有匹配"
+  },
+  "usage": {
+    "usedOfWindow": "{{used}} / {{window}} · {{percent}}",
+    "usedNoWindow": "已用 {{used}} · 上下文窗口未知",
+    "autoCompactAt": "{{percent}} 时自动压缩",
+    "autoCompactLeft": "{{percent}} 时自动压缩（还剩约 {{left}}）",
+    "systemPrompt": "系统提示词",
+    "memory": "记忆",
+    "skills": "技能",
+    "tools": "工具定义",
+    "toolResults": "工具结果",
+    "context": "对话上下文",
+    "other": "其他",
+    "freeSpace": "空闲",
+    "model": "模型",
+    "messages": "消息数",
+    "cost": "累计费用",
+    "emptyPrompt": "此分类没有提示词内容。",
+    "previewImage": "[文本预览已省略图片数据]",
+    "previewToolCall": "助手工具调用：{{name}}",
+    "previewAssistant": "助手",
+    "previewThinking": "助手思考",
+    "previewCommand": "命令",
+    "previewOutput": "输出",
+    "previewSummary": "摘要",
+    "previewUser": "用户"
   },
   "enter": {
     "resume": "恢复",
@@ -358,6 +382,10 @@
     "sessionInfoFailed": "加载会话信息失败：{{error}}",
     "sessionInfoCannotRead": "加载会话信息失败：无法读取 {{file}}",
     "copiedSessionInfo": "已复制会话信息到剪贴板",
+    "usageUnavailable": "上下文占用：不可用",
+    "usageFailed": "加载上下文占用失败：{{error}}",
+    "usageCannotRead": "加载上下文占用失败：无法读取 {{file}}",
+    "copiedContextUsage": "已复制上下文占用到剪贴板",
     "resumeUnavailable": "恢复：操作不可用",
     "restoreUnavailable": "恢复：操作不可用",
     "working": "{{what}}…",

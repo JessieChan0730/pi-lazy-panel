@@ -16,6 +16,7 @@
     "confirm": "CONFIRM",
     "rename": "RENAME",
     "info": "INFO",
+    "usage": "USAGE",
     "new": "NEW",
     "fork": "FORK",
     "clone": "CLONE",
@@ -106,6 +107,7 @@
     "session-sort": "Cycle sort: recent / created / title / threaded",
     "session-new": "New session",
     "session-info": "Session info",
+    "session-context-usage": "Context usage details",
     "tree-restore": "Restore conversation to this node (asks about a branch summary)",
     "tree-copy": "Copy node text",
     "tree-label": "Add / edit label",
@@ -121,15 +123,6 @@
     "content-center": "Center the selected message in the pane",
     "content-copy": "Copy the selected message text"
   },
-  "helpGroup": {
-    "focus": "Focus previous / next pane",
-    "focusNumber": "Focus pane by number",
-    "scope": "Scope: current folder / all",
-    "searchStep": "Next / previous search match",
-    "topBottom": "Go to top / bottom",
-    "scrollContent": "Scroll content pane down / up",
-    "filters": "Filter: default / no tool results / user only / labeled only / all (t/u/l/a toggle back to default)"
-  },
   "scopeTitle": {
     "global": "Global",
     "sessions": "Sessions pane",
@@ -138,9 +131,11 @@
     "tree-dialog": "Tree dialog"
   },
   "help": {
+    "currentPane": "Current pane",
+    "moreAbove": "↑ More above",
+    "moreBelow": "↓ More below",
     "titlePrefix": "HELP",
-    "closeHint": "? / Esc close",
-    "scrollHint": "j/k scroll"
+    "run": "run"
   },
   "footer": {
     "search": "Search",
@@ -207,7 +202,8 @@
     "scroll": "scroll",
     "page": "page",
     "topBottom": "top/bottom",
-    "backToList": "back to the list"
+    "backToList": "back to the list",
+    "preview": "preview"
   },
   "dialog": {
     "labelTitle": "Label",
@@ -216,6 +212,7 @@
     "importTitle": "Import session",
     "importSubject": "path to a .jsonl file",
     "sessionInfoTitle": "Session Info",
+    "contextUsageTitle": "Context Usage",
     "changelogTitle": "What's New",
     "changelogLoading": "Loading changelog…",
     "compactTitle": "Compact",
@@ -237,7 +234,8 @@
     "restoreSummarize": "Summarize",
     "restoreCustom": "Summarize with custom prompt",
     "restoreCustomTitle": "Custom summarization instructions",
-    "forkTitle": "Fork before which message?"
+    "forkTitle": "Fork before which message?",
+    "promptDetailTitle": "Prompt · {{category}}"
   },
   "confirm": {
     "yes": "Yes",
@@ -272,6 +270,32 @@
     "matches": "{{position}}/{{total}} matches",
     "total": "{{total}} matches",
     "none": "no matches"
+  },
+  "usage": {
+    "usedOfWindow": "{{used}} / {{window}} · {{percent}}",
+    "usedNoWindow": "{{used}} used · context window unknown",
+    "autoCompactAt": "auto-compact at {{percent}}",
+    "autoCompactLeft": "auto-compact at {{percent}} (~{{left}} left)",
+    "systemPrompt": "System prompt",
+    "memory": "Memory",
+    "skills": "Skills",
+    "tools": "Tools definition",
+    "toolResults": "Tool results",
+    "context": "Context",
+    "other": "Other",
+    "freeSpace": "Free space",
+    "model": "Model",
+    "messages": "Messages",
+    "cost": "Cost so far",
+    "emptyPrompt": "No prompt content in this category.",
+    "previewImage": "[Image payload omitted from text preview]",
+    "previewToolCall": "Assistant tool call: {{name}}",
+    "previewAssistant": "Assistant",
+    "previewThinking": "Assistant thinking",
+    "previewCommand": "Command",
+    "previewOutput": "Output",
+    "previewSummary": "Summary",
+    "previewUser": "User"
   },
   "enter": {
     "resume": "resume",
@@ -358,6 +382,10 @@
     "sessionInfoFailed": "session info failed: {{error}}",
     "sessionInfoCannotRead": "session info failed: cannot read {{file}}",
     "copiedSessionInfo": "copied session info to clipboard",
+    "usageUnavailable": "context usage: unavailable",
+    "usageFailed": "context usage failed: {{error}}",
+    "usageCannotRead": "context usage failed: cannot read {{file}}",
+    "copiedContextUsage": "copied context usage to clipboard",
     "resumeUnavailable": "resume: actions unavailable",
     "restoreUnavailable": "restore: actions unavailable",
     "working": "{{what}}…",

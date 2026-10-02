@@ -19,6 +19,8 @@ export const DEFAULT_KEYMAP: Keymap = {
 	// 每个 scope 里 key 的书写顺序 = ? 帮助里的展示顺序（buildScopeLines 遍历 Object.keys），
 	// 所以按使用频率排：高频在前。键位解析和顺序无关，footer 另有 FOOTER_HINTS 顺序，互不影响。
 	global: {
+		"move-down": ["j", "down"],
+		"move-up": ["k", "up"],
 		search: "/",
 		// 面板切换参考 lazygit：h/l 前后切换，1/2/3 直接跳到对应编号的面板。
 		"focus-next": ["l", "tab"],
@@ -39,8 +41,6 @@ export const DEFAULT_KEYMAP: Keymap = {
 
 	sessions: {
 		"session-resume": "return",
-		"move-down": ["j", "down"],
-		"move-up": ["k", "up"],
 		"go-top": "gg",
 		"go-bottom": "G",
 		"session-new": "n",
@@ -48,6 +48,8 @@ export const DEFAULT_KEYMAP: Keymap = {
 		"session-rename": "r",
 		"session-sort": "s",
 		"session-info": "i",
+		// u 显示上下文占用详情（pi footer 那个百分比的展开视图）；只读弹窗。
+		"session-context-usage": "u",
 		"session-toggle-select": "space",
 		// p 置顶 / 取消置顶光标（或所选）会话，置顶的会话固定在列表最上、不受排序影响。
 		"session-pin": "p",
@@ -65,8 +67,6 @@ export const DEFAULT_KEYMAP: Keymap = {
 
 	tree: {
 		"tree-restore": "return",
-		"move-down": ["j", "down"],
-		"move-up": ["k", "up"],
 		"go-top": "gg",
 		"go-bottom": "G",
 		// 折叠 / 展开光标所在的分支段（vim 的 za）。
@@ -81,8 +81,6 @@ export const DEFAULT_KEYMAP: Keymap = {
 
 	// 只读面板：上下滚动 + 顶部/底部（搜索 / 帮助等走 global）；zz 把选中消息居中、y 复制选中消息。
 	content: {
-		"move-down": ["j", "down"],
-		"move-up": ["k", "up"],
 		"go-top": "gg",
 		"go-bottom": "G",
 		// vim 的 zz：把当前选中的消息滚到面板中间；y 复制选中消息的全文。
@@ -90,7 +88,7 @@ export const DEFAULT_KEYMAP: Keymap = {
 		"content-copy": "y",
 	},
 
-	// 树对话框（a 打开）：这里只放对话框独有的键；j/k、gg/G、Enter、y、T、z 沿用 tree 面板的绑定，
+	// 树对话框（a 打开）：这里只放对话框独有的键；gg/G、Enter、y、T、z 沿用 tree 面板的绑定，j/k 沿用 global，
 	// `/` 沿用 global 的 search（在对话框里是聚焦顶部的搜索框）。过滤键和 pi /tree 的 ctrl+d/t/u/l/a 一一对应，
 	// 所以 l 在对话框里是 labeled 过滤而不是"下一个面板"（h 没有对话框绑定，切面板在这里被关掉）。
 	[TREE_DIALOG_SCOPE]: {
@@ -140,38 +138,6 @@ export const DISABLED_ACTIONS: Partial<Record<KeyScope, ActionId[]>> = {
 export function isDisabledIn(scope: KeyScope, action: ActionId): boolean {
 	return DISABLED_ACTIONS[scope]?.includes(action) ?? false;
 }
-
-/**
- * Actions merged into a single help line (`?` overlay).
- *
- * 帮助面板里同类操作合并成一行，省空间：例如 1/2/3 显示成 `1..3  Focus pane by number`。
- * 合并只影响帮助展示，不影响键位解析。组内只要有 ≥2 个动作在当前 scope 绑定了键位就合并，
- * 否则退回单条展示；用户自定义键位一样会如实显示。
- */
-export interface HelpGroup {
-	/** Member actions, in the order their keys are listed. */
-	actions: ActionId[];
-	/** i18n key (under `helpGroup.`) for the merged line's description. */
-	key: string;
-}
-
-/** Localised description of a merged help line. */
-export function helpGroupText(group: HelpGroup): string {
-	return t(`helpGroup.${group.key}`);
-}
-
-export const HELP_GROUPS: HelpGroup[] = [
-	{ actions: ["focus-prev", "focus-next"], key: "focus" },
-	{ actions: ["focus-sessions", "focus-tree", "focus-content"], key: "focusNumber" },
-	{ actions: ["scope-current", "scope-all"], key: "scope" },
-	{ actions: ["search-next", "search-prev"], key: "searchStep" },
-	{ actions: ["go-top", "go-bottom"], key: "topBottom" },
-	{ actions: ["scroll-content-down", "scroll-content-up"], key: "scrollContent" },
-	{
-		actions: ["tree-filter-default", "tree-filter-no-tools", "tree-filter-user", "tree-filter-labeled", "tree-filter-all"],
-		key: "filters",
-	},
-];
 
 /**
  * Actions shown as footer hints per pane, in display order (first few that fit).

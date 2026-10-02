@@ -9,6 +9,7 @@
 
 import type {
 	ContentBlock,
+	ContextUsageInfo,
 	DeleteMethod,
 	EnterOutcome,
 	ExportFormat,
@@ -31,6 +32,8 @@ export interface DataSource {
 	loadContent(sessionFile: string, leafEntryId?: string): Promise<ContentBlock[]>;
 	/** `i` in SESSIONS: what /session shows; undefined when the file cannot be read. */
 	loadSessionInfo?(sessionFile: string): Promise<SessionInfo | undefined>;
+	/** `u` in SESSIONS: context-window usage for the session; undefined when the file cannot be read. */
+	loadContextUsage?(sessionFile: string): Promise<ContextUsageInfo | undefined>;
 	/** `o` in SESSIONS: the user messages the fork selector lists (empty = nothing to fork). */
 	loadForkPoints?(sessionFile: string): Promise<ForkPoint[]>;
 	/** `@`: pi's changelog as markdown (what /changelog shows). */

@@ -25,6 +25,7 @@ import {
 	exportTarget,
 	forkSession,
 	importSession,
+	isCurrentSession,
 	newSession,
 	renameSession,
 	resumeSession,
@@ -37,6 +38,7 @@ import { loadPiSettings } from "./config/pi-settings.ts";
 import { COMMAND_NAME } from "./constants.ts";
 import { loadChangelog } from "./data/changelog.ts";
 import { loadContent, loadForkPoints, loadSessionInfo } from "./data/content.ts";
+import { loadContextUsage } from "./data/context-usage.ts";
 import { initI18n, t } from "./i18n/index.ts";
 import { listSessions, sortSessions } from "./data/sessions.ts";
 import { applyTreeFilter, loadTree } from "./data/tree.ts";
@@ -92,6 +94,14 @@ export default function (pi: ExtensionAPI) {
 				loadSessionInfo,
 				loadForkPoints,
 				loadChangelog: () => loadChangelog(),
+				// 上下文占用：当前会话给 pi footer 那份 + 运行态（系统提示词 / 记忆 / 技能 / 工具定义），其他会话按最后的 model 反查窗口。
+				loadContextUsage: (file) =>
+					loadContextUsage(file, {
+						...(isCurrentSession(ctx, file)
+							? { live: { usage: ctx.getContextUsage(), systemPrompt: ctx.getSystemPrompt(), systemPromptOptions: ctx.getSystemPromptOptions(), tools: pi.getAllTools() } }
+							: {}),
+						findContextWindow: (modelId) => ctx.modelRegistry.getAll().find((m) => m.id === modelId)?.contextWindow,
+					}),
 			};
 			// 副作用统一走 actions 层；目标是当前会话时用 pi 内存里的 API（setLabel / setSessionName / navigateTree），
 			// 其他历史会话则直接读写文件或先 switchSession。

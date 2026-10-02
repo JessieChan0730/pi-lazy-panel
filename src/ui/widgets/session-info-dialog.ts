@@ -190,6 +190,6 @@ export class SessionInfoDialog {
 	/** Composite the box centered over the already-rendered panel `lines`. */
 	overlay(lines: string[], termW: number): string[] {
 		const width = dialogWidth(termW);
-		return overlayCentered(lines, this.render(width), width, termW);
+		return overlayCentered(lines, this.render(width), width, termW, (s) => this.o.theme.fg("dim", s));
 	}
 }

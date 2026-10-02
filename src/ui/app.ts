@@ -44,6 +44,7 @@ import { findSessionIndex } from "../data/sessions.ts";
 import { applyTreeFold, defaultFolded, filterTreeRows, nearestListedIndex } from "../data/tree-fold.ts";
 import type {
 	ActionId,
+	ContextUsageInfo,
 	EnterOutcome,
 	KeyHint,
 	Keymap,
@@ -65,6 +66,7 @@ import {
 	confirmShareSession,
 	copyLastReply,
 	openCompactInput,
+	openContextUsage,
 	openImportInput,
 	openNewSessionInput,
 	openRenameInput,
@@ -85,9 +87,10 @@ import type { ActionSource, DataSource } from "./ports.ts";
 import { createInitialState, type PanelState } from "./state.ts";
 import { TreeView } from "./tree-view.ts";
 import { ChangelogDialog } from "./widgets/changelog-dialog.ts";
+import { ContextUsageDialog } from "./widgets/context-usage-dialog.ts";
 
 import { renderFooter } from "./widgets/footer.ts";
-import { compactKeys, helpLineCount, overlayHelp } from "./widgets/help-overlay.ts";
+import { buildHelpLines, compactKeys, helpViewport, overlayHelp } from "./widgets/help-overlay.ts";
 import { InputDialog, type InputDialogSpec } from "./widgets/input-dialog.ts";
 
 import { renderSearchStatus, SearchBar } from "./widgets/search-bar.ts";
@@ -140,8 +143,8 @@ interface Overlay {
 	handleInput(data: string): void;
 	/** Draw it over the rendered panel lines. */
 	draw(lines: string[], width: number): string[];
-	/** Footer hints while it is open; undefined keeps the panel's own footer (the help overlay lists the keys itself). */
-	hints(): KeyHint[] | undefined;
+	/** Footer hints of the overlay that currently owns the keyboard. */
+	hints(): KeyHint[];
 	/** Drawn under the other overlays: the tree dialog, which T / Enter open a prompt / menu on top of. */
 	base?: boolean;
 }
@@ -187,6 +190,8 @@ export class LazyPanel implements Component, Focusable {
 	private readonly treeDialog: TreeDialog;
 	/** `i` in SESSIONS: the read-only Session Info box. */
 	private readonly infoDialog: SessionInfoDialog;
+	/** `u` in SESSIONS: the read-only Context usage box. */
+	private readonly usageDialog: ContextUsageDialog;
 	/** `@`: pi's changelog in a big scrollable box. */
 	private readonly changelogDialog: ChangelogDialog;
 	/** What the dialog flows (./flows/) get from the panel; see `FlowHost`. */
@@ -252,11 +257,13 @@ export class LazyPanel implements Component, Focusable {
 			onChange: () => this.o.requestRender(),
 		});
 		this.infoDialog = new SessionInfoDialog({ theme: o.theme });
+		this.usageDialog = new ContextUsageDialog({ theme: o.theme });
 		this.changelogDialog = new ChangelogDialog({ theme: o.theme, onClose: () => this.closeChangelog() });
 		this.overlays = [
 			widgetOverlay(this.inputDialog),
 			widgetOverlay(this.selectDialog),
 			widgetOverlay(this.infoDialog),
+			widgetOverlay(this.usageDialog),
 			{
 				isOpen: () => this.changelogDialog.isOpen,
 				handleInput: (data) => this.handleChangelogInput(data),
@@ -266,9 +273,15 @@ export class LazyPanel implements Component, Focusable {
 			{
 				isOpen: () => this.state.helpOpen,
 				handleInput: (data) => this.handleHelpInput(data),
-				draw: (lines, width) =>
-					overlayHelp(lines, { keymap: this.keymap, focus: this.state.focus, scroll: this.state.helpScroll, theme: this.o.theme }, width),
-				hints: () => undefined,
+				draw: (lines, width) => {
+					this.syncHelpViewport(width, lines.length);
+					return overlayHelp(lines, { keymap: this.keymap, focus: this.state.focus, cursor: this.state.helpCursor, scroll: this.state.helpScroll, theme: this.o.theme }, width);
+				},
+				hints: () => [
+					["j/k/↑↓", t("hint.move")],
+					["Enter", t("help.run")],
+					[compactKeys([...new Set(["Esc", "q", ...labelsFor(this.keymap, "global", "help")])]), t("hint.close")],
+				],
 			},
 			{
 				isOpen: () => this.treeDialog.isOpen,
@@ -294,6 +307,7 @@ export class LazyPanel implements Component, Focusable {
 			openMenu: (mode, spec) => this.openMenu(mode, spec),
 			closeDialogs: () => this.closeDialogs(),
 			openInfo: (info, onCopy) => this.openInfo(info, onCopy),
+			openUsage: (info, onCopy) => this.openUsage(info, onCopy),
 			dialogMaxRows: () => this.dialogMaxRows(),
 			enter: (what, run, progress) => this.enter(what, run, progress),
 			relist: (keepFile) => this.listSessions(keepFile),
@@ -555,19 +569,43 @@ export class LazyPanel implements Component, Focusable {
 	}
 
 	private handleHelpInput(data: string): void {
-		const total = helpLineCount(this.keymap, this.state.focus, this.lastWidth);
 		// 关闭：Esc、q，或用户绑定给 help 的那个键（默认 ?）。
 		const closes = matchesKeyId(data, "escape") || matchesKeyId(data, "q") || this.isAction(data, "global", "help");
 		if (closes) {
-			this.state.helpOpen = false;
-			this.state.helpScroll = 0;
+			this.closeHelp();
+			return;
 		} else if (matchesKeyId(data, "j") || matchesKeyId(data, "down")) {
-			this.state.helpScroll = Math.min(this.state.helpScroll + 1, Math.max(0, total - 1));
+			this.state.helpCursor++;
 		} else if (matchesKeyId(data, "k") || matchesKeyId(data, "up")) {
-			this.state.helpScroll = Math.max(0, this.state.helpScroll - 1);
+			this.state.helpCursor--;
+		} else if (matchesKeyId(data, "return")) {
+			this.syncHelpViewport(this.lastWidth, Math.max(8, this.o.getHeight()) - 1);
+			const entries = buildHelpLines(this.keymap, this.state.focus).filter((line) => line.kind === "binding");
+			const entry = entries[this.state.helpCursor];
+			if (!entry) return;
+			// 直接分发动作，不重放键位（搜索中的 n、自定义同键覆盖都不能改变所选命令）。
+			// 先关帮助，确认框/输入框照常由原有 flow 打开；本次 Enter 不再交给新弹窗。
+			this.closeHelp();
+			this.dispatch(entry.action);
+			return;
 		} else {
 			return;
 		}
+		this.syncHelpViewport(this.lastWidth, Math.max(8, this.o.getHeight()) - 1);
+		this.o.requestRender();
+	}
+
+	private syncHelpViewport(width: number, height: number): void {
+		const view = helpViewport(this.keymap, this.state.focus, width, height, this.state.helpCursor, this.state.helpScroll);
+		this.state.helpCursor = view.cursor;
+		this.state.helpScroll = view.scroll;
+	}
+
+	private closeHelp(): void {
+		this.state.helpOpen = false;
+		this.state.helpCursor = 0;
+		this.state.helpScroll = 0;
+		this.keys.clear();
 		this.o.requestRender();
 	}
 
@@ -619,7 +657,9 @@ export class LazyPanel implements Component, Focusable {
 	}
 
 	private openHelp(): void {
+		this.keys.clear();
 		this.state.helpOpen = true;
+		this.state.helpCursor = 0;
 		this.state.helpScroll = 0;
 		this.o.requestRender();
 	}
@@ -830,6 +870,9 @@ export class LazyPanel implements Component, Focusable {
 				return;
 			case "session-info":
 				void openSessionInfo(this.flowHost);
+				return;
+			case "session-context-usage":
+				void openContextUsage(this.flowHost);
 				return;
 			case "session-new":
 				openNewSessionInput(this.flowHost);
@@ -1637,6 +1680,19 @@ export class LazyPanel implements Component, Focusable {
 		this.o.requestRender();
 	}
 
+	/** Context usage (u): y copies the current view; Enter previews a category, Esc returns one level. */
+	private openUsage(info: ContextUsageInfo, onCopy: (text: string) => void): void {
+		this.state.mode = "usage";
+		this.usageDialog.open({ info, onCopy, onClose: () => this.closeUsage() });
+		this.o.requestRender();
+	}
+
+	private closeUsage(): void {
+		this.state.mode = this.baseMode();
+		this.usageDialog.close();
+		this.o.requestRender();
+	}
+
 	// -----------------------------------------------------------------------
 	// Handing control to pi: Enter (resume / restore), n, o, y, c, I
 	// -----------------------------------------------------------------------
@@ -1793,11 +1849,16 @@ export class LazyPanel implements Component, Focusable {
 		};
 		const pendingHint = this.keys.hasPending ? t("status.pending", { keys: this.keys.pendingKeys }) : undefined;
 		const status = pendingHint ?? this.status;
-		// 弹窗打开时 footer 只显示弹窗自己的按键提示（如 Enter save / Esc cancel / empty removes）；状态文字照常显示。
-		// 帮助弹窗没有自己的提示（它本身就在列快捷键），footer 照常显示面板的。
-		const hints = this.overlays.find((ov) => ov.isOpen() && ov.hints() !== undefined)?.hints();
-		if (hints) {
-			return renderFooter({ ...footer, hints, ...(status ? { status } : {}) }, width)[0]!;
+		// 和按键分发使用同一个最上层弹窗；不能退回显示当前不可用的面板按键。
+		const overlay = this.overlays.find((ov) => ov.isOpen());
+		if (overlay) {
+			return renderFooter({
+				...footer,
+				modal: true,
+				hints: overlay.hints(),
+				...(this.state.helpOpen ? { modeLabel: t("help.titlePrefix") } : {}),
+				...(status ? { status } : {}),
+			}, width)[0]!;
 		}
 		// 当前面板有搜索生效：显示关键字、位置 / 数量和 n / N / Esc 提示（别的面板的搜索不显示）。
 		const search = this.state.search[this.state.focus];

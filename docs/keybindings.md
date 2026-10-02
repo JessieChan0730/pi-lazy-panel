@@ -59,6 +59,10 @@ The config file lives at `~/.pi/agent/lazy-panel.json`. Every field is optional 
 
 ## Global keybindings
 
+`j` / `↓` (`move-down`) and `k` / `↑` (`move-up`) are global bindings shared by all panes and the tree dialog. To rebind or remove their defaults, configure `keymap.global`; setting them to `null` in a pane only removes that pane's override, not the inherited binding.
+
+Help uses a fixed 28-row popup (including borders), shrinking on smaller terminals. Use `j/k/↑/↓` to select and scroll through commands. The bottom border shows “↑ More above” / “↓ More below” only when content is hidden in that direction.
+
 | Key | Config name | Action |
 | --- | --- | --- |
 | `l` / `Tab` | `focus-next` | Focus the next pane |
@@ -66,7 +70,7 @@ The config file lives at `~/.pi/agent/lazy-panel.json`. Every field is optional 
 | `1` `2` `3` | `focus-sessions` / `focus-tree` / `focus-content` | Focus SESSIONS / TREE / CONTENT directly |
 | `C` | `scope-current` | List scope: current folder |
 | `A` | `scope-all` | List scope: all |
-| `?` | `help` | Shortcut help for the current pane (`?` / `Esc` / `q` closes, `j` / `k` scrolls) |
+| `?` | `help` | Commands for the current pane: `j` / `k` / `↑` / `↓` select, `Enter` closes help and runs the selected command; `?` / `Esc` / `q` closes without running |
 | `q` / `Ctrl+c` | `quit` | Quit the panel |
 | `@` | `changelog` | pi's changelog (`/changelog`) as a large popup: `j` `k` `↑` `↓` scroll, `Ctrl+d` / `Ctrl+u` half-page, `g` / `G` top / bottom, `Esc` / `q` / `@` close. The whole file renders slowly, so the popup first shows a spinning square `◰ Loading changelog…` in the center, then the content (cached, so a second `@` opens instantly). The newest version is on top (pi's own `/changelog` puts it last). Not available inside the tree dialog |
 | `Esc` | — (built-in, not configurable) | In order: discard an unfinished keystroke → clear the current pane's search → clear the SESSIONS multi-selection → quit |
@@ -75,7 +79,7 @@ The config file lives at `~/.pi/agent/lazy-panel.json`. Every field is optional 
 
 `C` and `A` are one-way: pressing `A` again when already in *All* does nothing.
 
-The `?` help popup lists every binding, sorted by frequency of use (the most common first, e.g. `Enter` before the vim movement keys). The footer only hints at a few keys per pane; the long tail (sort / info / compact / fork / clone / export / import / share / changelog) is only visible in `?`.
+The `?` help popup lists every command, sorted by frequency of use (the most common first, e.g. `Enter` before the vim movement keys). Each action has its own selectable entry; aliases for the same action stay together. Selection skips section headings and wrapped continuation lines, stops at either end, and scrolls into view automatically. Opening help starts at the first command. Enter runs the selected action in the current pane, including with custom or multi-key bindings; delete / fork / clone and other guarded operations still go through their normal confirmation flows. A configured single-key help binding also closes the popup. The footer only hints at a few keys per pane; the long tail (sort / info / compact / fork / clone / export / import / share / changelog) is only visible in `?`.
 
 ## Search (`/`)
 
@@ -97,7 +101,7 @@ When the panel opens, the cursor lands on the session pi currently has open (so 
 
 | Key | Config name | Action |
 | --- | --- | --- |
-| `j` `k` `↑` `↓` | `move-down` / `move-up` | Move the cursor |
+| `j` `k` `↑` `↓` | `move-down` / `move-up` (global) | Move the cursor |
 | `gg` / `G` | `go-top` / `go-bottom` | Top / bottom |
 | `J` / `K` | `scroll-content-down` / `scroll-content-up` | Scroll the CONTENT pane on the right |
 | `Enter` | `session-resume` | Resume the session: pi switches to it and the panel closes; on failure (missing file, switch cancelled) it stays with a footer message |
@@ -114,6 +118,7 @@ When the panel opens, the cursor lands on the session pi currently has open (so 
 | `S` | `session-share` | Share (`/share`): an *Upload as secret gist?* Yes / No box confirms (cursor on No), then the session is rendered to HTML and uploaded with `gh gist create --public=false`; the pi.dev view link is copied to the clipboard and shown in the footer. Requires a logged-in GitHub CLI (otherwise it warns in pi's wording); pi's Radius upload is not available to extensions |
 | `s` | `session-sort` | Cycle the sort: recent (last updated) → created (creation time) → title (by the displayed title — the name if present, otherwise the first-message preview — A–Z, empty sessions last) → threaded (forks indented under their parent) → …; the title shows the current sort and the cursor follows its session |
 | `i` | `session-info` | The centered session-info box (what `/session` shows: name, model, message count, tokens, cost, created / updated, path, id); `y` copies all the text, `Esc` / `q` closes |
+| `u` | `session-context-usage` | The centered context-usage box: how full the model's context window is (the number pi shows in its footer), broken down like pi-cc's `/context`. A `used / window · percent` line, a stacked color bar, then one row per category as a share of the whole window — **System prompt / Memory / Skills / Tools definition / Tool results / Context / Other / Free space** — plus a model / messages / cost summary. The current session shows the full breakdown (the prompt side comes from pi's live runtime); another session can only itemize Tool results and Context from the file, so the rest of the real request folds into *Other* (the window is looked up by model id; token-only when unknown). `j` / `k` / `↑` / `↓` selects a category; `Enter` opens its prompt in a scrollable Markdown dialog (statistics-only Other / Free space are skipped). In the prompt dialog, `j` / `k` / arrows scroll, `d` / `u` / PageDown / PageUp scroll by half a page, `g` / `G` jump to top/bottom, `y` copies the prompt, and `Esc` / `q` returns to the usage list with the selection preserved. Both dialogs show their shortcuts below a divider inside the box, wrapping in narrow windows and staying visible while scrolling. In the usage list, `y` copies the summary and `Esc` / `q` closes; refuses with a multi-selection |
 | `c` | `session-compact` | Compact (`/compact`): a centered *Compact* box asks for an optional focus instruction (`Enter` compacts, `Esc` cancels, empty uses pi's default). After compacting the active branch of the session under the cursor, pi opens it — a non-current session is switched to first (that is "entering the conversation"). During compaction pi's own footer shows a spinner; on success the panel closes, on failure (no model, session too small, already compacted) it stays with a footer message. `c` refuses when multiple sessions are selected |
 
 ## TREE pane
@@ -122,7 +127,7 @@ The pane shows the tree as a collapsible outline: `▸` a folded side branch, `�
 
 | Key | Config name | Action |
 | --- | --- | --- |
-| `j` `k` `↑` `↓` | `move-down` / `move-up` | Move the cursor |
+| `j` `k` `↑` `↓` | `move-down` / `move-up` (global) | Move the cursor |
 | `gg` / `G` | `go-top` / `go-bottom` | Top / bottom |
 | `Enter` | `tree-restore` | Restore to the node, like `/tree`: a centered menu asks *No summary / Summarize / Summarize with custom prompt* (`j`/`k`/`↑`/`↓` move, `Enter` selects, `Esc` returns to the tree); the custom prompt is a single-line input (`Enter` summarizes, `Esc` returns to the menu). Switches to the session first if needed. No menu appears when the node is itself a leaf (`Enter` just closes the panel) or when pi's `branchSummary.skipPrompt` is on |
 | `z` | `tree-fold` | Fold / unfold the branch under the cursor: toggles on a `▸` / `▾` row, and on any row inside a branch folds that branch and jumps to its head (vim's `zc`); the trunk of a linear conversation has no foldable section |
@@ -141,7 +146,7 @@ In the table below the parenthesis after "Config name" marks which scope it belo
 
 | Key | Config name (scope) | Action |
 | --- | --- | --- |
-| `j` `k` `↑` `↓` | `move-down` / `move-up` (tree) | Move the dialog's cursor |
+| `j` `k` `↑` `↓` | `move-down` / `move-up` (global) | Move the dialog's cursor |
 | `gg` / `G` | `go-top` / `go-bottom` (tree) | Top / bottom |
 | `/` | `search` (global) | Focus the search row; typing filters rows live, like `/tree`: every word must appear in the row's label / body (case-insensitive), `tag:x` narrows to the label, `role:user` to the role, `after:2026-09-01` / `before:2026-09-20` to the date. `Esc` hands keystrokes back to the list and keeps the keyword (rows stay narrowed); press `/` again to edit it, and deleting all the text clears it. `Enter` in the search row has no meaning. While a keyword is active all matches are shown (folds are cleared, like `/tree`); once the keyword is cleared or the dialog is closed the fold state is restored |
 | `Enter` | `tree-restore` (tree) | Restore to that row, exactly like the pane (including the summary menu) |
@@ -157,7 +162,7 @@ Scrolling, search, plus centering and copying the selected message (the one the 
 
 | Key | Config name | Action |
 | --- | --- | --- |
-| `j` `k` `↑` `↓` | `move-down` / `move-up` | Scroll |
+| `j` `k` `↑` `↓` | `move-down` / `move-up` (global) | Scroll |
 | `gg` / `G` | `go-top` / `go-bottom` | Top / bottom |
 | `zz` | `content-center` | Scroll the selected message to the middle of the pane (vim's `zz`); a no-op when the content already fits without scrolling |
 | `y` | `content-copy` | Copy the selected message's full text to the clipboard (same as `y` in the TREE pane) |

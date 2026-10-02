@@ -120,7 +120,7 @@ export class InputDialog {
 	/** Composite the box centered over the already-rendered panel `lines`. */
 	overlay(lines: string[], termW: number): string[] {
 		const width = dialogWidth(termW);
-		return overlayCentered(lines, this.render(width), width, termW);
+		return overlayCentered(lines, this.render(width), width, termW, (s) => this.o.theme.fg("dim", s));
 	}
 
 	/** New input wired to the current spec; `setValue` leaves the cursor at 0, so move it to the end. */
