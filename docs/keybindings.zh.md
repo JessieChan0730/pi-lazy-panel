@@ -147,7 +147,8 @@ lazygit 风格，每个面板各记各的：列表行永不过滤，光标在匹
 | `Enter` | `tree-restore` | 恢复到节点，和 `/tree` 一样：居中菜单问 *No summary / Summarize / Summarize with custom prompt*（`j`/`k`/`↑`/`↓` 移动，`Enter` 选，`Esc` 退回树）；自定义提示是单行输入（`Enter` 摘要，`Esc` 退回菜单）。需要时先切换到该会话。节点本身就是叶子（`Enter` 直接关闭面板）或 pi 的 `branchSummary.skipPrompt` 开启时不弹菜单 |
 | `z` | `tree-fold` | 折叠 / 展开光标所在分支：在 `▸` / `▾` 行上切换，在分支内任意行则折叠该分支并跳到段头（vim 的 `zc`）；线性对话的主干没有可折叠的段 |
 | `y` | `tree-copy` | 复制节点文本（完整文本，等同 `/tree` 里的 `Ctrl+x`） |
-| `T` | `tree-label` | 在居中对话框里添加 / 编辑 label，类似 lazygit 的 commit 弹窗（`Enter` 保存，`Esc` 取消，空值删除；等同 `/tree` 里的 `Shift+T`） |
+| `L` | `tree-label` | 在居中对话框里添加 / 编辑 label，类似 lazygit 的 commit 弹窗（`Enter` 保存，`Esc` 取消，空值删除；等同当前 pi `/tree` 里的 `Shift+L`） |
+| `T` | `tree-toggle-label-time` | 显示 / 隐藏标签最后修改时间，放在 `[标签 · MM-DD HH:mm]` 内，与消息时间区分。和完整树对话框共用，默认隐藏，切换会话保留，重开面板重置。时间缺失或无效则省略；只改显示，不修改会话和搜索匹配 |
 | `f` | `tree-filter-menu` | 打开五行过滤菜单：`d` 默认 / `t` 无工具结果 / `u` 仅用户 / `l` 仅标签 / `a` 全部。默认选中当前过滤；`j` / `k` / 方向键移动，`Enter` 选择，`Esc` 取消，也可用五个字母直接选择。重复选择当前模式保持不变，不做 toggle |
 | `a` | `tree-open` | 打开树对话框：更大的树视图（顶部搜索行，底部键位提示），和面板共享过滤及折叠状态；键位见下 |
 
@@ -155,7 +156,7 @@ lazygit 风格，每个面板各记各的：列表行永不过滤，光标在匹
 
 ## 树对话框（在 TREE 面板按 `a`）
 
-整棵树的大弹窗：顶部搜索行，中间是行（pi 风格引导线，折叠的行在连接处显示 `⊞`），底部键位提示（footer 也重复它们，所以对话框内没有 `?` 帮助）。对话框有自己的光标；关闭时面板光标移到它上面。按键先用 `tree-dialog` scope，再树面板的键位，最后全局的，所以 `j` `k`、`gg` `G`、`Enter`、`y`、`T`、`z` 和 `/` 是面板的键（并跟随它们的重绑），而对话框自己的键在 `keymap."tree-dialog"` 下。切换面板（`h` `Tab` `1`..`3`）、列表范围（`C` `A`）、`n` `N`、`?`、`@` 和退出面板（`Ctrl+c`）在这里都无效。
+整棵树的大弹窗：顶部搜索行，中间是行（pi 风格引导线，折叠的行在连接处显示 `⊞`），底部键位提示（footer 也重复它们，所以对话框内没有 `?` 帮助）。对话框有自己的光标；关闭时面板光标移到它上面。按键先用 `tree-dialog` scope，再树面板的键位，最后全局的，所以 `j` `k`、`gg` `G`、`Enter`、`y`、`L`、`T`、`z` 和 `/` 是面板的键（并跟随它们的重绑），而对话框自己的键在 `keymap."tree-dialog"` 下。切换面板（`h` `Tab` `1`..`3`）、列表范围（`C` `A`）、`n` `N`、`?`、`@` 和退出面板（`Ctrl+c`）在这里都无效。
 
 下表「配置名称」后括号标出它属于哪个 scope（要改这些键就在对应 scope 下改）：过滤键和关闭键在 `tree-dialog`，移动 / 恢复 / 复制 / 标签 / 折叠沿用 `tree`，搜索沿用 `global`。
 
@@ -166,7 +167,8 @@ lazygit 风格，每个面板各记各的：列表行永不过滤，光标在匹
 | `/` | `search`（global） | 聚焦搜索行；输入实时过滤行，和 `/tree` 一样：每个词都要出现在行的 label / 正文里（大小写不敏感），`tag:x` 收窄到 label，`role:user` 到角色，`after:2026-09-01` / `before:2026-09-20` 到日期。`Esc` 把按键交回列表并保留关键字（行保持收窄）；再按 `/` 编辑它，删光文本即清除。搜索行里 `Enter` 无含义。关键字生效时全部匹配都显示（折叠被清除，和 `/tree` 一样）；关键字清空或关闭对话框后折叠恢复 |
 | `Enter` | `tree-restore`（tree） | 恢复到该行，和面板完全一样（含摘要菜单） |
 | `y` | `tree-copy`（tree） | 复制该行的文本 |
-| `T` | `tree-label`（tree） | 添加 / 编辑该行的 label（Label 对话框叠在树对话框上面） |
+| `L` | `tree-label`（tree） | 添加 / 编辑该行的 label（Label 对话框叠在树对话框上面） |
+| `T` | `tree-toggle-label-time`（tree） | 显示 / 隐藏标签时间，与 TREE 面板同步；搜索框或标签输入框聚焦时按键由输入框处理，不切换显示 |
 | `z` | `tree-fold`（tree） | 折叠 / 展开光标所在分支（规则和折叠状态与面板相同） |
 | `d` `t` `u` `l` `a` | `tree-filter-default` / `tree-filter-no-tools` / `tree-filter-user` / `tree-filter-labeled` / `tree-filter-all`（tree-dialog） | 过滤：default（隐藏记账信息）/ 无工具结果 / 只看 user / 只看有 label / 全部；`t` `u` `l` `a` 再按一次回到 default（对应 pi 的 `Ctrl+d/t/u/l/a`）。树被重新加载、折叠被清除，面板随后显示同样的过滤 |
 | `Esc` / `q` | `tree-dialog-close`（tree-dialog；`Esc` 内置不可配置） | 关闭（在列表上）：面板光标落到对话框的行上（展开挡住它的折叠），CONTENT 跟随。在搜索行里 `Esc` 只离开搜索行，`q` 只是一个字母 |
