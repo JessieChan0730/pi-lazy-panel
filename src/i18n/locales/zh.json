@@ -99,7 +99,7 @@
     "session-fork": "分叉会话并打开分叉",
     "session-toggle-select": "切换多选",
     "session-pin": "置顶 / 取消置顶会话（归档会话需先取消归档）",
-    "session-archive": "归档 / 取消归档会话（支持多选，无需确认；只在本面板隐藏，不影响 pi /resume）",
+    "session-archive": "归档",
     "session-archive-view": "切换普通 / 归档列表（保留 C/A 目录范围）",
     "session-export": "导出为 HTML / JSONL",
     "session-import": "从 JSONL 导入",

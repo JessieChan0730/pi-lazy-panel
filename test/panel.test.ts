@@ -433,7 +433,42 @@ test("help execution respects the chosen action with multi-key bindings and an a
 	s.panel.dispose();
 });
 
-test("help Enter handles empty lists, action failures and help/quit actions", async () => {
+test("help navigation skips its own hint, still executes the next command and closes with the configured key", () => {
+	for (const help of ["?", "!"]) {
+		const keymap = mergeKeymap(DEFAULT_KEYMAP, { global: { help } });
+		const h = makePanel({ keymap });
+		selectHelpAction(h.panel, "scope-all");
+		const entries = buildHelpLines(keymap, "sessions").filter((line) => line.kind === "binding");
+		h.panel.handleInput("j");
+		assert.equal(entries[h.panel.state.helpCursor]?.action, "changelog");
+		h.panel.handleInput("k");
+		assert.equal(entries[h.panel.state.helpCursor]?.action, "scope-all");
+		h.panel.handleInput(help);
+		assert.equal(h.panel.state.helpOpen, false, "the configured help key still closes");
+		selectHelpAction(h.panel, "scope-all");
+		h.panel.handleInput("j");
+		h.panel.handleInput("\r");
+		assert.equal(h.panel.state.helpOpen, false, "Enter executes changelog, not help");
+		assert.ok(h.text().at(-1)!.includes(t("status.changelogUnavailable")));
+		h.panel.dispose();
+	}
+});
+
+test("Enter does nothing when help is the only listed shortcut", () => {
+	const keymap = { global: { help: "!" }, sessions: {}, tree: {}, content: {}, "tree-dialog": {} };
+	const h = makePanel({ keymap });
+	h.panel.handleInput("!");
+	for (const key of ["j", "k", "\r"]) h.panel.handleInput(key);
+	assert.equal(h.panel.state.helpOpen, true);
+	assert.equal(h.panel.state.helpCursor, 0);
+	assert.equal(h.closed(), false);
+	assert.ok(!h.text().some((line) => line.includes("›")));
+	h.panel.handleInput("!");
+	assert.equal(h.panel.state.helpOpen, false);
+	h.panel.dispose();
+});
+
+test("help Enter handles empty lists, action failures and quit actions", async () => {
 	const h = makePanel({ keymap: { global: {}, sessions: {}, tree: {}, content: {}, "tree-dialog": {} } });
 	h.panel.dispatch("help");
 	h.panel.handleInput("j");
@@ -448,10 +483,6 @@ test("help Enter handles empty lists, action failures and help/quit actions", as
 	missing.panel.handleInput("\r");
 	assert.equal(missing.panel.state.helpOpen, false);
 	assert.ok(missing.text(120).at(-1)!.includes("new: actions unavailable"));
-	selectHelpAction(missing.panel, "help");
-	missing.panel.handleInput("\r");
-	assert.equal(missing.panel.state.helpOpen, true);
-	assert.equal(missing.panel.state.helpCursor, 0);
 	selectHelpAction(missing.panel, "quit");
 	missing.panel.handleInput("\r");
 	assert.equal(missing.closed(), true);

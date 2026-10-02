@@ -99,7 +99,7 @@
     "session-fork": "Fork session and open the fork",
     "session-toggle-select": "Toggle multi-select",
     "session-pin": "Pin / unpin session (unarchive first; pinned stay on top)",
-    "session-archive": "Archive / unarchive session(s), without confirmation; only hides them in this panel, not pi /resume",
+    "session-archive": "Archive",
     "session-archive-view": "Switch between normal and archived sessions (keeps C/A scope)",
     "session-export": "Export to HTML / JSONL",
     "session-import": "Import from JSONL",

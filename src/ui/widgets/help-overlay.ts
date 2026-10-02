@@ -19,15 +19,19 @@ export interface HelpOverlayProps {
 	keymap: Keymap;
 	/** Scope the keys currently go to: the focused pane, or the tree dialog while it is open. */
 	focus: KeyScope;
-	/** Ordinal among binding entries, independent of wrapping and section headers. */
+	/** Ordinal among executable bindings, independent of hints, wrapping and section headers. */
 	cursor: number;
 	/** First visible row of the help body (for long lists). */
 	scroll: number;
 	theme: Theme;
 }
 
-/** One logical help entry, either a section header or an executable binding. */
-export type HelpLine = { kind: "header"; text: string } | { kind: "binding"; action: ActionId; keys: string; text: string } | { kind: "blank" };
+/** Informational hints are visible but never selected or executed. */
+export type HelpLine =
+	| { kind: "header"; text: string }
+	| { kind: "binding"; action: ActionId; keys: string; text: string }
+	| { kind: "hint"; keys: string; text: string }
+	| { kind: "blank" };
 
 /** Build the help body for `focus`: its own bindings first, then each outer scope. */
 export function buildHelpLines(keymap: Keymap, focus: KeyScope): HelpLine[] {
@@ -47,7 +51,10 @@ function buildScopeLines(keymap: Keymap, scope: KeyScope, focus: KeyScope): Help
 	for (const action of Object.keys(keymap[scope]) as ActionId[]) {
 		const labels = labelsFor(keymap, scope, action);
 		if (!labels.length || (scope !== focus && isDisabledIn(focus, action))) continue;
-		out.push({ kind: "binding", action, keys: compactKeys(labels), text: actionDescription(action) });
+		const keys = compactKeys(labels);
+		const text = actionDescription(action);
+		// help 本身只作提示，避免在帮助里执行后又重新打开同一个弹窗。
+		out.push(action === "help" ? { kind: "hint", keys, text } : { kind: "binding", action, keys, text });
 	}
 	return out;
 }
@@ -62,8 +69,8 @@ export function compactKeys(labels: string[]): string {
 	return labels.join("/");
 }
 
-/** Wrapped rows retain their binding ordinal; headers and blanks have none. */
-type HelpRenderRow = { kind: "header"; text: string } | { kind: "blank" } | { kind: "binding"; index: number; keys: string; text: string };
+/** Wrapped commands retain their ordinal; hints, headers and blanks have none. */
+type HelpRenderRow = Exclude<HelpLine, { kind: "binding" }> | { kind: "binding"; index: number; keys: string; text: string };
 
 /** Word-wrap by visible columns, hard-breaking words that cannot fit on their own. */
 function wrapText(text: string, width: number): string[] {
@@ -98,7 +105,7 @@ function wrapText(text: string, width: number): string[] {
 /** Shared layout for sizing, cursor-follow scrolling and rendering. */
 function helpLayout(keymap: Keymap, focus: KeyScope, inner: number): { rows: HelpRenderRow[]; keyColW: number; count: number } {
 	const lines = buildHelpLines(keymap, focus);
-	const keyColW = Math.min(16, Math.max(8, ...lines.map((l) => (l.kind === "binding" ? visibleWidth(l.keys) : 0))) + 1);
+	const keyColW = Math.min(16, Math.max(8, ...lines.map((l) => (l.kind === "binding" || l.kind === "hint" ? visibleWidth(l.keys) : 0))) + 1);
 	// 前导空格 + 两列光标标记 + keys 列 + 描述前的一格空白。
 	const descW = Math.max(1, inner - keyColW - 4);
 	const rows: HelpRenderRow[] = [];
@@ -109,8 +116,11 @@ function helpLayout(keymap: Keymap, focus: KeyScope, inner: number): { rows: Hel
 		} else if (line.kind === "header") {
 			rows.push({ kind: "header", text: line.text });
 		} else {
-			const index = count++;
-			wrapText(line.text, descW).forEach((seg, i) => rows.push({ kind: "binding", index, keys: i === 0 ? line.keys : "", text: seg }));
+			const index = line.kind === "binding" ? count++ : undefined;
+			wrapText(line.text, descW).forEach((text, i) => {
+				const keys = i === 0 ? line.keys : "";
+				rows.push(index === undefined ? { kind: "hint", keys, text } : { kind: "binding", index, keys, text });
+			});
 		}
 	}
 	return { rows, keyColW, count };
@@ -164,10 +174,10 @@ export function renderHelpBox(p: HelpOverlayProps, width: number, height: number
 		} else if (row.kind === "header") {
 			body.push(" " + theme.bold(theme.fg("accent", `-- ${row.text} --`)));
 		} else {
-			const selected = row.index === p.cursor;
+			const selected = row.kind === "binding" && row.index === p.cursor;
 			const marker = selected && row.keys ? "› " : "  ";
-			const keys = fit(row.keys ? theme.fg("warning", row.keys) : "", keyColW);
-			const line = ` ${theme.fg("accent", marker)}${keys} ${theme.fg(selected ? "accent" : "text", row.text)}`;
+			const keys = fit(row.keys ? theme.fg(row.kind === "hint" ? "dim" : "warning", row.keys) : "", keyColW);
+			const line = ` ${theme.fg("accent", marker)}${keys} ${theme.fg(row.kind === "hint" ? "dim" : selected ? "accent" : "text", row.text)}`;
 			body.push(selected ? theme.bg("selectedBg", fit(line, inner)) : line);
 		}
 	}

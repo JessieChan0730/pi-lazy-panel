@@ -73,6 +73,34 @@ test("help entries retain individual action IDs, aliases and configured bindings
 	assert.ok(!dialog.some((entry) => entry.action === "help" || entry.action === "focus-next"));
 });
 
+test("help itself is a visible hint, excluded from selection and highlight in every pane", () => {
+	for (const focus of ["sessions", "tree", "content"] as const) {
+		const logical = buildHelpLines(DEFAULT_KEYMAP, focus);
+		assert.ok(logical.some((line) => line.kind === "hint" && line.keys === "?"));
+		assert.ok(!logical.some((line) => line.kind === "binding" && line.action === "help"));
+	}
+	const keymap: Keymap = { ...empty, global: { search: "/", help: "!", quit: "q" } };
+	const entries = buildHelpLines(keymap, "sessions").filter((line) => line.kind === "binding");
+	assert.deepEqual(entries.map((entry) => entry.action), ["search", "quit"]);
+	for (const cursor of [0, 1]) {
+		const view = helpViewport(keymap, "sessions", 80, 30, cursor, 0);
+		const lines = renderHelpBox({ keymap, focus: "sessions", ...view, theme }, 64, 28);
+		const hint = lines.find((line) => line.includes("Toggle this help"));
+		assert.ok(hint);
+		assert.ok(hint.includes("!"), "the custom help key stays visible");
+		assert.ok(!hint.includes(SELECTED) && !hint.includes("›"));
+		assert.ok(lines.some((line) => line.includes(`› ${entries[cursor]!.keys}`)));
+	}
+});
+
+test("help-only keymaps have no selectable entry", () => {
+	const keymap: Keymap = { ...empty, global: { help: "!" } };
+	assert.deepEqual(helpViewport(keymap, "sessions", 80, 30, 99, 99), { cursor: 0, scroll: 0 });
+	const lines = renderHelpBox({ keymap, focus: "sessions", cursor: 0, scroll: 0, theme }, 64, 28);
+	assert.ok(lines.some((line) => line.includes("Toggle this help")));
+	assert.ok(!lines.some((line) => line.includes(SELECTED) || line.includes("›")));
+});
+
 test("help selection follows wrapped entries across sections and terminal resizes in both languages", () => {
 	try {
 		for (const locale of ["en", "zh"] as const) {
