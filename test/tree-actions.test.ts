@@ -1,6 +1,6 @@
 /**
  * Tree actions against a real session file in a temp directory:
- * `loadNodeText` (what `y` copies) and `labelNode` (what `T` persists).
+ * `loadNodeText` (what `y` copies) and `labelNode` (what `L` persists).
  * Run with `npm test` (node --test via tsx).
  */
 
@@ -49,6 +49,28 @@ function makeSession(dir: string) {
 	assert.ok(file);
 	return { file, userId, assistantId, errorId };
 }
+
+test("loadTree reads the latest label change timestamp and removes it with the label", async (t) => {
+	const dir = mkdtempSync(join(tmpdir(), "lazy-panel-"));
+	t.after(() => rmSync(dir, { recursive: true, force: true }));
+	const s = makeSession(dir);
+	const read = async () => (await loadTree(s.file)).find((r) => r.entryId === s.userId)!;
+	assert.equal((await read()).labelTimestamp, undefined);
+	const manager = SessionManager.open(s.file);
+	const first = Date.UTC(2026, 9, 2, 14, 35);
+	t.mock.timers.enable({ apis: ["Date"], now: first });
+	manager.appendLabelChange(s.userId, "first");
+	assert.equal((await read()).labelTimestamp, first);
+	t.mock.timers.setTime(first + 60_000);
+	manager.appendLabelChange(s.userId, "edited");
+	const edited = await read();
+	assert.equal(edited.label, "edited");
+	assert.equal(edited.labelTimestamp, first + 60_000);
+	manager.appendLabelChange(s.userId, undefined);
+	const cleared = await read();
+	assert.equal(cleared.label, undefined);
+	assert.equal(cleared.labelTimestamp, undefined);
+});
 
 test("loadNodeText copies the full text like /tree ctrl+x", (t) => {
 	const dir = mkdtempSync(join(tmpdir(), "lazy-panel-"));

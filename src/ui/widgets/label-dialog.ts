@@ -1,5 +1,5 @@
 /**
- * Label prompt (`T` in the tree pane, same as `Shift+T` in pi's `/tree`):
+ * Label prompt (`L`, same as `Shift+L` in pi's `/tree`):
  * the title and footer hints that ./input-dialog.ts shows while labelling.
  *
  * The panel owns the target node and persists the change through the injected

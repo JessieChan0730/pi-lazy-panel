@@ -44,6 +44,8 @@ export interface PanelState {
 	sort: SessionSortMode;
 	/** Tree filter, chosen with f in the pane or d/t/u/l/a in the tree dialog; both views share it. */
 	treeFilter: TreeFilter;
+	/** Shared by both tree views; reset when the panel is reopened. */
+	showLabelTimestamps: boolean;
 	/**
 	 * Folded tree rows (branch-segment heads whose descendants are hidden, see
 	 * data/tree-fold.ts). Reset to "side branches folded" whenever another
@@ -79,6 +81,7 @@ export function createInitialState(overrides: Partial<PanelState> = {}): PanelSt
 		scope: "current-folder",
 		sort: "recent",
 		treeFilter: "default",
+		showLabelTimestamps: false,
 		treeFolded: new Set(),
 		helpOpen: false,
 		helpCursor: 0,

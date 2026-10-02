@@ -76,8 +76,9 @@ export const DEFAULT_KEYMAP: Keymap = {
 		// f 选择过滤，a 放大同一棵树；两种视图共用过滤状态。
 		"tree-filter-menu": "f",
 		"tree-open": "a",
-		// 打标签用 T，和 pi 自带 /tree 的 shift+T 一致；这样 l 留给全局的“下一个面板”。
-		"tree-label": "T",
+		// 与当前 pi 原生 /tree 一致：L 打标签，T 切换标签时间。
+		"tree-label": "L",
+		"tree-toggle-label-time": "T",
 		"tree-copy": "y",
 	},
 
@@ -90,7 +91,7 @@ export const DEFAULT_KEYMAP: Keymap = {
 		"content-copy": "y",
 	},
 
-	// 树对话框（a 打开）：这里只放对话框独有的键；gg/G、Enter、y、T、z 沿用 tree 面板的绑定，j/k 沿用 global，
+	// 树对话框（a 打开）：这里只放对话框独有的键；gg/G、Enter、y、L、T、z 沿用 tree 面板的绑定，j/k 沿用 global，
 	// `/` 沿用 global 的 search（在对话框里是聚焦顶部的搜索框）。过滤键和 pi /tree 的 ctrl+d/t/u/l/a 一一对应，
 	// 所以 l 在对话框里是 labeled 过滤而不是"下一个面板"（h 没有对话框绑定，切面板在这里被关掉）。
 	[TREE_DIALOG_SCOPE]: {
@@ -169,6 +170,7 @@ export const TREE_DIALOG_FOOTER: ActionId[][] = [
 	["tree-filter-default", "tree-filter-no-tools", "tree-filter-user", "tree-filter-labeled", "tree-filter-all"],
 	["tree-copy"],
 	["tree-label"],
+	["tree-toggle-label-time"],
 ];
 
 /** Wording of a TREE_DIALOG_FOOTER hint (localised), keyed by its first action. */

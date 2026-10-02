@@ -9,7 +9,7 @@
  *
  * Generic: the caller passes a title, the pre-filled value, an optional
  * subject for the title bar and the callbacks on each `open`, so the same
- * widget serves node labels (`T`), session renames and any later prompt. The
+ * widget serves node labels (`L`), session renames and any later prompt. The
  * dialog only collects text and draws the box; key hints go to the footer
  * (see `hints`), like lazygit.
  *

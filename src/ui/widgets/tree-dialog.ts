@@ -224,7 +224,7 @@ export class TreeDialog {
 	}
 
 	/** Render the box itself, every line exactly `width` columns and `height` lines tall. */
-	render(width: number, height: number): string[] {
+	render(width: number, height: number, showLabelTimestamps = false): string[] {
 		const { theme } = this.o;
 		const rows = this.rows;
 		const inner = width - 2;
@@ -237,7 +237,7 @@ export class TreeDialog {
 			const prefixes = treePrefixes(rows, this.folded);
 			const first = scrollOffset(this.index, rows.length, visible);
 			for (let i = first; i < Math.min(rows.length, first + visible); i++) {
-				body.push(renderTreeRow(rows[i]!, theme.fg("dim", prefixes[i]!), inner, i === this.index, theme));
+				body.push(renderTreeRow(rows[i]!, theme.fg("dim", prefixes[i]!), inner, i === this.index, theme, undefined, showLabelTimestamps));
 			}
 		}
 		while (body.length < visible + 2) body.push("");
@@ -269,9 +269,9 @@ export class TreeDialog {
 	}
 
 	/** Composite the box centered over the already-rendered panel `lines`. */
-	overlay(lines: string[], termW: number): string[] {
+	overlay(lines: string[], termW: number, showLabelTimestamps = false): string[] {
 		const { width, height } = TreeDialog.size(termW, lines.length);
-		return overlayCentered(lines, this.render(width, height), width, termW, (s) => this.o.theme.fg("dim", s));
+		return overlayCentered(lines, this.render(width, height, showLabelTimestamps), width, termW, (s) => this.o.theme.fg("dim", s));
 	}
 }
 
