@@ -163,7 +163,7 @@ test("h / l cycle focus, 1 / 2 / 3 jump, and pane titles carry the jump key", ()
 	assert.equal(panel.state.focus, "content");
 	panel.handleInput("2");
 	assert.equal(panel.state.focus, "tree");
-	// "l" is not shadowed in the tree pane any more (label is "T")
+	// "l" is not shadowed in the tree pane any more (label is "L")
 	panel.handleInput("l");
 	assert.equal(panel.state.focus, "content");
 	panel.handleInput("2");
@@ -825,7 +825,7 @@ test("nested tree prompts demote the parent and restore each visual layer withou
 		assert.ok(top >= 0);
 		assert.ok(parent[0]!.includes(dim));
 		assert.ok(!parent[0]!.includes(border));
-		h.panel.handleInput("T");
+		h.panel.handleInput("L");
 		await flush();
 		assert.equal(h.panel.state.mode, "label");
 		const nested = body();
@@ -1078,7 +1078,7 @@ test("/ opens the search bar in the tree pane (footer lists it), and a opens the
 	assert.equal(h.closed(), false);
 });
 
-test("tree dialog: gg/G move its cursor, T labels its row over the dialog, Enter restores from it", async () => {
+test("tree dialog: gg/G move its cursor, L labels its row over the dialog, Enter restores from it", async () => {
 	const h = makeTreeActionPanel();
 	await h.panel.load();
 	h.panel.handleInput("2");
@@ -1098,9 +1098,9 @@ test("tree dialog: gg/G move its cursor, T labels its row over the dialog, Enter
 	assert.equal(h.copies.at(-1)!.entryId, "e0");
 	assert.ok(h.text().at(-1)!.includes("no text to copy"), h.text().at(-1));
 
-	// T: the Label dialog is drawn over the tree dialog and names the dialog's row; saving returns to the dialog
+	// L: the Label dialog is drawn over the tree dialog and names the dialog's row; saving returns to the dialog
 	h.panel.handleInput("j");
-	h.panel.handleInput("T");
+	h.panel.handleInput("L");
 	assert.equal(h.panel.state.mode, "label");
 	let lines = h.text();
 	const dlg = labelDialog(lines);
@@ -1117,7 +1117,7 @@ test("tree dialog: gg/G move its cursor, T labels its row over the dialog, Enter
 	assert.ok(lines.some((l) => l.includes("› ") && l.includes("[ckpt]") && l.includes("assistant: msg 1")), lines.join("\n"));
 	assert.ok(title().includes("2/3"), title());
 	// Esc in the label prompt also lands back in the dialog
-	h.panel.handleInput("T");
+	h.panel.handleInput("L");
 	h.panel.handleInput("\x1b");
 	assert.equal(h.panel.state.mode, "tree");
 	assert.equal(h.labelCalls.length, 1);
@@ -1251,7 +1251,7 @@ test("tree dialog search matches labels and qualifiers", async () => {
 	h.panel.handleInput("2");
 	h.panel.handleInput("k");
 	await flush();
-	h.panel.handleInput("T");
+	h.panel.handleInput("L");
 	for (const ch of "ckpt") h.panel.handleInput(ch);
 	h.panel.handleInput("\r");
 	await flush();
@@ -1500,7 +1500,7 @@ test("T opens a centered Label dialog; Enter saves and refreshes the row, empty 
 	h.panel.handleInput("2");
 	h.panel.handleInput("k"); // cursor on e1
 	await flush();
-	h.panel.handleInput("T");
+	h.panel.handleInput("L");
 	assert.equal(h.panel.state.mode, "label");
 	const lines = h.text();
 	const dlg = labelDialog(lines);
@@ -1530,7 +1530,7 @@ test("T opens a centered Label dialog; Enter saves and refreshes the row, empty 
 	assert.ok(h.text().at(-1)!.includes("label set: ckpt"));
 
 	// reopening pre-fills the current label; Esc leaves it untouched
-	h.panel.handleInput("T");
+	h.panel.handleInput("L");
 	assert.ok(labelDialog(h.text())!.input.includes("ckpt"));
 	h.panel.handleInput("\x1b");
 	assert.equal(h.panel.state.mode, "normal");
@@ -1539,7 +1539,7 @@ test("T opens a centered Label dialog; Enter saves and refreshes the row, empty 
 	assert.equal(h.labels.get("e1"), "ckpt");
 
 	// the cursor starts at the end of the pre-filled text, so backspace clears it; an empty value removes the label
-	h.panel.handleInput("T");
+	h.panel.handleInput("L");
 	for (let i = 0; i < 4; i++) h.panel.handleInput("\x7f");
 	assert.equal(labelDialog(h.text())!.input.includes("ckpt"), false);
 	h.panel.handleInput("\r");
@@ -1558,7 +1558,7 @@ test("label errors land in the footer and a panel without actions says so", asyn
 	});
 	await failing.panel.load();
 	failing.panel.handleInput("2");
-	failing.panel.handleInput("T");
+	failing.panel.handleInput("L");
 	failing.panel.handleInput("x");
 	failing.panel.handleInput("\r");
 	await flush();
@@ -1568,7 +1568,7 @@ test("label errors land in the footer and a panel without actions says so", asyn
 	const bare = makeLoadedPanel();
 	await bare.panel.load();
 	bare.panel.handleInput("2");
-	bare.panel.handleInput("T");
+	bare.panel.handleInput("L");
 	assert.equal(bare.panel.state.mode, "normal");
 	assert.ok(bare.text().at(-1)!.includes("actions unavailable"));
 	bare.panel.handleInput("y");
@@ -3840,7 +3840,7 @@ test("the IME cursor marker reaches the tree prompts and the tree dialog's searc
 	const marked = () => h.panel.render(100).some((l) => l.includes(CURSOR_MARKER));
 	h.panel.focused = true;
 	h.panel.handleInput("2");
-	h.panel.handleInput("T");
+	h.panel.handleInput("L");
 	assert.equal(marked(), true, "the label prompt carries the IME cursor");
 	h.panel.handleInput("\x1b");
 	assert.equal(marked(), false);
@@ -3867,7 +3867,7 @@ test("the IME cursor marker reaches the tree prompts and the tree dialog's searc
 	h.panel.handleInput("\x1b");
 	assert.equal(marked(), false, "leaving the search row drops it");
 	// T over the dialog: the prompt gets the cursor, Esc hands the keys back to the dialog
-	h.panel.handleInput("T");
+	h.panel.handleInput("L");
 	assert.equal(marked(), true);
 	h.panel.handleInput("\x1b");
 	assert.equal(h.panel.state.mode, "tree");

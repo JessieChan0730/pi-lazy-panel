@@ -1,11 +1,11 @@
 /**
  * Dialog flows of the TREE pane (and of the tree dialog, which passes its
- * own cursor row): `y` copies a node, `T` labels it, Enter restores to it
+ * own cursor row): `y` copies a node, `L` labels it, Enter restores to it
  * after the "Summarize branch?" menu. Each exported function is one key's
  * flow; the target travels in the dialog callbacks and everything the panel
  * provides comes through `FlowHost` (see ./host.ts).
  *
- * TREE 面板（以及树对话框）的弹窗流程：y 复制、T 打标签、Enter 恢复（先问怎么处理被放弃的分支）。
+ * TREE 面板（以及树对话框）的弹窗流程：y 复制、L 打标签、Enter 恢复（先问怎么处理被放弃的分支）。
  */
 
 import { t } from "../../i18n/index.ts";
@@ -23,7 +23,7 @@ import {
 import { treeFilterDialogSpec } from "../widgets/tree-filter-dialog.ts";
 import type { FlowHost } from "./host.ts";
 
-/** A tree row plus the session it belongs to: what y / T / Enter act on (the pane's cursor row, or the dialog's). */
+/** A tree row plus the session it belongs to: what y / L / Enter act on (the pane's cursor row, or the dialog's). */
 export interface TreeTarget {
 	file: string;
 	row: TreeRow;
@@ -74,7 +74,7 @@ export async function copyEntryText(host: FlowHost, file: string, entryId: strin
 	}
 }
 
-/** T: open the label dialog pre-filled with the node's current label. */
+/** L: open the label dialog pre-filled with the node's current label. */
 export function openLabelInput(host: FlowHost, target: TreeTarget | undefined): void {
 	if (!target) return;
 	if (!host.actions) {

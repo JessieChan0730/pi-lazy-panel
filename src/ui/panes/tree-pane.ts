@@ -29,7 +29,7 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { t } from "../../i18n/index.ts";
 import type { SearchView, TreeFilter, TreeRow } from "../../types.ts";
-import { formatTime } from "../../utils/format.ts";
+import { formatShortDate, formatTime } from "../../utils/format.ts";
 import { fit, frame, metaBudget } from "../frame.ts";
 import { highlightLine, matchStyle, type RowHighlight, searchMeta } from "../search-highlight.ts";
 import { type OutlinePrefix, treeOutline } from "../tree-outline.ts";
@@ -44,6 +44,8 @@ export interface TreePaneProps {
 	/** First visible row; defaults to a cursor-centered window when omitted (keyboard). */
 	first?: number;
 	focused: boolean;
+	/** Show the latest label change time beside each label. */
+	showLabelTimestamps?: boolean;
 	/** Active tree filter (shared by the pane and tree dialog); shown in the header when it is not the default. */
 	filter?: TreeFilter;
 	/** Active `/` search of this pane (indices into `rows`): matching rows are highlighted, the header shows the count. */
@@ -73,7 +75,7 @@ export function renderTreePane(p: TreePaneProps, width: number, height: number):
 			const row = p.rows[i]!;
 			const search = p.search;
 			const highlight = search?.matches.has(i) ? { terms: search.terms, current: i === search.current } : undefined;
-			body.push(renderTreeRow(row, styleOutline(outline.get(row.entryId) ?? NO_PREFIX, theme), inner, i === p.cursor, theme, highlight));
+			body.push(renderTreeRow(row, styleOutline(outline.get(row.entryId) ?? NO_PREFIX, theme), inner, i === p.cursor, theme, highlight, p.showLabelTimestamps));
 		}
 	}
 
@@ -117,11 +119,15 @@ function styleOutline(prefix: OutlinePrefix, theme: Theme): string {
  * the tree dialog. With `highlight` (a row matching the pane's search) the
  * terms are painted on top of the finished line.
  */
-export function renderTreeRow(row: TreeRow, prefix: string, inner: number, isCursor: boolean, theme: Theme, highlight?: RowHighlight): string {
+export function renderTreeRow(row: TreeRow, prefix: string, inner: number, isCursor: boolean, theme: Theme, highlight?: RowHighlight, showLabelTimestamps = false): string {
 	const marker = isCursor ? "› " : "  ";
 	// 和 pi 一样，活动路径上的节点在文字前加 `• `。
 	const path = row.onActiveBranch ? "• " : "";
-	const label = row.label ? `[${row.label}] ` : "";
+	const labelTime = showLabelTimestamps && row.labelTimestamp !== undefined ? formatShortDate(row.labelTimestamp) : "";
+	// 时间放进标签括号内，与后面的消息时间区分；时间缺失时不猜测。
+	const label = row.label
+		? theme.fg("warning", `[${row.label}`) + (labelTime ? theme.fg("dim", ` · ${labelTime}`) : "") + theme.fg("warning", "] ")
+		: "";
 	const time = `${formatTime(row.timestamp)} `;
 	const role = row.role === "system" ? "" : `${t(`role.${row.role}`)}: `;
 	const prefixW =
@@ -142,7 +148,7 @@ export function renderTreeRow(row: TreeRow, prefix: string, inner: number, isCur
 		theme.fg("accent", marker) +
 		prefix +
 		theme.fg("accent", path) +
-		theme.fg("warning", label) +
+		label +
 		theme.fg("dim", time) +
 		branchStyle(roleStyle(role)) +
 		textStyle(text);

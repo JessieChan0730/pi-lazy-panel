@@ -79,9 +79,11 @@ test("resolveKeys: pane bindings shadow global, multi-key sequences go through p
 	// "n" is search-next globally but "session-new" in the sessions pane
 	assert.equal(actionOf(resolveKeys(bindings, "sessions", ["n"])), "session-new");
 	assert.equal(actionOf(resolveKeys(bindings, "tree", ["n"])), "search-next");
-	// "l" is focus-next everywhere; the tree pane labels with "T" (like /tree's shift+T)
+	// Lowercase l still switches panes; uppercase L/T match native pi's label commands.
 	assert.equal(actionOf(resolveKeys(bindings, "tree", ["l"])), "focus-next");
-	assert.equal(actionOf(resolveKeys(bindings, "tree", ["T"])), "tree-label");
+	assert.equal(actionOf(resolveKeys(bindings, "tree", ["L"])), "tree-label");
+	assert.equal(actionOf(resolveKeys(bindings, "tree", ["T"])), "tree-toggle-label-time");
+	assert.deepEqual(resolveKeys(bindings, "tree", ["\x14"]), { kind: "none" });
 	// gg: first g is pending, second completes
 	assert.deepEqual(resolveKeys(bindings, "sessions", ["g"]), { kind: "pending" });
 	assert.equal(actionOf(resolveKeys(bindings, "sessions", ["g", "g"])), "go-top");
@@ -103,6 +105,9 @@ test("tree dialog scope: its keys shadow the tree pane's and the global ones, ev
 	assert.deepEqual(resolveKeys(bindings, "tree-dialog", ["l"]), { kind: "action", action: "tree-filter-labeled", scope: "tree-dialog" });
 	assert.deepEqual(resolveKeys(bindings, "tree-dialog", ["q"]), { kind: "action", action: "tree-dialog-close", scope: "tree-dialog" });
 	assert.equal(actionOf(resolveKeys(bindings, "tree-dialog", ["d"])), "tree-filter-default");
+	assert.equal(actionOf(resolveKeys(bindings, "tree-dialog", ["t"])), "tree-filter-no-tools");
+	assert.equal(actionOf(resolveKeys(bindings, "tree-dialog", ["T"])), "tree-toggle-label-time");
+	assert.equal(actionOf(resolveKeys(bindings, "tree-dialog", ["L"])), "tree-label");
 	// h and ? have no dialog binding: they fall through to global, where the panel switches them off
 	assert.deepEqual(resolveKeys(bindings, "tree-dialog", ["h"]), { kind: "action", action: "focus-prev", scope: "global" });
 	assert.deepEqual(resolveKeys(bindings, "tree-dialog", ["?"]), { kind: "action", action: "help", scope: "global" });
@@ -144,7 +149,7 @@ test("mergeKeymap: user chords replace defaults per action, null unbinds, other 
 	assert.equal(merged.sessions["session-delete"], "ctrl+d");
 	assert.equal(merged.sessions["session-share"], undefined);
 	assert.equal(merged.sessions["session-rename"], "r");
-	assert.equal(merged.tree["tree-label"], "T");
+	assert.equal(merged.tree["tree-label"], "L");
 	assert.equal(warnings.length, 1);
 	assert.match(warnings[0]!, /unknown keymap scope/);
 	// defaults must not be mutated

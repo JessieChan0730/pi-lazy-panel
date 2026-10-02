@@ -166,8 +166,10 @@ export interface TreeRow {
 	 * `meta` bookkeeping hidden by default (model / thinking / name changes).
 	 */
 	kind: "message" | "tool" | "system" | "meta";
-	/** User-defined label on this entry (/tree shift+t). */
+	/** User-defined label on this entry. */
 	label?: string;
+	/** Timestamp of the latest label change, in milliseconds. */
+	labelTimestamp?: number;
 	/** Truncated single-line text. */
 	text: string;
 	timestamp: number;
@@ -372,6 +374,7 @@ export type ActionId =
 	| "tree-restore"
 	| "tree-copy"
 	| "tree-label"
+	| "tree-toggle-label-time"
 	| "tree-open"
 	| "tree-filter-menu"
 	| "tree-fold"

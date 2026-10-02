@@ -42,7 +42,11 @@ function toRow(node: SessionTreeNode, parentRowId: string | undefined, onActiveB
 		kind: described.kind,
 	};
 	if (parentRowId) row.parentId = parentRowId;
-	if (node.label) row.label = node.label;
+	if (node.label) {
+		row.label = node.label;
+		const timestamp = Date.parse(node.labelTimestamp ?? "");
+		if (Number.isFinite(timestamp)) row.labelTimestamp = timestamp;
+	}
 	if (isLeaf) row.isLeaf = true;
 	return row;
 }
@@ -197,7 +201,7 @@ const BOOKKEEPING_TYPES: ReadonlySet<SessionEntry["type"]> = new Set([
  * True when the entry is the session's leaf, or when it sits on the active
  * branch with nothing but bookkeeping entries after it (pi appends labels,
  * /name, model / thinking changes and extension state as new leaves, so right
- * after `T` the last message is no longer the raw leaf). User messages are
+ * after labelling the last message is no longer the raw leaf). User messages are
  * exempt: pi restores those by moving the leaf to their parent and putting the
  * prompt back into the editor, which is a real change.
  *

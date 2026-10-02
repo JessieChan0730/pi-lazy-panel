@@ -289,7 +289,7 @@ export class LazyPanel implements Component, Focusable {
 			{
 				isOpen: () => this.treeDialog.isOpen,
 				handleInput: (data) => this.handleTreeDialogInput(data),
-				draw: (lines, width) => this.treeDialog.overlay(lines, width),
+				draw: (lines, width) => this.treeDialog.overlay(lines, width, this.state.showLabelTimestamps),
 				hints: () => this.treeDialog.hints,
 				base: true,
 			},
@@ -513,6 +513,11 @@ export class LazyPanel implements Component, Focusable {
 			targetId ??= blocks[blocks.length - 1]?.entryId;
 		}
 		this.contentViewport.highlight(targetId);
+	}
+
+	private toggleLabelTimestamps(): void {
+		this.state.showLabelTimestamps = !this.state.showLabelTimestamps;
+		this.setStatus(this.state.showLabelTimestamps ? t("status.labelTimesShown") : t("status.labelTimesHidden"));
 	}
 
 	private setStatus(s: string | undefined): void {
@@ -865,6 +870,9 @@ export class LazyPanel implements Component, Focusable {
 				return;
 			case "tree-copy":
 				void copyTreeNode(this.flowHost, this.currentTreeNode());
+				return;
+			case "tree-toggle-label-time":
+				this.toggleLabelTimestamps();
 				return;
 			case "tree-label":
 				openLabelInput(this.flowHost, this.currentTreeNode());
@@ -1527,6 +1535,9 @@ export class LazyPanel implements Component, Focusable {
 			case "tree-copy":
 				void copyTreeNode(this.flowHost, this.dialogTreeNode());
 				return;
+			case "tree-toggle-label-time":
+				this.toggleLabelTimestamps();
+				return;
 			case "tree-label":
 				openLabelInput(this.flowHost, this.dialogTreeNode());
 				return;
@@ -1898,6 +1909,7 @@ export class LazyPanel implements Component, Focusable {
 					cursor: this.state.cursor.tree,
 					first: this.listFirst("tree", visibleRows.tree),
 					focused: this.state.focus === "tree",
+					showLabelTimestamps: this.state.showLabelTimestamps,
 					filter: this.state.treeFilter,
 					emptyMessage: this.emptyMessage(selectedSession),
 					title: this.paneTitle("tree"),
