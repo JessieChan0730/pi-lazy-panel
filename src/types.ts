@@ -17,6 +17,31 @@ export type PaneId = (typeof PANE_IDS)[number];
 /** Which set of sessions the sessions pane lists. */
 export type ListScope = "current-folder" | "all";
 
+/** Archive visibility is independent of the directory scope. */
+export type SessionListView = "normal" | "archived";
+
+export interface SessionListFilter {
+	view: SessionListView;
+	archived: ReadonlySet<string>;
+}
+
+/** Persisted together so archiving and removing pins are one atomic change. */
+export interface SessionFileState {
+	pinned: string[];
+	archived: string[];
+}
+
+/** Successful commit may still need attention if releasing the lock failed. */
+export interface SessionFileUpdate extends SessionFileState {
+	warning?: string;
+}
+
+/** Apply explicit targets to the latest on-disk state, never a stale snapshot. */
+export interface SessionFileChange {
+	type: "archive" | "unarchive" | "pin" | "unpin" | "delete";
+	files: readonly string[];
+}
+
 /** Sort order of the sessions pane (mirrors pi's /resume picker; `s` cycles them in `SESSION_SORT_MODES` order). */
 export type SessionSortMode = (typeof SESSION_SORT_MODES)[number];
 
@@ -331,6 +356,8 @@ export type ActionId =
 	| "session-fork"
 	| "session-toggle-select"
 	| "session-pin"
+	| "session-archive"
+	| "session-archive-view"
 	| "session-export"
 	| "session-import"
 	| "session-share"

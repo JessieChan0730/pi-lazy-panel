@@ -7,12 +7,19 @@
 
 import { resolve } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import type { ListScope, SessionRow, SessionSortMode } from "../types.ts";
+import type { ListScope, SessionListFilter, SessionRow, SessionSortMode } from "../types.ts";
+import { sessionFileKey } from "../utils/session-file-key.ts";
 import { singleLine } from "../utils/format.ts";
 
 export interface ListSessionsOptions {
 	cwd: string;
 	scope: ListScope;
+}
+
+/** Filter before sorting: a hidden parent must not leave its visible forks indented. */
+export function filterSessions(rows: SessionRow[], filter: SessionListFilter): SessionRow[] {
+	const archived = new Set([...filter.archived].map(sessionFileKey));
+	return rows.filter((row) => archived.has(sessionFileKey(row.file)) === (filter.view === "archived"));
 }
 
 /** List sessions for the given scope. */
@@ -84,12 +91,12 @@ export function findSessionIndex(rows: SessionRow[], sessionFile: string | undef
  */
 export function sortSessions(rows: SessionRow[], mode: SessionSortMode, pinned: readonly string[] = []): SessionRow[] {
 	if (pinned.length === 0) return sortByMode(rows, mode);
-	const order = new Map(pinned.map((file, i) => [file, i]));
+	const order = new Map(pinned.map((file, i) => [sessionFileKey(file), i]));
 	const top: SessionRow[] = [];
 	const rest: SessionRow[] = [];
-	for (const row of rows) (order.has(row.file) ? top : rest).push(row);
+	for (const row of rows) (order.has(sessionFileKey(row.file)) ? top : rest).push(row);
 	// 置顶区按 pinned 里的位置排（最后置顶的在最前），且不缩进（threaded 也拉平）。
-	top.sort((a, b) => order.get(a.file)! - order.get(b.file)!);
+	top.sort((a, b) => order.get(sessionFileKey(a.file))! - order.get(sessionFileKey(b.file))!);
 	const flat = top.map(({ threadDepth: _drop, ...row }) => row);
 	return [...flat, ...sortByMode(rest, mode)];
 }

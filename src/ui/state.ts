@@ -7,7 +7,16 @@
  * 面板的全部可变 UI 状态集中在这里。
  */
 
-import type { ListScope, PaneId, PanelMode, PaneSearch, SessionSortMode, TreeFilter } from "../types.ts";
+import type { ListScope, PaneId, PanelMode, PaneSearch, SessionFileState, SessionListView, SessionSortMode, TreeFilter } from "../types.ts";
+
+/** View-local position; query is kept, match row indices are always recomputed. */
+export interface SessionViewPosition {
+	scope: ListScope;
+	file: string | undefined;
+	index: number;
+	scroll: number | null;
+	query: string;
+}
 
 /** Mutable UI state of the panel. Kept in one place for easy debugging. */
 export interface PanelState {
@@ -19,12 +28,13 @@ export interface PanelState {
 	contentHighlight: string | undefined;
 	/** Sessions selected with <space> for batch operations. */
 	selectedSessionFiles: Set<string>;
-	/**
-	 * Pinned session files in display order (newest pin first). These sit at the
-	 * top of the sessions pane regardless of the sort mode; persisted to
-	 * `~/.pi/agent/lazy-panel-pins.json` (see config/pins.ts).
-	 */
+	/** Ordered pins and unordered archives are persisted in one metadata file. */
 	pinnedFiles: string[];
+	archivedFiles: Set<string>;
+	sessionView: SessionListView;
+	sessionViewPositions: Partial<Record<SessionListView, SessionViewPosition>>;
+	/** Blocks repeated mutations while the shared metadata commit is in flight. */
+	sessionStateBusy: boolean;
 	/**
 	 * Active `/` search per pane (absent = none). Kept per pane, so switching
 	 * panes keeps each pane's query; only the focused pane's search is acted on.
@@ -61,6 +71,10 @@ export function createInitialState(overrides: Partial<PanelState> = {}): PanelSt
 		contentHighlight: undefined,
 		selectedSessionFiles: new Set(),
 		pinnedFiles: [],
+		archivedFiles: new Set(),
+		sessionView: "normal",
+		sessionViewPositions: {},
+		sessionStateBusy: false,
 		search: {},
 		scope: "current-folder",
 		sort: "recent",
@@ -72,4 +86,10 @@ export function createInitialState(overrides: Partial<PanelState> = {}): PanelSt
 		listScroll: { sessions: null, tree: null },
 		...overrides,
 	};
+}
+
+/** Only publish a complete snapshot after a successful read or atomic commit. */
+export function applySessionFileState(state: PanelState, files: SessionFileState): void {
+	state.pinnedFiles = [...files.pinned];
+	state.archivedFiles = new Set(files.archived);
 }

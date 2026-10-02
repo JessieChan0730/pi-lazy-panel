@@ -1,6 +1,6 @@
 /**
  * Dialog flows of the SESSIONS pane: Enter resumes, d deletes (the cursor
- * row or the multi-selection, never the session pi has open), p pins, r
+ * row or the multi-selection, never the session pi has open), r
  * renames, n starts a new session, c compacts, o forks, y clones, Y copies
  * the last reply, e exports, I imports, S shares, i shows the Session Info
  * box. Destructive or outgoing steps confirm first (CLAUDE.md rule 7). Each
@@ -31,6 +31,7 @@ import { forkDialogHints, forkDialogTitle } from "../widgets/fork-dialog.ts";
 import { importDialogHints, importDialogSubject, importDialogTitle } from "../widgets/import-dialog.ts";
 import { newSessionDialogHints, newSessionDialogTitle } from "../widgets/new-session-dialog.ts";
 import { renameDialogHints, renameDialogTitle } from "../widgets/rename-dialog.ts";
+import { forgetDeletedSessions } from "./archive-flows.ts";
 import type { FlowHost } from "./host.ts";
 
 /** Session `o` forks: its file, title-bar subject and the user messages to pick from. */
@@ -156,9 +157,10 @@ async function deleteSession(host: FlowHost, row: SessionRow): Promise<void> {
 		return;
 	}
 	host.state.selectedSessionFiles.delete(row.file);
-	unpinAfterDelete(host, [row.file]);
+	const warning = await forgetDeletedSessions(host, [row.file]);
+	if (host.isDisposed()) return;
 	// 删掉的行没了，光标夹回范围内；光标下换了会话就重新加载右边。
-	if (await host.relist(undefined)) host.setStatus(method === "trash" ? t("status.movedToTrash") : t("status.deleted"));
+	if (await host.relist(undefined)) host.setStatus([method === "trash" ? t("status.movedToTrash") : t("status.deleted"), warning].filter(Boolean).join(" — "));
 	await host.followSessionsCursor();
 }
 
@@ -185,64 +187,11 @@ async function deleteSelected(host: FlowHost, targets: SessionRow[]): Promise<vo
 		}
 		if (host.isDisposed()) return;
 	}
-	unpinAfterDelete(host, removed);
+	const warning = await forgetDeletedSessions(host, removed);
+	if (host.isDisposed()) return;
 	const failed = targets.length - deleted;
 	const summary = failed ? t("status.batchDeletedFailed", { deleted, failed, error: firstError }) : t("status.sessionsDeleted", { count: deleted });
-	if (await host.relist(undefined)) host.setStatus(summary);
-	await host.followSessionsCursor();
-}
-
-/** Drop `files` from the pin list and persist if anything changed (called after a delete). */
-function unpinAfterDelete(host: FlowHost, files: Iterable<string>): void {
-	const drop = new Set(files);
-	if (!host.state.pinnedFiles.some((f) => drop.has(f))) return;
-	host.state.pinnedFiles = host.state.pinnedFiles.filter((f) => !drop.has(f));
-	void host.actions?.setPins?.(host.state.pinnedFiles);
-}
-
-/**
- * p: pin / unpin the session under the cursor (or every selected session).
- * With a multi-selection: pin them all when any is still unpinned, otherwise
- * unpin them all. Newly pinned sessions go to the top in list order (the most
- * recent pin ends up first); the list is re-sorted with the cursor following
- * its session. Persisted to disk via `setPins`; a save failure is reverted.
- */
-export async function togglePin(host: FlowHost): Promise<void> {
-	if (!host.actions?.setPins) {
-		host.setStatus(t("status.pinUnavailable"));
-		return;
-	}
-	let targets: string[];
-	if (host.state.selectedSessionFiles.size > 0) {
-		// 按列表顺序取所选会话，置顶时作为一组放到最上面。
-		targets = host.sessionRows().filter((r) => host.state.selectedSessionFiles.has(r.file)).map((r) => r.file);
-	} else {
-		const row = host.currentSessionRow();
-		if (!row) return;
-		targets = [row.file];
-	}
-	if (targets.length === 0) return;
-	const pinnedSet = new Set(host.state.pinnedFiles);
-	const toPin = targets.filter((f) => !pinnedSet.has(f));
-	const pinning = toPin.length > 0;
-	// 有未置顶的就整组置顶，否则整组取消置顶（和多选删除同一套"整组"语义）。
-	const next = pinning
-		? [...toPin, ...host.state.pinnedFiles]
-		: host.state.pinnedFiles.filter((f) => !targets.includes(f));
-	const prev = host.state.pinnedFiles;
-	host.state.pinnedFiles = next;
-	try {
-		await host.actions.setPins(next);
-		if (host.isDisposed()) return;
-	} catch (err) {
-		host.state.pinnedFiles = prev;
-		host.setStatus(t("status.pinFailed", { error: (err as Error).message }));
-		return;
-	}
-	const keep = host.sessionRows()[host.state.cursor.sessions]?.file;
-	const count = pinning ? toPin.length : targets.length;
-	const status = pinning ? t("status.pinned", { count }) : t("status.unpinned", { count });
-	if (await host.relist(keep)) host.setStatus(status);
+	if (await host.relist(undefined)) host.setStatus([summary, warning].filter(Boolean).join(" — "));
 	await host.followSessionsCursor();
 }
 

@@ -39,6 +39,7 @@ import { DEFAULT_KEYMAP, FOCUS_ACTIONS, isDisabledIn, paneTitleText, TREE_DIALOG
 import { LEFT_COLUMN_RATIO, PANE_IDS, SESSION_SORT_MODES, SPINNER_INTERVAL_MS, TREE_DIALOG_SCOPE } from "../constants.ts";
 import { t } from "../i18n/index.ts";
 import { clamp, findLastIndex, indicesWhere } from "../utils/indices.ts";
+import { sessionFileKey } from "../utils/session-file-key.ts";
 import { cycleMatch, firstMatchFrom, highlightTerms, matchSessionRow, matchTreeRow, parseSearchQuery, stepMatch } from "../data/search.ts";
 import { findSessionIndex } from "../data/sessions.ts";
 import { applyTreeFold, defaultFolded, filterTreeRows, nearestListedIndex } from "../data/tree-fold.ts";
@@ -59,6 +60,7 @@ import type {
 	TreeRow,
 } from "../types.ts";
 import { ContentViewport } from "./content-viewport.ts";
+import { toggleArchive, togglePin } from "./flows/archive-flows.ts";
 import type { FlowHost } from "./flows/host.ts";
 import {
 	confirmCloneSession,
@@ -74,7 +76,6 @@ import {
 	resumeSession,
 	startExport,
 	startFork,
-	togglePin,
 } from "./flows/session-flows.ts";
 import { copyEntryText, copyTreeNode, openLabelInput, openTreeFilterMenu, restoreTreeNode, type TreeTarget } from "./flows/tree-flows.ts";
 import { fit, sideBySide } from "./frame.ts";
@@ -84,7 +85,7 @@ import { renderContentPane } from "./panes/content-pane.ts";
 import { clampFirst, renderSessionsPane, scrollOffset, sessionAtLine, sessionFirstLine, sessionLineCount } from "./panes/sessions-pane.ts";
 import { renderTreePane } from "./panes/tree-pane.ts";
 import type { ActionSource, DataSource } from "./ports.ts";
-import { createInitialState, type PanelState } from "./state.ts";
+import { applySessionFileState, createInitialState, type PanelState } from "./state.ts";
 import { TreeView } from "./tree-view.ts";
 import { ChangelogDialog } from "./widgets/changelog-dialog.ts";
 import { ContextUsageDialog } from "./widgets/context-usage-dialog.ts";
@@ -167,6 +168,8 @@ export class LazyPanel implements Component, Focusable {
 	readonly keymap: Keymap;
 	private readonly bindings: Binding[];
 	private sessions: SessionRow[] = [];
+	/** Discard out-of-order list / metadata reads. */
+	private sessionListRequest = 0;
 	/** TREE pane: the whole tree of the loaded session, the visible rows once folded, their outline and the fold rules. */
 	private readonly treeView: TreeView;
 	/** CONTENT pane: blocks of the branch on show, their layout, scrolling and the `/` matches. */
@@ -300,6 +303,7 @@ export class LazyPanel implements Component, Focusable {
 			currentSessionFile: o.currentSessionFile,
 			skipSummaryPrompt: o.skipSummaryPrompt ?? false,
 			isDisposed: () => this.disposed,
+			archiveViewHint: () => this.archiveViewHint(),
 			setStatus: (text) => this.setStatus(text),
 			sessionRows: () => this.sessions,
 			currentSessionRow: () => this.currentSessionRow(),
@@ -340,8 +344,11 @@ export class LazyPanel implements Component, Focusable {
 		// 之后 C / A 切范围重新加载时不再定位，光标照旧回到顶部。
 		const keep = this.locateSessionFile;
 		this.locateSessionFile = undefined;
-		if (await this.listSessions(keep)) this.setStatus(undefined);
-		await this.loadSelectedSession();
+		if (await this.listSessions(keep)) {
+			const archived = keep && [...this.state.archivedFiles].some((f) => sessionFileKey(f) === sessionFileKey(keep));
+			this.setStatus(archived && this.state.sessionView === "normal" ? t("status.currentSessionArchived", { hint: this.archiveViewHint() }) : undefined);
+			await this.loadSelectedSession();
+		}
 	}
 
 	/**
@@ -353,12 +360,20 @@ export class LazyPanel implements Component, Focusable {
 	 * 删除 / 改名 / 换排序之后重新拉列表：光标尽量留在同一个会话上，只有光标下的会话
 	 * 真的变了（比如删掉的那个）才重新加载 TREE / CONTENT。
 	 */
-	private async listSessions(keepFile: string | undefined): Promise<boolean> {
+	private async listSessions(keepFile: string | undefined, view = this.state.sessionView): Promise<boolean> {
+		const request = ++this.sessionListRequest;
+		const { scope, sort } = this.state;
 		try {
-			const rows = await this.o.data.listSessions(this.state.scope, this.state.sort, this.state.pinnedFiles);
-			if (this.disposed) return false;
+			const files = this.o.data.loadSessionState ? await this.o.data.loadSessionState() : undefined;
+			const pinned = files?.pinned ?? this.state.pinnedFiles;
+			const archived = files ? new Set(files.archived) : this.state.archivedFiles;
+			const rows = await this.o.data.listSessions(scope, sort, pinned, { view, archived });
+			if (this.disposed || request !== this.sessionListRequest) return false;
+			if (files) applySessionFileState(this.state, files);
+			this.state.sessionView = view;
 			this.sessions = rows;
 		} catch (err) {
+			if (this.disposed || request !== this.sessionListRequest) return false;
 			this.setStatus(t("status.listFailed", { error: (err as Error).message }));
 			return false;
 		}
@@ -384,7 +399,10 @@ export class LazyPanel implements Component, Focusable {
 		const row = this.sessions[this.state.cursor.sessions];
 		if (!row) {
 			this.setTree([], new Set());
+			this.state.cursor.tree = 0;
+			this.state.listScroll.tree = null;
 			this.contentViewport.setBlocks([], undefined);
+			this.contentViewport.highlight(undefined);
 			this.loadedSessionFile = undefined;
 			this.o.requestRender();
 			return;
@@ -409,8 +427,10 @@ export class LazyPanel implements Component, Focusable {
 			// 树光标落在活动叶子上，右侧内容同步滚到并高亮这条消息。
 			await this.syncContentToTree();
 		} catch (err) {
+			if (this.disposed || this.sessions[this.state.cursor.sessions]?.file !== file) return;
 			this.setTree([], new Set());
 			this.contentViewport.setBlocks([], undefined);
+			this.contentViewport.highlight(undefined);
 			this.setStatus(t("status.openFailed", { error: (err as Error).message }));
 		}
 		this.o.requestRender();
@@ -507,8 +527,8 @@ export class LazyPanel implements Component, Focusable {
 	handleInput(data: string): void {
 		if (this.disposed) return;
 
-		// 正在等 pi 切换会话 / 跳转节点：面板已隐藏，这期间的按键一律忽略，避免半途关掉面板。
-		if (this.entering) return;
+		// 持久化期间不接受重复操作，避免连按归档误作用到下一行。
+		if (this.entering || this.state.sessionStateBusy) return;
 
 		// 搜索模式：所有按键交给输入框（Enter/Esc 由 SearchBar 回调处理）。
 		if (this.state.mode === "search") {
@@ -536,6 +556,10 @@ export class LazyPanel implements Component, Focusable {
 			// SESSIONS 有多选时 Esc 先清空选中，再按一次才退出面板（lazygit 的做法）。
 			if (this.state.focus === "sessions" && this.state.selectedSessionFiles.size > 0) {
 				this.clearSelection();
+				return;
+			}
+			if (this.state.sessionView === "archived") {
+				void this.toggleArchiveView();
 				return;
 			}
 			this.close();
@@ -677,7 +701,7 @@ export class LazyPanel implements Component, Focusable {
 	handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
 		if (this.disposed || this.entering) return undefined;
 		// 搜索输入 / 各类弹窗打开时：吞掉面板区域的滚轮和点击，避免误动下面的列表，但不做交互。
-		if (this.state.mode !== "normal" || this.activeOverlay()) {
+		if (this.state.sessionStateBusy || this.state.mode !== "normal" || this.activeOverlay()) {
 			return event.type === "wheel" || event.type === "click" ? { handled: true } : undefined;
 		}
 		if (event.type === "wheel") return this.handleWheel(event);
@@ -711,9 +735,9 @@ export class LazyPanel implements Component, Focusable {
 
 	/** How many of the leading (sorted-to-front) sessions are pinned; drives the group rules and line geometry. */
 	private pinnedCount(): number {
-		if (this.state.pinnedFiles.length === 0) return 0;
-		const pinned = new Set(this.state.pinnedFiles);
-		return this.sessions.filter((r) => pinned.has(r.file)).length;
+		if (this.state.sessionView === "archived" || this.state.pinnedFiles.length === 0) return 0;
+		const pinned = new Set(this.state.pinnedFiles.map(sessionFileKey));
+		return this.sessions.filter((r) => pinned.has(sessionFileKey(r.file))).length;
 	}
 
 	/** First visible line/row of a list pane: the wheel offset when set, else the cursor-centered window; always clamped. */
@@ -776,6 +800,7 @@ export class LazyPanel implements Component, Focusable {
 	 * handling it here fails the type check.
 	 */
 	dispatch(action: ActionId): void {
+		if (this.disposed || this.state.sessionStateBusy) return;
 		switch (action) {
 			case "quit":
 				this.close();
@@ -796,10 +821,10 @@ export class LazyPanel implements Component, Focusable {
 				this.setFocus("content");
 				return;
 			case "scope-current":
-				this.setScope("current-folder");
+				void this.setScope("current-folder");
 				return;
 			case "scope-all":
-				this.setScope("all");
+				void this.setScope("all");
 				return;
 			case "help":
 				this.openHelp();
@@ -901,6 +926,15 @@ export class LazyPanel implements Component, Focusable {
 			case "session-toggle-select":
 				this.toggleSelect();
 				return;
+			case "session-archive":
+			case "session-archive-view":
+				if (this.state.focus !== "sessions") {
+					this.setStatus(t("status.notImplemented", { action }));
+					return;
+				}
+				if (action === "session-archive") void toggleArchive(this.flowHost);
+				else void this.toggleArchiveView();
+				return;
 			case "session-pin":
 				void togglePin(this.flowHost);
 				return;
@@ -995,13 +1029,82 @@ export class LazyPanel implements Component, Focusable {
 	}
 
 	/** Switch the list scope; C / A are one-way so pressing the current one is a no-op. */
-	private setScope(scope: ListScope): void {
-		if (this.state.scope === scope) return;
+	private async setScope(scope: ListScope): Promise<void> {
+		if (this.state.scope === scope || this.state.sessionStateBusy) return;
+		const previous = this.state.scope;
 		this.state.scope = scope;
-		// 切换范围后光标回到顶部并重新拉取会话列表。
-		this.state.cursor.sessions = 0;
-		this.state.selectedSessionFiles.clear();
-		void this.load();
+		this.state.sessionStateBusy = true;
+		this.setStatus(t("status.loadingSessions"));
+		try {
+			if (!await this.listSessions(undefined)) {
+				this.state.scope = previous;
+				return;
+			}
+			this.state.cursor.sessions = 0;
+			this.state.listScroll.sessions = null;
+			this.state.selectedSessionFiles.clear();
+			this.refreshSearch("sessions");
+			this.setStatus(undefined);
+			await this.loadSelectedSession();
+		} finally {
+			this.state.sessionStateBusy = false;
+			this.o.requestRender();
+		}
+	}
+
+	/** X changes only visibility; directory scope and sorting stay the same. */
+	private async toggleArchiveView(): Promise<void> {
+		if (this.state.sessionStateBusy) return;
+		const { sessionView, scope } = this.state;
+		const next = sessionView === "normal" ? "archived" : "normal";
+		this.state.sessionViewPositions[sessionView] = {
+			scope,
+			file: this.sessions[this.state.cursor.sessions]?.file,
+			index: this.state.cursor.sessions,
+			scroll: this.state.listScroll.sessions,
+			query: this.state.search.sessions?.query ?? "",
+		};
+		const position = this.state.sessionViewPositions[next];
+		const sameScope = position?.scope === scope;
+		if (this.sessionLoadTimer) clearTimeout(this.sessionLoadTimer);
+		this.sessionLoadTimer = undefined;
+		this.state.sessionStateBusy = true;
+		this.setStatus(t("status.loadingSessions"));
+		try {
+			if (!await this.listSessions(sameScope ? position.file : undefined, next)) return;
+			const index = findSessionIndex(this.sessions, sameScope ? position.file : undefined);
+			this.state.cursor.sessions = index >= 0 ? index : clamp(sameScope ? position.index : 0, 0, Math.max(0, this.sessions.length - 1));
+			this.state.listScroll.sessions = sameScope ? position.scroll : null;
+			this.state.selectedSessionFiles.clear();
+			if (position?.query) this.state.search.sessions = { query: position.query, matches: [], current: -1 };
+			else delete this.state.search.sessions;
+			this.refreshSearch("sessions");
+			this.setStatus(undefined);
+			await this.followSessionsCursor();
+		} finally {
+			this.state.sessionStateBusy = false;
+			this.o.requestRender();
+		}
+	}
+
+	private archiveViewHint(): string {
+		const key = labelsForFocus(this.keymap, "sessions", "session-archive-view")[0];
+		return key ? t("hint.viewArchive", { key }) : "";
+	}
+
+	private archiveHints(): KeyHint[] {
+		const actions: [ActionId, string][] = [
+			["session-archive-view", t("hint.normalSessions")],
+			["session-archive", t("hint.unarchive")],
+			["session-resume", t("footer.session-resume")],
+			["search", t("footer.search")],
+			["help", t("footer.help")],
+			["quit", t("footer.quit")],
+		];
+		return actions.flatMap(([action, text]) => {
+			const keys = labelsForFocus(this.keymap, "sessions", action);
+			return keys.length ? [[compactKeys(keys), text] as KeyHint] : [];
+		});
 	}
 
 	// -----------------------------------------------------------------------
@@ -1869,7 +1972,11 @@ export class LazyPanel implements Component, Focusable {
 				width,
 			);
 		}
-		return renderFooter({ ...footer, ...(status ? { status } : {}) }, width)[0]!;
+		return renderFooter({
+			...footer,
+			...(this.state.sessionView === "archived" && this.state.focus === "sessions" ? { hints: this.archiveHints() } : {}),
+			...(status ? { status } : {}),
+		}, width)[0]!;
 	}
 
 	private emptyMessage(selected: SessionRow | undefined): string {
@@ -1881,7 +1988,8 @@ export class LazyPanel implements Component, Focusable {
 	/** "[1] SESSIONS": the jump key comes from the resolved keymap, so rebinding shows up here. */
 	private paneTitle(pane: PaneId): string {
 		const key = labelsFor(this.keymap, "global", FOCUS_ACTIONS[pane])[0];
-		return key ? `[${key}] ${paneTitleText(pane)}` : paneTitleText(pane);
+		const title = pane === "sessions" && this.state.sessionView === "archived" ? t("pane.archivedSessionsTitle") : paneTitleText(pane);
+		return key ? `[${key}] ${title}` : title;
 	}
 }
 

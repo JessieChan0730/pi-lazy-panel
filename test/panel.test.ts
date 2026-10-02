@@ -2415,7 +2415,12 @@ function makeSessionActionPanel(
 			shares.push(file);
 			return { url: "https://pi.dev/session/#abc", gistUrl: "https://gist.github.com/me/abc" };
 		},
-		setPins: async (p) => void pins.push([...p]),
+		updateSessionState: async ({ type, files }) => {
+			const prev = pins.at(-1) ?? [];
+			const next = type === "pin" ? [...files.filter((f) => !prev.includes(f)), ...prev] : prev.filter((f) => !files.includes(f));
+			pins.push(next);
+			return { pinned: next, archived: [] };
+		},
 		...(opts.actions ?? {}),
 	};
 	const panel = new LazyPanel({
@@ -3973,7 +3978,7 @@ test("session actions report loader / action failures in the footer and leave no
 	await run({ data: { loadSessionInfo: async () => undefined } }, ["i"], t("status.sessionInfoCannotRead", { file: "/tmp/s1.jsonl" }));
 	await run({ actions: { copyText: boom } }, ["i", "y"], t("status.copyFailed", { error: "boom" }), "info");
 	// p: saving the pins fails → the pin is rolled back
-	const pinned = await run({ actions: { setPins: boom } }, ["p"], t("status.pinFailed", { error: "boom" }));
+	const pinned = await run({ actions: { updateSessionState: boom } }, ["p"], t("status.pinFailed", { error: "boom" }));
 	assert.deepEqual(pinned.panel.state.pinnedFiles, [], "the failed pin is rolled back");
 	// d with a selection but no actions wired
 	await run({ actions: null }, [" ", "d"], t("status.deleteUnavailable"));
