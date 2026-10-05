@@ -13,6 +13,9 @@ import { InputDialog } from "../src/ui/widgets/input-dialog.ts";
 import { PromptDetailDialog } from "../src/ui/widgets/prompt-detail-dialog.ts";
 import { SelectDialog } from "../src/ui/widgets/select-dialog.ts";
 import { SessionInfoDialog } from "../src/ui/widgets/session-info-dialog.ts";
+import { createSettingsState } from "../src/ui/settings-state.ts";
+import { DEFAULT_CONFIG } from "../src/config/config.ts";
+import { SettingsDialog } from "../src/ui/widgets/settings-dialog.ts";
 import { TreeDialog } from "../src/ui/widgets/tree-dialog.ts";
 
 initI18n("en");
@@ -111,7 +114,11 @@ test("every dialog uses the same subdued backdrop and keeps single-line accent b
 	detail.open({ category: "Context", prompt: "Source", onCopy: () => {} });
 	const changelog = new ChangelogDialog({ theme, onClose: () => {} });
 	changelog.setContent("# Changelog\n\nA change");
-	const widgets = [input, select, tree, info, usage, detail, changelog];
+	const state = createSettingsState();
+	state.phase = "open";
+	state.progress = 1;
+	const settings = new SettingsDialog({ state, config: DEFAULT_CONFIG, theme, onChange: () => {}, onClose: () => {} });
+	const widgets = [input, select, tree, info, usage, detail, changelog, settings];
 	const base = Array.from({ length: 26 }, () => `\x1b[31m${"x".repeat(100)}\x1b[39m`);
 	const renders = widgets.map((widget) => widget.overlay(base, 100));
 	renders.push(overlayHelp(base, { keymap: DEFAULT_KEYMAP, focus: "sessions", cursor: 0, scroll: 0, theme }, 100));

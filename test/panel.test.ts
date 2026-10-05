@@ -141,6 +141,151 @@ function makePanel(opts: { keymap?: typeof DEFAULT_KEYMAP; height?: number } = {
 	};
 }
 
+test("settings opens in all panes, owns keys and mouse throughout transitions, and preserves browsing state", async (ctx) => {
+	ctx.mock.timers.enable({ apis: ["setInterval"] });
+	for (const focus of ["sessions", "tree", "content"] as const) {
+		const h = makePanel();
+		await h.panel.load();
+		h.panel.state.focus = focus;
+		h.panel.state.selectedSessionFiles.add("/tmp/s1.jsonl");
+		h.panel.state.treeFolded.add("branch");
+		h.panel.state.search[focus] = { query: "keep", matches: [], current: -1 };
+		const before = structuredClone(h.panel.state);
+		h.panel.handleInput(",");
+		assert.equal(h.panel.state.mode, "settings");
+		assert.equal(h.panel.state.settings.phase, "opening");
+		const click = () => h.panel.handleMouse(mouseEvent("click", 2, 3, { height: 20 }));
+		const wheel = () => h.panel.handleMouse(mouseEvent("wheel", 2, 3, { height: 20, wheelDelta: 1 }));
+		assert.deepEqual(click(), { handled: true });
+		assert.deepEqual(wheel(), { handled: true });
+		h.panel.handleInput("3");
+		h.panel.handleInput("d");
+		ctx.mock.timers.tick(120);
+		assert.match(h.text(120).join("\n"), /Settings · Read-only/);
+		assert.match(h.text(120).at(-1)!, /Esc\/q close/);
+		h.panel.handleInput("\x1b");
+		h.panel.handleInput("q");
+		h.panel.handleInput("\r");
+		assert.equal(h.panel.state.mode, "settings");
+		assert.equal(h.closed(), false);
+		assert.deepEqual(click(), { handled: true });
+		ctx.mock.timers.tick(120);
+		assert.equal(h.closed(), false);
+		assert.deepEqual({ ...h.panel.state, settings: before.settings }, before);
+		h.panel.dispose();
+	}
+});
+
+test("settings supports remapped and multi-key entry, help execution and direct entry after unbinding", (ctx) => {
+	ctx.mock.timers.enable({ apis: ["setInterval"] });
+	const keymap = mergeKeymap(DEFAULT_KEYMAP, { global: { "settings-open": "g," } });
+	const h = makePanel({ keymap });
+	ctx.after(() => h.panel.dispose());
+	h.panel.handleInput(",");
+	assert.equal(h.panel.state.settings.phase, "closed");
+	h.panel.handleInput("g");
+	h.panel.handleInput(",");
+	assert.equal(h.panel.state.settings.phase, "opening");
+	h.panel.handleInput("q");
+	ctx.mock.timers.tick(120);
+	h.panel.handleInput("?");
+	h.panel.state.helpCursor = buildHelpLines(keymap, "sessions").filter((line) => line.kind === "binding").findIndex((line) => line.kind === "binding" && line.action === "settings-open");
+	assert.ok(h.panel.state.helpCursor >= 0);
+	h.panel.handleInput("\r");
+	assert.equal(h.panel.state.helpOpen, false);
+	assert.equal(h.panel.state.settings.phase, "opening");
+	const unbound = makePanel({ keymap: mergeKeymap(DEFAULT_KEYMAP, { global: { "settings-open": null } }) });
+	ctx.after(() => unbound.panel.dispose());
+	unbound.panel.handleInput(",");
+	assert.equal(unbound.panel.state.settings.phase, "closed");
+	unbound.panel.openSettings();
+	assert.equal(unbound.panel.state.settings.phase, "opening");
+});
+
+test("settings entry cannot steal search input or keys from existing dialogs", async (ctx) => {
+	ctx.mock.timers.enable({ apis: ["setInterval"] });
+	const h = makePanel();
+	ctx.after(() => h.panel.dispose());
+	h.panel.handleInput("/");
+	h.panel.handleInput(",");
+	h.panel.openSettings();
+	assert.equal(h.panel.state.mode, "search");
+	assert.equal(h.panel.state.settings.phase, "closed");
+	assert.match(h.text().at(-1)!, /Search: ,/);
+	h.panel.handleInput("\x1b");
+	const loaded = makeSessionActionPanel();
+	ctx.after(() => loaded.panel.dispose());
+	await loaded.panel.load();
+	for (const key of ["r", "d"]) {
+		loaded.panel.handleInput(key);
+		loaded.panel.handleInput(",");
+		loaded.panel.openSettings();
+		assert.equal(loaded.panel.state.settings.phase, "closed");
+		loaded.panel.handleInput("\x1b");
+	}
+	loaded.panel.handleInput("2");
+	loaded.panel.handleInput("a");
+	loaded.panel.handleInput(",");
+	assert.equal(loaded.panel.state.mode, "tree");
+	assert.equal(loaded.panel.state.settings.phase, "closed");
+});
+
+test("async info requested before settings stays above it and restores the correct mode", async (ctx) => {
+	ctx.mock.timers.enable({ apis: ["setInterval"] });
+	for (const closing of [false, true]) {
+		let finish!: (info: SessionInfo) => void;
+		const pending = new Promise<SessionInfo>((resolve) => {
+			finish = resolve;
+		});
+		const h = makeSessionActionPanel({ data: { loadSessionInfo: () => pending } });
+		await h.panel.load();
+		h.panel.handleInput("i");
+		h.panel.handleInput(",");
+		ctx.mock.timers.tick(120);
+		if (closing) h.panel.handleInput("q");
+		finish({ id: "pending-info", path: "session.jsonl", messages: 1, tokens: 0, cost: 0, createdAt: 0, updatedAt: 0 });
+		await flush();
+		assert.equal(h.panel.state.mode, "info");
+		ctx.mock.timers.tick(120);
+		assert.equal(h.panel.state.mode, "info", "closing settings must not reset the top dialog's mode");
+		assert.match(h.panel.render(120).join("\n"), /pending-info/);
+		h.panel.handleInput("q");
+		assert.equal(h.panel.state.mode, closing ? "normal" : "settings");
+		h.panel.dispose();
+	}
+});
+
+test("settings reports startup defaults, not temporary scope/sort, and both close paths stop animation", (ctx) => {
+	ctx.mock.timers.enable({ apis: ["setInterval"] });
+	let renders = 0;
+	const panel = new LazyPanel({
+		theme: fakeTheme,
+		data: { listSessions: async () => [], loadTree: async () => [], loadContent: async () => [] },
+		getHeight: () => 28,
+		requestRender: () => { renders++; },
+		onClose: () => {},
+		configDefaults: { defaultScope: "current-folder", defaultSort: "created", locale: "en" },
+	});
+	panel.state.scope = "all";
+	panel.state.sort = "title";
+	panel.openSettings();
+	ctx.mock.timers.tick(120);
+	const text = panel.render(120).join("\n");
+	assert.match(text, /Current folder/);
+	assert.match(text, /Creation time/);
+	panel.handleInput("q");
+	panel.dispose();
+	const count = renders;
+	ctx.mock.timers.tick(1000);
+	assert.equal(renders, count);
+	const h = makePanel();
+	h.panel.openSettings();
+	h.panel.dispatch("quit");
+	ctx.mock.timers.tick(1000);
+	assert.equal(h.closed(), true);
+	assert.equal(h.panel.state.settings.phase, "closed");
+});
+
 test("h / l cycle focus, 1 / 2 / 3 jump, and pane titles carry the jump key", () => {
 	const h = makePanel();
 	const { panel } = h;

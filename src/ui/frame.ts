@@ -91,11 +91,13 @@ function topBorder(o: FrameOptions, inner: number): string {
  * Pass `backdrop` for a modal: restyle the base and clear a one-cell gutter
  * outside the box, clipped to the available space without moving the box.
  *
+ * Pass `fixedTop` to reveal a pre-laid-out box without re-centering each animation frame.
+ *
  * 弹窗只弱化底图：先清掉选中背景、反色和隐藏层的输入光标，再套主题色。
  * 上层原样叠加，嵌套时不会越叠越暗，关闭后也不影响原来的面板状态。
  */
-export function overlayCentered(base: string[], box: string[], width: number, termW: number, backdrop?: Style): string[] {
-	const top = Math.max(0, Math.floor((base.length - box.length) / 2));
+export function overlayCentered(base: string[], box: string[], width: number, termW: number, backdrop?: Style, fixedTop?: number): string[] {
+	const top = Math.max(0, Math.floor(fixedTop ?? (base.length - box.length) / 2));
 	const left = Math.max(0, Math.floor((termW - width) / 2));
 	const out = backdrop ? base.map((line) => backdrop(stripTerminalSequences(line))) : [...base];
 	if (backdrop && box.length && width > 0 && termW > 0) {

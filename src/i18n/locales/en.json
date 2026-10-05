@@ -1,4 +1,36 @@
 {
+  "settings": {
+    "title": "Settings",
+    "readOnly": "Read-only",
+    "readOnlyNotice": "Preview only · editing and saving are not available yet",
+    "categories": "Categories",
+    "category": {
+      "general": "General",
+      "layout": "Layout",
+      "keybindings": "Keybindings",
+      "theme": "Theme"
+    },
+    "locale": "Interface language",
+    "language": { "en": "English", "zh": "Simplified Chinese" },
+    "systemLanguage": "System ({{language}})",
+    "localeDescription": "Language used when opening the plugin. Without an override, it follows the system language.",
+    "defaultScope": "Default session scope",
+    "defaultSort": "Default sort order",
+    "defaultDescription": "Used when opening the panel. Changing the current session view does not change this default.",
+    "scope": { "current-folder": "Current folder", "all": "All folders" },
+    "sort": { "recent": "Recently updated", "created": "Creation time", "title": "Title", "threaded": "Fork relationships" },
+    "leftWidth": "Left column width",
+    "widthDescription": "SESSIONS and TREE share this width; CONTENT uses the rest. Range: 15–60%, default: 25%. Narrow terminals may limit the actual width.",
+    "unbound": "No local binding",
+    "layerDescription": "This scope only; inheritance is not expanded. Other scopes may still bind this action. Focus, priority and disabled actions affect execution.",
+    "noBindings": "No bindings in this scope",
+    "followPi": "Follow pi",
+    "themeDescription": "Uses pi's current theme. Plugin theme selection will be added here later; no theme setting is saved yet.",
+    "switchRegion": "switch region",
+    "switchScope": "switch scope",
+    "scrollDetails": "scroll details",
+    "close": "Close"
+  },
   "alert": {
     "cannotDeleteActive": "Can't delete the active session",
     "ok": "OK"
@@ -24,6 +56,7 @@
     "import": "IMPORT",
     "share": "SHARE",
     "changelog": "CHANGELOG",
+    "settings": "SETTINGS",
     "compact": "COMPACT",
     "visual": "VISUAL",
     "preview": "PREVIEW"
@@ -86,6 +119,7 @@
     "search": "Search in the focused pane",
     "search-next": "Next search match",
     "search-prev": "Previous search match",
+    "settings-open": "Open plugin settings (read-only preview)",
     "changelog": "Show pi's changelog (/changelog)",
     "move-down": "Move cursor down",
     "move-up": "Move cursor up",
