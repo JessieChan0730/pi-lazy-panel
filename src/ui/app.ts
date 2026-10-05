@@ -33,6 +33,7 @@
  */
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
+import type { ResolvedConfig } from "../config/config.ts";
 import type { Component, Focusable, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
 import { type Binding, compileKeymap, labelsFor, labelsForFocus, matchesKeyId, resolveKeys } from "../config/keys.ts";
 import { DEFAULT_KEYMAP, FOCUS_ACTIONS, isDisabledIn, paneTitleText, TREE_DIALOG_FOOTER, treeDialogHintText } from "../config/keymap.ts";
@@ -97,6 +98,7 @@ import { InputDialog, type InputDialogSpec } from "./widgets/input-dialog.ts";
 import { renderSearchStatus, SearchBar } from "./widgets/search-bar.ts";
 import { SelectDialog, type SelectDialogSpec } from "./widgets/select-dialog.ts";
 import { SessionInfoDialog } from "./widgets/session-info-dialog.ts";
+import { SettingsDialog } from "./widgets/settings-dialog.ts";
 import { TreeDialog } from "./widgets/tree-dialog.ts";
 
 export interface LazyPanelOptions {
@@ -117,6 +119,8 @@ export interface LazyPanelOptions {
 	keymap?: Keymap;
 	initialState?: Partial<PanelState>;
 	leftColumnRatio?: number;
+	/** Configured defaults for the read-only settings page, independent of browsing state. */
+	configDefaults?: Pick<ResolvedConfig, "locale" | "defaultScope" | "defaultSort">;
 	/** Initial footer status, e.g. config warnings. */
 	status?: string;
 	/** Extension version, shown muted at the far right of the footer. */
@@ -146,7 +150,7 @@ interface Overlay {
 	draw(lines: string[], width: number): string[];
 	/** Footer hints of the overlay that currently owns the keyboard. */
 	hints(): KeyHint[];
-	/** Drawn under the other overlays: the tree dialog, which T / Enter open a prompt / menu on top of. */
+	/** Drawn under other overlays: the full tree and settings, which can have prompts/info above them. */
 	base?: boolean;
 }
 
@@ -197,6 +201,7 @@ export class LazyPanel implements Component, Focusable {
 	private readonly usageDialog: ContextUsageDialog;
 	/** `@`: pi's changelog in a big scrollable box. */
 	private readonly changelogDialog: ChangelogDialog;
+	private readonly settingsDialog: SettingsDialog;
 	/** What the dialog flows (./flows/) get from the panel; see `FlowHost`. */
 	private readonly flowHost: FlowHost;
 	/**
@@ -262,6 +267,21 @@ export class LazyPanel implements Component, Focusable {
 		this.infoDialog = new SessionInfoDialog({ theme: o.theme });
 		this.usageDialog = new ContextUsageDialog({ theme: o.theme });
 		this.changelogDialog = new ChangelogDialog({ theme: o.theme, onClose: () => this.closeChangelog() });
+		this.settingsDialog = new SettingsDialog({
+			state: this.state.settings,
+			config: {
+				defaultScope: this.state.scope,
+				defaultSort: this.state.sort,
+				...o.configDefaults,
+				leftColumnRatio: this.ratio,
+				keymap: this.keymap,
+			},
+			theme: o.theme,
+			onChange: () => this.o.requestRender(),
+			onClose: () => {
+				if (this.state.mode === "settings") this.state.mode = this.baseMode();
+			},
+		});
 		this.overlays = [
 			widgetOverlay(this.inputDialog),
 			widgetOverlay(this.selectDialog),
@@ -273,6 +293,9 @@ export class LazyPanel implements Component, Focusable {
 				draw: (lines, width) => this.changelogDialog.overlay(lines, width),
 				hints: () => this.changelogDialog.hints,
 			},
+			// A previously requested async info/prompt may arrive while settings is open.
+			// Keep those dialogs above settings in both paint order and input priority.
+			{ ...widgetOverlay(this.settingsDialog), base: true },
 			{
 				isOpen: () => this.state.helpOpen,
 				handleInput: (data) => this.handleHelpInput(data),
@@ -644,9 +667,9 @@ export class LazyPanel implements Component, Focusable {
 		return r.kind === "action" && r.action === action;
 	}
 
-	/** Mode to return to when a label prompt / restore menu closes: `tree` while the dialog is still open. */
+	/** Return to the underlying settings/tree browser when a prompt or info dialog closes. */
 	private baseMode(): PanelMode {
-		return this.treeDialog.isOpen ? "tree" : "normal";
+		return this.settingsDialog.isOpen ? "settings" : this.treeDialog.isOpen ? "tree" : "normal";
 	}
 
 	/**
@@ -945,6 +968,9 @@ export class LazyPanel implements Component, Focusable {
 				return;
 			case "session-pin":
 				void togglePin(this.flowHost);
+				return;
+			case "settings-open":
+				this.openSettings();
 				return;
 			case "changelog":
 				void this.openChangelog();
@@ -1698,6 +1724,14 @@ export class LazyPanel implements Component, Focusable {
 		this.setStatus(t("status.selectionCleared"));
 	}
 
+	/** Also used by /lazy-panel settings, so an unbound shortcut never locks users out. */
+	openSettings(): void {
+		if (this.disposed || this.entering || this.state.sessionStateBusy || this.state.mode === "search" || this.activeOverlay()) return;
+		this.keys.clear();
+		this.state.mode = "settings";
+		this.settingsDialog.open();
+	}
+
 	/** @: show pi's changelog. Rendering the whole file is slow, so the box opens with a loading spinner first. */
 	private async openChangelog(): Promise<void> {
 		const load = this.o.data.loadChangelog;
@@ -1844,6 +1878,7 @@ export class LazyPanel implements Component, Focusable {
 	private close(): void {
 		if (this.disposed) return;
 		this.disposed = true;
+		this.settingsDialog.dispose();
 		this.keys.clear();
 		this.clearSessionLoad();
 		this.o.onClose();
@@ -1851,6 +1886,7 @@ export class LazyPanel implements Component, Focusable {
 
 	dispose(): void {
 		this.disposed = true;
+		this.settingsDialog.dispose();
 		this.stopChangelogSpinner();
 		this.keys.clear();
 		this.clearSessionLoad();

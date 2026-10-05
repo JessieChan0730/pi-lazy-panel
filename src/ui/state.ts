@@ -8,6 +8,7 @@
  */
 
 import type { ListScope, PaneId, PanelMode, PaneSearch, SessionFileState, SessionListView, SessionSortMode, TreeFilter } from "../types.ts";
+import { createSettingsState, type SettingsState } from "./settings-state.ts";
 
 /** View-local position; query is kept, match row indices are always recomputed. */
 export interface SessionViewPosition {
@@ -56,6 +57,7 @@ export interface PanelState {
 	helpOpen: boolean;
 	helpCursor: number;
 	helpScroll: number;
+	settings: SettingsState;
 	/**
 	 * Wheel-scroll offset (first visible row) for the two list panes; null means
 	 * "follow the cursor" (the keyboard default that centers the cursor). The
@@ -86,6 +88,7 @@ export function createInitialState(overrides: Partial<PanelState> = {}): PanelSt
 		helpOpen: false,
 		helpCursor: 0,
 		helpScroll: 0,
+		settings: createSettingsState(),
 		listScroll: { sessions: null, tree: null },
 		...overrides,
 	};

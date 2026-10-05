@@ -36,6 +36,7 @@ export const DEFAULT_KEYMAP: Keymap = {
 		help: "?",
 		// 和 pi 的 /changelog 一样查看 pi 的更新日志（居中大弹窗，可滚动）。
 		changelog: "@",
+		"settings-open": ",",
 		quit: ["q", "ctrl+c"],
 	},
 
@@ -134,6 +135,7 @@ export const DISABLED_ACTIONS: Partial<Record<KeyScope, ActionId[]>> = {
 		"tree-open",
 		"tree-filter-menu",
 		"changelog",
+		"settings-open",
 	],
 };
 

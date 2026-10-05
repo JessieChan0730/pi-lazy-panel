@@ -63,7 +63,7 @@ export default function (pi: ExtensionAPI) {
 	initI18n();
 	pi.registerCommand(COMMAND_NAME, {
 		description: t("command.description"),
-		handler: async (_args, ctx) => {
+		handler: async (args, ctx) => {
 			// 按系统语言初始化 i18n（一次会话内固定），之后所有 UI 文案走 t()。
 			initI18n();
 			if (ctx.mode !== "tui") {
@@ -144,6 +144,7 @@ export default function (pi: ExtensionAPI) {
 						keymap: config.keymap,
 						initialState: { scope: config.defaultScope, sort: config.defaultSort, treeFilter: piSettings.treeFilter },
 						leftColumnRatio: config.leftColumnRatio,
+						configDefaults: config,
 						skipSummaryPrompt: piSettings.skipBranchSummaryPrompt,
 						// 打开时 SESSIONS 光标落到 pi 当前打开的会话上；新会话没有文件 / 还没列出时留在第一行。
 						...(currentFile ? { currentSessionFile: currentFile } : {}),
@@ -155,6 +156,7 @@ export default function (pi: ExtensionAPI) {
 					// fullscreen 模式 pi 已经开了鼠标并派给 overlay 的 handleMouse；regular 模式
 					// 由 attachMouse 自己开 SGR 上报并解析（fullscreen 下是 no-op）。
 					disableMouse = attachMouse(tui, panel);
+					if (args.trim() === "settings") panel.openSettings();
 					void panel.load();
 					return panel;
 				},

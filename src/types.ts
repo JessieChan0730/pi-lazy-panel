@@ -72,6 +72,7 @@ export type PanelMode =
 	| "import"
 	| "share"
 	| "changelog"
+	| "settings"
 	| "visual"
 	| "preview";
 
@@ -344,6 +345,7 @@ export type ActionId =
 	| "search-next"
 	| "search-prev"
 	| "changelog"
+	| "settings-open"
 	// list navigation
 	| "move-down"
 	| "move-up"

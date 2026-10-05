@@ -32,6 +32,23 @@ The config file lives at `~/.pi/agent/lazy-panel.json`. Every field is optional 
 - Invalid `locale` / `defaultScope` / `defaultSort` fall back to the default, an out-of-range `leftColumnRatio` is ignored too, and the panel reports it in the footer when it opens.
 - When `locale` is omitted it is auto-detected from the system language (see `src/i18n/index.ts`).
 
+## Settings preview
+
+Press **`,`** in any main pane, select **Open plugin settings** from `?`, or run **`/lazy-panel settings`**. The command works even when `settings-open` is unbound. Existing dialogs and search inputs keep their keys; settings cannot be opened inside the full tree dialog.
+
+This stage is a **read-only UI preview**, not a configuration editor. General shows the language and configured default scope/sort (not temporary browsing choices); Layout shows the shared SESSIONS/TREE width; Keybindings lists all five scopes; Theme follows pi. Editing, saving, resetting and theme selection are not implemented yet. The config file is never written by this preview.
+
+| Fixed key inside settings | Action |
+| --- | --- |
+| `Tab` / `Shift+Tab` | Cycle categories, item list and the Close button |
+| `j/k/↑/↓` | Select a category or item; lists scroll to keep the item visible |
+| `Enter` | Move from categories to the list, or activate Close; never edit an item |
+| `h/l/←/→` in the keybinding list | Cycle binding scopes |
+| `PageUp` / `PageDown` in the item list | Scroll a long item description / binding value |
+| `Esc` / `q` | Close settings, preserving the underlying browsing state |
+
+The management keys above are fixed, independent of custom keymaps. The popup opens/closes with a short (~120ms) vertical reveal, uses a compact layout on narrow terminals, and blocks background mouse actions throughout the transition. Keybinding rows show **only the selected scope's own bindings**; “No local binding” does not mean other scopes cannot bind that action. Inheritance, priority and disabled actions still determine execution.
+
 ## Custom keybindings
 
 ```json
@@ -71,6 +88,7 @@ Help uses a fixed 28-row popup (including borders), shrinking on smaller termina
 | `C` | `scope-current` | List scope: current folder |
 | `A` | `scope-all` | List scope: all |
 | `?` | `help` | Commands for the current pane: `j` / `k` / `↑` / `↓` select, `Enter` closes help and runs the selected command; `?` / `Esc` / `q` closes without running |
+| `,` | `settings-open` | Open the read-only plugin settings preview; fixed navigation and short open/close animation (see Settings preview above) |
 | `q` / `Ctrl+c` | `quit` | Quit the panel |
 | `@` | `changelog` | pi's changelog (`/changelog`) as a large popup: `j` `k` `↑` `↓` scroll, `Ctrl+d` / `Ctrl+u` half-page, `g` / `G` top / bottom, `Esc` / `q` / `@` close. The whole file renders slowly, so the popup first shows a spinning square `◰ Loading changelog…` in the center, then the content (cached, so a second `@` opens instantly). The newest version is on top (pi's own `/changelog` puts it last). Not available inside the tree dialog |
 | `Esc` | — (built-in, not configurable) | In order: discard an unfinished keystroke → clear the current pane's search → clear the SESSIONS multi-selection → return from archive to normal sessions → quit |

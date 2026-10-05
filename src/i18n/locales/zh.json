@@ -1,4 +1,36 @@
 {
+  "settings": {
+    "title": "设置",
+    "readOnly": "只读",
+    "readOnlyNotice": "仅供预览 · 暂不支持编辑和保存",
+    "categories": "分类",
+    "category": {
+      "general": "常规",
+      "layout": "布局",
+      "keybindings": "快捷键",
+      "theme": "主题"
+    },
+    "locale": "界面语言",
+    "language": { "en": "English", "zh": "简体中文" },
+    "systemLanguage": "跟随系统（{{language}}）",
+    "localeDescription": "打开插件时使用的语言；未指定时跟随系统语言。",
+    "defaultScope": "默认会话范围",
+    "defaultSort": "默认排序",
+    "defaultDescription": "打开面板时使用；临时切换当前会话列表不会改变此默认配置。",
+    "scope": { "current-folder": "当前目录", "all": "全部目录" },
+    "sort": { "recent": "最近更新", "created": "创建时间", "title": "标题", "threaded": "分叉关系" },
+    "leftWidth": "左栏宽度",
+    "widthDescription": "左上会话与左下对话树共用此宽度，右侧内容占剩余宽度。范围 15%～60%，默认 25%；窄终端可能限制实际列宽。",
+    "unbound": "本层无绑定",
+    "layerDescription": "仅显示本层，不展开继承；本层无绑定不代表其他作用域无绑定。实际响应还受焦点、优先级及禁用规则影响。",
+    "noBindings": "此作用域没有绑定",
+    "followPi": "跟随 pi",
+    "themeDescription": "当前使用 pi 的主题；后续在这里增加插件主题选择，暂不写入主题配置。",
+    "switchRegion": "切区域",
+    "switchScope": "切作用域",
+    "scrollDetails": "滚动说明",
+    "close": "关闭"
+  },
   "alert": {
     "cannotDeleteActive": "不能删除当前会话",
     "ok": "知道了"
@@ -24,6 +56,7 @@
     "import": "导入",
     "share": "分享",
     "changelog": "更新日志",
+    "settings": "设置",
     "compact": "压缩",
     "visual": "可视",
     "preview": "预览"
@@ -86,6 +119,7 @@
     "search": "在当前面板内搜索",
     "search-next": "下一个搜索匹配",
     "search-prev": "上一个搜索匹配",
+    "settings-open": "打开插件设置（只读预览）",
     "changelog": "查看 pi 的更新日志（/changelog）",
     "move-down": "光标下移",
     "move-up": "光标上移",
