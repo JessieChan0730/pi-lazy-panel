@@ -194,7 +194,7 @@ export class SettingsDialog {
 			const categoryStart = clamp(SETTINGS_CATEGORIES.indexOf(state.category) - (areaHeight - 2), 0, SETTINGS_CATEGORIES.length - 1);
 			area = Array.from({ length: areaHeight }, (_, i) => {
 				const cat = SETTINGS_CATEGORIES[i - 1 + categoryStart];
-				const left = i === 0 ? theme.fg("muted", fit(t("settings.categories"), sidebarWidth)) : cat ? this.selected(t(`settings.category.${cat}`), sidebarWidth, cat === state.category, state.region === "categories") : fit("", sidebarWidth);
+				const left = i === 0 ? fit("", sidebarWidth) : cat ? this.selected(t(`settings.category.${cat}`), sidebarWidth, cat === state.category, state.region === "categories") : fit("", sidebarWidth);
 				const right = i === 0 ? theme.bold(theme.fg("accent", heading)) : content[i - 1] ?? "";
 				return `${left} ${theme.fg("borderMuted", "│")} ${fit(right, contentWidth)}`;
 			});
