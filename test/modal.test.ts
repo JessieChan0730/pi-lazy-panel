@@ -116,7 +116,6 @@ test("every dialog uses the same subdued backdrop and keeps single-line accent b
 	changelog.setContent("# Changelog\n\nA change");
 	const state = createSettingsState();
 	state.phase = "open";
-	state.progress = 1;
 	const settings = new SettingsDialog({ state, config: DEFAULT_CONFIG, theme, onChange: () => {}, onClose: () => {} });
 	const widgets = [input, select, tree, info, usage, detail, changelog, settings];
 	const base = Array.from({ length: 26 }, () => `\x1b[31m${"x".repeat(100)}\x1b[39m`);

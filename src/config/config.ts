@@ -22,7 +22,19 @@ import { join } from "node:path";
 import { CONFIG_FILE_NAME, KEY_SCOPES, SESSION_SORT_MODES } from "../constants.ts";
 import { type Locale, SUPPORTED_LOCALES } from "../i18n/index.ts";
 import type { ActionId, KeyChord, Keymap, KeyScope, PaneKeymap, SessionSortMode, UserConfig, UserPaneKeymap } from "../types.ts";
+import type { ConfigSaveResult, ConfigSnapshot, GeneralSettingsPatch } from "./config-store.ts";
+import { readSnapshot, savePatch } from "./config-store.ts";
 import { DEFAULT_KEYMAP } from "./keymap.ts";
+
+export type { ConfigSaveResult, ConfigSnapshot, GeneralSettingsPatch } from "./config-store.ts";
+
+export function readConfigSnapshot(agentDir: string): Promise<ConfigSnapshot> {
+	return readSnapshot(join(agentDir, CONFIG_FILE_NAME));
+}
+
+export function saveConfigPatch(agentDir: string, baseline: ConfigSnapshot, patch: GeneralSettingsPatch): Promise<ConfigSaveResult> {
+	return savePatch(join(agentDir, CONFIG_FILE_NAME), baseline, patch);
+}
 
 /** Fully resolved configuration used at runtime. */
 export interface ResolvedConfig {

@@ -1,20 +1,17 @@
-/** Read-only settings browser. Configuration comes from the panel, never from disk. */
+/** Settings browser and draft editor. Configuration comes from the panel, never from disk. */
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import type { ResolvedConfig } from "../../config/config.ts";
 import { actionDescription, DEFAULT_KEYMAP, scopeTitle } from "../../config/keymap.ts";
 import { labelsFor, matchesKeyId } from "../../config/keys.ts";
-import { KEY_SCOPES } from "../../constants.ts";
-import { currentLocale, t } from "../../i18n/index.ts";
+import { t } from "../../i18n/index.ts";
 import type { ActionId, KeyHint } from "../../types.ts";
 import { clamp } from "../../utils/indices.ts";
 import { fit, frame, FRAME_DIVIDER, overlayCentered } from "../frame.ts";
-import { SETTINGS_CATEGORIES, type SettingsPosition, type SettingsRegion, type SettingsState } from "../settings-state.ts";
+import { settingsDirtyCount, settingsDraft, SETTINGS_CATEGORIES, type SettingsPosition, type SettingsRegion, type SettingsState } from "../settings-state.ts";
 import { dialogHeader } from "./dialog-header.ts";
 
-const FRAME_MS = 30;
-const FRAME_STEP = 1 / 4;
 const REGIONS: SettingsRegion[] = ["categories", "list", "buttons"];
 
 type SettingsSnapshot = Readonly<Omit<ResolvedConfig, "warnings">>;
@@ -32,10 +29,14 @@ export interface SettingsDialogOptions {
 	theme: Theme;
 	onChange: () => void;
 	onClose: () => void;
+	onExit?: () => void;
+	onEdit?: (id: string) => void;
+	onSave?: () => void;
+	onDefaults?: () => void;
+	onReload?: () => void;
 }
 
 export class SettingsDialog {
-	private timer: ReturnType<typeof setInterval> | undefined;
 	private disposed = false;
 
 	constructor(private readonly o: SettingsDialogOptions) {}
@@ -45,77 +46,69 @@ export class SettingsDialog {
 	}
 
 	get hints(): KeyHint[] {
-		const hints: KeyHint[] = [["Esc/q", t("hint.close")]];
-		if (this.o.state.phase !== "open") return hints;
-		hints.push(["Tab/Shift+Tab", t("settings.switchRegion")], ["j/k/↑↓", t("hint.move")]);
-		if (this.o.state.region === "list" && this.o.state.category === "keybindings") {
-			hints.push(["h/l/←→", t("settings.switchScope")]);
-		} else if (this.o.state.region !== "list") {
-			hints.push(["Enter", t(this.o.state.region === "buttons" ? "hint.close" : "hint.preview")]);
-		}
-		if (this.o.state.region === "list") hints.push(["PgUp/PgDn", t("settings.scrollDetails")]);
-		return hints;
+		return [["Esc/q", t("hint.close")], ["h/←", t("settings.categories")], ["l/→", t("settings.list")], ["Tab", t("settings.switchRegion")], ["j/k/↑↓", t("hint.move")], ["Enter", t("hint.choose")], ["s", t("settings.save")], ["d", t("settings.restore")], ["r", t("settings.reload")], ["PgUp/PgDn", t("settings.scrollDetails")]];
 	}
 
 	open(): void {
 		if (this.disposed || this.isOpen) return;
-		this.o.state.phase = "opening";
-		this.o.state.progress = 0;
+		this.o.state.phase = "open";
+		this.o.state.generation++;
+		this.o.state.saving = false;
 		this.o.state.region = "categories";
-		this.animate();
 		this.o.onChange();
 	}
 
 	close(): void {
-		if (!this.isOpen || this.o.state.phase === "closing") return;
-		this.o.state.phase = "closing";
-		this.animate();
+		if (!this.isOpen) return;
+		this.o.state.phase = "closed";
+		this.o.state.saving = false;
+		this.o.state.loading = false;
+		this.o.state.generation++;
+		this.o.onClose();
 		this.o.onChange();
-	}
-
-	private animate(): void {
-		this.stopTimer();
-		this.timer = setInterval(() => {
-			if (this.disposed) return;
-			const state = this.o.state;
-			state.progress = clamp(state.progress + (state.phase === "closing" ? -FRAME_STEP : FRAME_STEP), 0, 1);
-			if (state.progress === 0 || state.progress === 1) {
-				this.stopTimer();
-				state.phase = state.progress === 0 ? "closed" : "open";
-				if (state.phase === "closed") this.o.onClose();
-			}
-			this.o.onChange();
-		}, FRAME_MS);
-		this.timer.unref?.();
-	}
-
-	private stopTimer(): void {
-		if (this.timer) clearInterval(this.timer);
-		this.timer = undefined;
 	}
 
 	dispose(): void {
 		this.disposed = true;
-		this.stopTimer();
 		this.o.state.phase = "closed";
-		this.o.state.progress = 0;
+		this.o.state.saving = false;
+		this.o.state.loading = false;
+		this.o.state.generation++;
+	}
+
+	private exit(): void {
+		if (this.o.onExit) this.o.onExit();
+		else this.close();
 	}
 
 	handleInput(data: string): void {
-		if (!this.isOpen || this.disposed) return;
+		if (!this.isOpen || this.disposed || this.o.state.saving) return;
 		if (matchesKeyId(data, "escape") || matchesKeyId(data, "q")) {
-			this.close();
+			this.exit();
 			return;
 		}
-		// 收起完之前仍然是模态；展开时仅允许取消，不把导航或重复关闭漏给背景。
-		if (this.o.state.phase !== "open") return;
 		const state = this.o.state;
 		if (matchesKeyId(data, "tab") || matchesKeyId(data, "shift+tab")) {
 			const step = matchesKeyId(data, "shift+tab") ? -1 : 1;
 			state.region = REGIONS[(REGIONS.indexOf(state.region) + step + REGIONS.length) % REGIONS.length]!;
+		} else if (matchesKeyId(data, "h") || matchesKeyId(data, "left")) {
+			state.region = "categories";
+		} else if (matchesKeyId(data, "l") || matchesKeyId(data, "right")) {
+			state.region = "list";
+		} else if (matchesKeyId(data, "s")) {
+			this.o.onSave?.();
+		} else if (matchesKeyId(data, "d")) {
+			this.o.onDefaults?.();
+		} else if (matchesKeyId(data, "r")) {
+			this.o.onReload?.();
 		} else if (matchesKeyId(data, "return")) {
-			if (state.region === "buttons") this.close();
-			else if (state.region === "categories") state.region = "list";
+			if (state.region === "buttons") {
+				if (state.button === 0) this.o.onSave?.();
+				else if (state.button === 1) this.exit();
+				else if (state.button === 2) this.o.onDefaults?.();
+				else this.o.onReload?.();
+			} else if (state.region === "categories") state.region = "list";
+			else this.o.onEdit?.(this.items()[this.position().cursor]?.id ?? "");
 		} else if (matchesKeyId(data, "j") || matchesKeyId(data, "down")) {
 			this.move(1);
 		} else if (matchesKeyId(data, "k") || matchesKeyId(data, "up")) {
@@ -123,11 +116,6 @@ export class SettingsDialog {
 		} else if (state.region === "list" && (matchesKeyId(data, "pageup") || matchesKeyId(data, "pagedown"))) {
 			const position = this.position();
 			position.detailScroll = Math.max(0, position.detailScroll + (matchesKeyId(data, "pageup") ? -3 : 3));
-		} else if (state.region === "list" && state.category === "keybindings") {
-			let step = 0;
-			if (matchesKeyId(data, "h") || matchesKeyId(data, "left")) step = -1;
-			if (matchesKeyId(data, "l") || matchesKeyId(data, "right")) step = 1;
-			state.keyScope = KEY_SCOPES[(KEY_SCOPES.indexOf(state.keyScope) + step + KEY_SCOPES.length) % KEY_SCOPES.length]!;
 		}
 		this.o.onChange();
 	}
@@ -140,6 +128,8 @@ export class SettingsDialog {
 			const position = this.position();
 			position.cursor = clamp(position.cursor + delta, 0, Math.max(0, this.items().length - 1));
 			position.detailScroll = 0;
+		} else {
+			state.button = clamp(state.button + delta, 0, 3);
 		}
 	}
 
@@ -150,11 +140,12 @@ export class SettingsDialog {
 	}
 
 	private items(): SettingsItem[] {
-		const { config, state } = this.o;
+		const { state } = this.o;
+		const config = settingsDraft(state) ?? this.o.config;
 		switch (state.category) {
 			case "general":
 				return [
-					{ id: "locale", label: t("settings.locale"), value: config.locale ? t(`settings.language.${config.locale}`) : t("settings.systemLanguage", { language: t(`settings.language.${currentLocale()}`) }), description: t("settings.localeDescription") },
+					{ id: "locale", label: t("settings.locale"), value: config.locale ? t(`settings.language.${config.locale}`) : t("settings.system"), description: t("settings.localeDescription") },
 					{ id: "defaultScope", label: t("settings.defaultScope"), value: t(`settings.scope.${config.defaultScope}`), description: t("settings.defaultDescription") },
 					{ id: "defaultSort", label: t("settings.defaultSort"), value: t(`settings.sort.${config.defaultSort}`), description: t("settings.defaultDescription") },
 				];
@@ -165,12 +156,12 @@ export class SettingsDialog {
 			case "keybindings": {
 				// 本层合并结果，不使用会展开继承的 help/labelsForFocus；默认表只用于保留已解绑的动作行。
 				const actions = new Set([...Object.keys(DEFAULT_KEYMAP[state.keyScope]), ...Object.keys(config.keymap[state.keyScope])]);
-				return [...actions].map((id) => ({
+				return [{ id: "keyScope", label: t("settings.keyScope"), value: scopeTitle(state.keyScope), description: t("settings.layerDescription") }, ...[...actions].map((id) => ({
 					id,
 					label: actionDescription(id as ActionId),
 					value: labelsFor(config.keymap, state.keyScope, id as ActionId).join(" / ") || t("settings.unbound"),
 					description: t("settings.layerDescription"),
-				}));
+				}))];
 			}
 		}
 	}
@@ -182,19 +173,21 @@ export class SettingsDialog {
 		return focused ? theme.bg("selectedBg", theme.fg("accent", line)) : theme.fg("accent", line);
 	}
 
-	/** Lay out the complete final box, independent of animation progress. */
+	/** Lay out the complete box immediately, including draft and persistence status. */
 	render(width: number, height: number): string[] {
 		const { state, theme } = this.o;
 		if (width < 16 || height < 7) {
 			return Array.from({ length: Math.max(0, height) }, (_, i) => fit(i === 0 ? `Esc ${t("hint.close")}` : i === 1 ? t("settings.title") : "", width));
 		}
 		const inner = width - 2;
-		const areaHeight = height - 5; // borders + notice + divider + close button
+		const messages = [state.loading ? t("settings.loading") : state.saving ? t("settings.saving") : undefined, state.error, state.notice].filter((v): v is string => !!v);
+		const messageLines = messages.flatMap((message) => wrapTextWithAnsi(message, Math.max(1, inner - 2))).slice(0, Math.max(1, height - 6));
+		const areaHeight = height - 4 - messageLines.length; // borders + divider + buttons
 		const wide = width >= 76;
 		const sidebarWidth = wide ? Math.max(16, ...SETTINGS_CATEGORIES.map((c) => visibleWidth(t(`settings.category.${c}`)) + 4)) : 0;
 		const contentWidth = wide ? inner - sidebarWidth - 3 : inner - 2;
 		const category = t(`settings.category.${state.category}`);
-		const heading = state.category === "keybindings" ? `${scopeTitle(state.keyScope)}  ·  h/l/←→` : category;
+		const heading = state.category === "general" ? category : `${category} · ${t("settings.readOnly")}`;
 		let area: string[];
 		if (wide) {
 			const content = this.renderContent(contentWidth, areaHeight - 1);
@@ -206,21 +199,32 @@ export class SettingsDialog {
 				return `${left} ${theme.fg("borderMuted", "│")} ${fit(right, contentWidth)}`;
 			});
 		} else {
-			const title = `${SETTINGS_CATEGORIES.indexOf(state.category) + 1}/4 ${category}`;
+			const title = `${SETTINGS_CATEGORIES.indexOf(state.category) + 1}/4 ${heading}`;
 			area = [this.selected(title, inner, true, state.region === "categories")];
-			if (state.category === "keybindings" && areaHeight > 2) area.push(` ${heading}`);
 			area.push(...this.renderContent(contentWidth, areaHeight - area.length).map((line) => ` ${line}`));
 		}
-		const close = this.selected(`[ ${t("settings.close")} ]`, inner, state.region === "buttons", state.region === "buttons");
+		const buttons = [`s ${t("settings.save")}`, `q ${t("hint.cancel")}`, `d ${t("settings.restore")}`, `r ${t("settings.reload")}`];
+		const renderButton = (i: number, text: string, width: number): string => {
+			const selected = state.region === "buttons" && state.button === i;
+			const disabled = state.saving || (i === 0
+				? !state.baseline || !settingsDirtyCount(state) || state.loading
+				: i === 2
+					? state.category !== "general" || !state.baseline || state.loading
+					: i === 3 && state.loading);
+			return disabled
+				? theme.fg("dim", fit(`${selected ? "›" : " "} ${text}`, width))
+				: this.selected(text, width, selected, state.region === "buttons");
+		};
+		const close = buttons.map((label, i) => renderButton(i, `[ ${label} ]`, visibleWidth(label) + 6)).join(" ");
 		return frame([
-			theme.fg("dim", fit(` ${t("settings.readOnlyNotice")}`, inner)),
 			...area,
+			...messageLines.map((line) => theme.fg(state.error ? "error" : "muted", ` ${line}`)),
 			FRAME_DIVIDER,
-			close,
+			fit(width < 76 ? renderButton(state.button, `[ ${buttons[state.button]} ] ${state.button + 1}/4`, inner) : close, inner),
 		], {
 			width,
 			height,
-			...dialogHeader(width, `${t("settings.title")} · ${t("settings.readOnly")}`),
+			...dialogHeader(width, `${t("settings.title")}${settingsDirtyCount(state) ? ` · ${t("settings.unsaved", { count: settingsDirtyCount(state) })}` : ""}`),
 			border: (s) => theme.fg("borderAccent", s),
 			titleStyle: (s) => theme.bold(theme.fg("accent", s)),
 			metaStyle: (s) => theme.fg("dim", s),
@@ -230,7 +234,7 @@ export class SettingsDialog {
 	private renderContent(width: number, height: number): string[] {
 		if (height <= 0) return [];
 		const { theme, state } = this.o;
-		const items = this.items();
+		const items = this.items().map((item) => ({ ...item, label: `${Object.hasOwn(state.patch, item.id) ? "* " : ""}${item.label}` }));
 		const pos = this.position();
 		pos.cursor = clamp(pos.cursor, 0, Math.max(0, items.length - 1));
 		const item = items[pos.cursor];
@@ -268,10 +272,6 @@ export class SettingsDialog {
 		const width = Math.max(0, Math.min(termW, termW - (termW >= 24 ? 4 : 0), 112));
 		const height = Math.max(0, Math.min(lines.length, lines.length - (lines.length >= 9 ? 2 : 0), 30));
 		const full = this.render(width, height);
-		// 先排终态再裁切：固定顶部与文字位置，只让底边向下展开，避免每帧重排/居中跳动。
-		const shown = Math.min(height, Math.max(2, Math.round(height * this.o.state.progress)));
-		const box = shown < height ? [...full.slice(0, shown - 1), full[height - 1]!] : full;
-		const top = Math.max(0, Math.floor((lines.length - height) / 2));
-		return overlayCentered(lines, box, width, termW, (s) => this.o.theme.fg("dim", s), top);
+		return overlayCentered(lines, full, width, termW, (s) => this.o.theme.fg("dim", s));
 	}
 }

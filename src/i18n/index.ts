@@ -1,8 +1,8 @@
 /**
  * i18n — the only module that knows about i18next and the locale files.
  *
- * 整个插件的 UI 文案都走这里的 `t()`。语言在一次会话里固定：`initI18n()` 打开面板前调用一次，
- * 按系统语言（环境变量 / Intl）决定用中文还是英文，没覆盖到的语言回退英文（fallback）。
+ * 整个插件的 UI 文案都走这里的 `t()`：打开面板前调用 `initI18n()`，设置保存后也可切换语言。
+ * 按系统语言（环境变量 / Intl）或配置覆盖决定用中文还是英文，未覆盖的语言回退英文（fallback）。
  *
  * 用法约定（重要）：
  *   - 不要在模块顶层用 `t()` 计算 `export const`——那会在 import 期求值，可能早于 `initI18n()`。

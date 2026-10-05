@@ -11,10 +11,17 @@
  */
 
 import type { ContextUsageInfo, EnterOutcome, PanelMode, SessionInfo, SessionRow, TreeFilter } from "../../types.ts";
-import type { ActionSource, DataSource } from "../ports.ts";
+import type { ActionSource, DataSource, SettingsSource } from "../ports.ts";
 import type { PanelState } from "../state.ts";
 import type { InputDialogSpec } from "../widgets/input-dialog.ts";
 import type { SelectDialogSpec } from "../widgets/select-dialog.ts";
+
+export interface SettingsFlowHost extends FlowHost {
+	readonly settingsSource: SettingsSource | undefined;
+	closeSettings(): void;
+	refreshSettings(): void;
+	refreshLocale(): void;
+}
 
 export interface FlowHost {
 	/** Shared UI state, including the persisted pin / archive snapshot. */
