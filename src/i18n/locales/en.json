@@ -23,6 +23,7 @@
     "discardExit": "Discard changes and exit",
     "discardConfirm": "Discard unsaved settings?",
     "restoreConfirm": "Restore General defaults in the draft?",
+    "restoreLayoutConfirm": "Restore Layout defaults in the draft?",
     "reloadConfirm": "Discard the draft and reload settings?",
     "categories": "Categories",
     "category": {
@@ -42,6 +43,9 @@
     "sort": { "recent": "Recently updated", "created": "Creation time", "title": "Title", "threaded": "Fork relationships" },
     "leftWidth": "Left column width",
     "widthDescription": "SESSIONS and TREE share this width; CONTENT uses the rest. Range: 15–60%, default: 25%. Narrow terminals may limit the actual width.",
+    "widthRange": "Range {{min}}–{{max}}%",
+    "widthStep": "±1%",
+    "widthInvalid": "Enter a number between {{min}} and {{max}}",
     "unbound": "No local binding",
     "layerDescription": "This scope only; inheritance is not expanded. Other scopes may still bind this action. Focus, priority and disabled actions affect execution.",
     "noBindings": "No bindings in this scope",

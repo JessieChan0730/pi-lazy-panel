@@ -23,6 +23,7 @@
     "discardExit": "放弃修改并退出",
     "discardConfirm": "放弃未保存的设置？",
     "restoreConfirm": "在草稿中恢复常规默认设置？",
+    "restoreLayoutConfirm": "在草稿中恢复布局默认设置？",
     "reloadConfirm": "放弃草稿并重新读取设置？",
     "categories": "分类",
     "category": {
@@ -42,6 +43,9 @@
     "sort": { "recent": "最近更新", "created": "创建时间", "title": "标题", "threaded": "分叉关系" },
     "leftWidth": "左栏宽度",
     "widthDescription": "左上会话与左下对话树共用此宽度，右侧内容占剩余宽度。范围 15%～60%，默认 25%；窄终端可能限制实际列宽。",
+    "widthRange": "范围 {{min}}%～{{max}}%",
+    "widthStep": "±1%",
+    "widthInvalid": "请输入 {{min}} 到 {{max}} 之间的数字",
     "unbound": "本层无绑定",
     "layerDescription": "仅显示本层，不展开继承；本层无绑定不代表其他作用域无绑定。实际响应还受焦点、优先级及禁用规则影响。",
     "noBindings": "此作用域没有绑定",

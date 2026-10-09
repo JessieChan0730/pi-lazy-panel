@@ -8,7 +8,8 @@ import { labelsFor, matchesKeyId } from "../../config/keys.ts";
 import { t } from "../../i18n/index.ts";
 import type { ActionId, KeyHint } from "../../types.ts";
 import { clamp } from "../../utils/indices.ts";
-import { fit, frame, FRAME_DIVIDER, overlayCentered } from "../frame.ts";
+import { fit, frame, FRAME_DIVIDER, overlayCentered, sideBySide } from "../frame.ts";
+import { panelGeometry } from "../mouse.ts";
 import { settingsDirtyCount, settingsDraft, SETTINGS_CATEGORIES, type SettingsPosition, type SettingsRegion, type SettingsState } from "../settings-state.ts";
 import { dialogHeader } from "./dialog-header.ts";
 
@@ -174,7 +175,7 @@ export class SettingsDialog {
 	}
 
 	/** Lay out the complete box immediately, including draft and persistence status. */
-	render(width: number, height: number): string[] {
+	render(width: number, height: number, termW = width): string[] {
 		const { state, theme } = this.o;
 		if (width < 16 || height < 7) {
 			return Array.from({ length: Math.max(0, height) }, (_, i) => fit(i === 0 ? `Esc ${t("hint.close")}` : i === 1 ? t("settings.title") : "", width));
@@ -187,10 +188,10 @@ export class SettingsDialog {
 		const sidebarWidth = wide ? Math.max(16, ...SETTINGS_CATEGORIES.map((c) => visibleWidth(t(`settings.category.${c}`)) + 4)) : 0;
 		const contentWidth = wide ? inner - sidebarWidth - 3 : inner - 2;
 		const category = t(`settings.category.${state.category}`);
-		const heading = state.category === "general" ? category : `${category} · ${t("settings.readOnly")}`;
+		const heading = state.category === "general" || state.category === "layout" ? category : `${category} · ${t("settings.readOnly")}`;
 		let area: string[];
 		if (wide) {
-			const content = this.renderContent(contentWidth, areaHeight - 1);
+			const content = this.renderContent(contentWidth, areaHeight - 1, termW);
 			const categoryStart = clamp(SETTINGS_CATEGORIES.indexOf(state.category) - (areaHeight - 2), 0, SETTINGS_CATEGORIES.length - 1);
 			area = Array.from({ length: areaHeight }, (_, i) => {
 				const cat = SETTINGS_CATEGORIES[i - 1 + categoryStart];
@@ -201,7 +202,7 @@ export class SettingsDialog {
 		} else {
 			const title = `${SETTINGS_CATEGORIES.indexOf(state.category) + 1}/4 ${heading}`;
 			area = [this.selected(title, inner, true, state.region === "categories")];
-			area.push(...this.renderContent(contentWidth, areaHeight - area.length).map((line) => ` ${line}`));
+			area.push(...this.renderContent(contentWidth, areaHeight - area.length, termW).map((line) => ` ${line}`));
 		}
 		const buttons = [`s ${t("settings.save")}`, `q ${t("hint.cancel")}`, `d ${t("settings.restore")}`, `r ${t("settings.reload")}`];
 		const renderButton = (i: number, text: string, width: number): string => {
@@ -231,7 +232,7 @@ export class SettingsDialog {
 		});
 	}
 
-	private renderContent(width: number, height: number): string[] {
+	private renderContent(width: number, height: number, termW = width): string[] {
 		if (height <= 0) return [];
 		const { theme, state } = this.o;
 		const items = this.items().map((item) => ({ ...item, label: `${Object.hasOwn(state.patch, item.id) ? "* " : ""}${item.label}` }));
@@ -239,6 +240,8 @@ export class SettingsDialog {
 		pos.cursor = clamp(pos.cursor, 0, Math.max(0, items.length - 1));
 		const item = items[pos.cursor];
 		if (!item) return [fit(t("settings.noBindings"), width)];
+		// 布局分类单独排版：唯一一项下方画一张三栏小样，随草稿比例实时变化。
+		if (state.category === "layout") return this.renderLayout(item, width, height, termW);
 		const detail = [item.id, `${item.label}: ${item.value}`, item.description].filter(Boolean).flatMap((text) => wrapTextWithAnsi(text, Math.max(1, width)));
 		const detailHeight = height >= 8 ? Math.min(detail.length, Math.floor(height / 2)) : 0;
 		const listHeight = height - (detailHeight ? detailHeight + 1 : 0);
@@ -268,10 +271,63 @@ export class SettingsDialog {
 		return lines;
 	}
 
+	/** 布局分类：唯一一项 + 下方三栏小样 + 说明，随草稿比例实时变化。 */
+	private renderLayout(item: SettingsItem, width: number, height: number, termW: number): string[] {
+		const { theme, state } = this.o;
+		const valueWidth = Math.min(Math.max(12, visibleWidth(item.value)), Math.floor(width / 2));
+		const lines: string[] = [this.selected(`${fit(item.label, Math.max(0, width - valueWidth - 4))}  ${fit(item.value, valueWidth)}`, width, true, state.region === "list")];
+		const draft = settingsDraft(state) ?? this.o.config;
+		const preview = this.layoutPreview(width, Math.min(Math.max(0, height - lines.length), 9), termW, draft.leftColumnRatio);
+		if (preview.length) {
+			lines.push("");
+			lines.push(...preview);
+		}
+		const remaining = height - lines.length;
+		if (remaining >= 2) {
+			lines.push(theme.fg("dim", fit("─".repeat(width), width)));
+			lines.push(...wrapTextWithAnsi(item.description, Math.max(1, width)).slice(0, remaining - 1).map((line) => theme.fg("muted", fit(line, width))));
+		}
+		while (lines.length < height) lines.push("");
+		return lines.slice(0, height);
+	}
+
+	/**
+	 * 布局小样：把三栏按 `ratio` 画成一个占位终端。左列宽用真实终端宽度算出后等比缩进小样，
+	 * 和真机所见一致（含 panelGeometry 的最小宽度兜底）。几何与鼠标 / 面板共用同一函数。
+	 */
+	private layoutPreview(width: number, height: number, termW: number, ratio: number): string[] {
+		const { theme } = this.o;
+		if (width < 16 || height < 5) return [];
+		const inner = width - 2; // 外框左右边框
+		const innerH = height - 2; // 外框上下边框
+		const real = panelGeometry(Math.max(1, termW), 10, ratio);
+		const leftW = clamp(Math.round(inner * (real.leftW / Math.max(1, termW))), 1, inner - 1);
+		const rightW = inner - leftW;
+		const sessionsRows = clamp(Math.floor(innerH / 2), 1, Math.max(1, innerH - 2));
+		const centered = (text: string, w: number): string => {
+			if (w <= 0) return "";
+			const show = visibleWidth(text) > w ? "" : text;
+			return fit(`${" ".repeat(Math.max(0, Math.floor((w - visibleWidth(show)) / 2)))}${show}`, w);
+		};
+		const left: string[] = [];
+		for (let i = 0; i < innerH; i++) {
+			if (i === sessionsRows) {
+				left.push("─".repeat(leftW)); // SESSIONS / TREE 分隔
+				continue;
+			}
+			const inSessions = i < sessionsRows;
+			const mid = inSessions ? Math.floor(sessionsRows / 2) : sessionsRows + 1 + Math.floor((innerH - sessionsRows - 1) / 2);
+			left.push(centered(i === mid ? (inSessions ? t("pane.sessionsTitle") : t("pane.treeTitle")) : "", leftW));
+		}
+		const right = Array.from({ length: innerH }, (_, i) => `│${centered(i === Math.floor(innerH / 2) ? t("pane.contentTitle") : "", rightW - 1)}`);
+		const body = sideBySide(left, right, leftW, rightW).map((line) => theme.fg("muted", line));
+		return frame(body, { width, height, title: "", border: (s) => theme.fg("borderMuted", s), titleStyle: (s) => theme.fg("muted", s) });
+	}
+
 	overlay(lines: string[], termW: number): string[] {
 		const width = Math.max(0, Math.min(termW, termW - (termW >= 24 ? 4 : 0), 112));
 		const height = Math.max(0, Math.min(lines.length, lines.length - (lines.length >= 9 ? 2 : 0), 30));
-		const full = this.render(width, height);
+		const full = this.render(width, height, termW);
 		return overlayCentered(lines, full, width, termW, (s) => this.o.theme.fg("dim", s));
 	}
 }

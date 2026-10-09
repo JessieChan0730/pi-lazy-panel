@@ -19,20 +19,20 @@
 
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { CONFIG_FILE_NAME, KEY_SCOPES, SESSION_SORT_MODES } from "../constants.ts";
+import { CONFIG_FILE_NAME, KEY_SCOPES, LEFT_COLUMN_RATIO, LEFT_COLUMN_RATIO_MAX, LEFT_COLUMN_RATIO_MIN, SESSION_SORT_MODES } from "../constants.ts";
 import { type Locale, SUPPORTED_LOCALES } from "../i18n/index.ts";
 import type { ActionId, KeyChord, Keymap, KeyScope, PaneKeymap, SessionSortMode, UserConfig, UserPaneKeymap } from "../types.ts";
-import type { ConfigSaveResult, ConfigSnapshot, GeneralSettingsPatch } from "./config-store.ts";
+import type { ConfigSaveResult, ConfigSnapshot, SettingsPatch } from "./config-store.ts";
 import { readSnapshot, savePatch } from "./config-store.ts";
 import { DEFAULT_KEYMAP } from "./keymap.ts";
 
-export type { ConfigSaveResult, ConfigSnapshot, GeneralSettingsPatch } from "./config-store.ts";
+export type { ConfigSaveResult, ConfigSnapshot, SettingsPatch } from "./config-store.ts";
 
 export function readConfigSnapshot(agentDir: string): Promise<ConfigSnapshot> {
 	return readSnapshot(join(agentDir, CONFIG_FILE_NAME));
 }
 
-export function saveConfigPatch(agentDir: string, baseline: ConfigSnapshot, patch: GeneralSettingsPatch): Promise<ConfigSaveResult> {
+export function saveConfigPatch(agentDir: string, baseline: ConfigSnapshot, patch: SettingsPatch): Promise<ConfigSaveResult> {
 	return savePatch(join(agentDir, CONFIG_FILE_NAME), baseline, patch);
 }
 
@@ -52,7 +52,7 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
 	keymap: DEFAULT_KEYMAP,
 	defaultScope: "current-folder",
 	defaultSort: "recent",
-	leftColumnRatio: 0.25,
+	leftColumnRatio: LEFT_COLUMN_RATIO,
 	warnings: [],
 };
 
@@ -108,7 +108,7 @@ export function resolveConfig(user: unknown): ResolvedConfig {
 
 	let leftColumnRatio = DEFAULT_CONFIG.leftColumnRatio;
 	if (u.leftColumnRatio !== undefined) {
-		if (typeof u.leftColumnRatio === "number" && u.leftColumnRatio >= 0.15 && u.leftColumnRatio <= 0.6) {
+		if (typeof u.leftColumnRatio === "number" && u.leftColumnRatio >= LEFT_COLUMN_RATIO_MIN && u.leftColumnRatio <= LEFT_COLUMN_RATIO_MAX) {
 			leftColumnRatio = u.leftColumnRatio;
 		} else {
 			warnings.push("config: leftColumnRatio must be a number between 0.15 and 0.6");

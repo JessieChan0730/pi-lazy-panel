@@ -39,13 +39,27 @@ test("settings values and local readonly notes replace global preview notice", (
 	assert.match(general, /Fork relationships/);
 	h.state.category = "layout";
 	assert.match(h.text(), /40%/);
-	assert.match(h.text(), /Read-only/);
-	assert.match(h.text(60), /Layout · Read-only/);
+	// 布局分类现在可编辑（不再是只读），narrow 标题只显示分类名。
+	assert.doesNotMatch(h.text(), /Read-only/);
+	assert.match(h.text(60), /2\/4 Layout/);
+	assert.doesNotMatch(h.text(60), /Layout · Read-only/);
 	h.state.category = "theme";
 	assert.match(h.text(60), /Theme · Read-only/);
 	assert.match(h.text(), /Follow pi/);
 	assert.deepEqual(config, before);
 	assert.match(makeDialog().text(), /Follow system/);
+});
+test("layout category draws a three-pane preview that tracks the draft ratio", () => {
+	const narrow = makeDialog(resolveConfig({ leftColumnRatio: 0.2 }));
+	narrow.state.category = "layout";
+	const wide = makeDialog(resolveConfig({ leftColumnRatio: 0.5 }));
+	wide.state.category = "layout";
+	const a = narrow.text();
+	assert.match(a, /SESSIONS/);
+	assert.match(a, /TREE/);
+	assert.match(a, /CONTENT/);
+	// 不同比例下小样分隔线位置不同，整幅渲染必然不一样。
+	assert.notEqual(a, wide.text());
 });
 test("action shortcuts work from categories and list without focusing buttons", () => {
 	for (const region of ["categories", "list"] as const) {

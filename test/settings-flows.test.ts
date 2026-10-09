@@ -56,7 +56,7 @@ function fixture(raw: Record<string, unknown> = {}, overrides: Partial<SettingsS
 			state.settings.generation++;
 		},
 		refreshSettings: () => { refreshes++; },
-		refreshLocale: () => { localeRefreshes++; },
+		refreshConfig: () => { localeRefreshes++; },
 	} as unknown as SettingsFlowHost;
 	return { host, state: state.settings, source, menu: () => menu, dispose: () => {
 		disposed = true;

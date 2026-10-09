@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import type { GeneralSettingsPatch } from "../src/config/config-store.ts";
+import type { SettingsPatch } from "../src/config/config-store.ts";
 import { readSnapshot, savePatch } from "../src/config/config-store.ts";
 import { readConfigSnapshot, saveConfigPatch } from "../src/config/config.ts";
 
@@ -79,9 +79,12 @@ test("three-way equality compares invalid raw objects structurally", async (t) =
 
 test("invalid patch fields and values are rejected before I/O", async (t) => {
 	const file = await fixture(t);
-	for (const patch of [{ keymap: {} }, { locale: "auto" }, { defaultSort: undefined }]) {
-		await assert.rejects(savePatch(file, { raw: {}, fingerprint: null }, patch as GeneralSettingsPatch), /Invalid General/);
+	for (const patch of [{ keymap: {} }, { locale: "auto" }, { defaultSort: undefined }, { leftColumnRatio: 0.9 }, { leftColumnRatio: "0.3" }]) {
+		await assert.rejects(savePatch(file, { raw: {}, fingerprint: null }, patch as SettingsPatch), /Invalid settings patch/);
 	}
+	// leftColumnRatio 在合法区间内可写入（null 清除、数字落盘）。
+	const saved = await savePatch(file, { raw: {}, fingerprint: null }, { leftColumnRatio: 0.4 });
+	assert.equal(saved.snapshot.raw.leftColumnRatio, 0.4);
 });
 
 test("rename and write failures preserve original and remove temporary files", async (t) => {

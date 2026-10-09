@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
+import { LEFT_COLUMN_RATIO_MAX, LEFT_COLUMN_RATIO_MIN } from "../constants.ts";
 
 export interface ConfigSnapshot {
 	raw: Record<string, unknown>;
@@ -10,10 +11,11 @@ export interface ConfigSnapshot {
 	fingerprint: string | null;
 }
 
-export interface GeneralSettingsPatch {
+export interface SettingsPatch {
 	locale?: "en" | "zh" | null;
 	defaultScope?: "all" | "current-folder" | null;
 	defaultSort?: "recent" | "created" | "title" | "threaded" | null;
+	leftColumnRatio?: number | null;
 }
 
 export interface ConfigSaveResult {
@@ -31,7 +33,7 @@ const FIELD_VALUES = {
 	locale: ["en", "zh"],
 	defaultScope: ["all", "current-folder"],
 	defaultSort: ["recent", "created", "title", "threaded"],
-} satisfies Record<keyof GeneralSettingsPatch, string[]>;
+} satisfies Record<Exclude<keyof SettingsPatch, "leftColumnRatio">, string[]>;
 
 /** Unlike loadConfig, this never converts a broken file to writable defaults. */
 export async function readSnapshot(file: string): Promise<ConfigSnapshot> {
@@ -61,7 +63,7 @@ export async function readSnapshot(file: string): Promise<ConfigSnapshot> {
 	return { raw: raw as Record<string, unknown>, fingerprint: fingerprint(bytes) };
 }
 
-export async function savePatch(file: string, baseline: ConfigSnapshot, patch: GeneralSettingsPatch, options: ConfigStoreOptions = {}): Promise<ConfigSaveResult> {
+export async function savePatch(file: string, baseline: ConfigSnapshot, patch: SettingsPatch, options: ConfigStoreOptions = {}): Promise<ConfigSaveResult> {
 	// Capture inputs before waiting for other processes; do not retain mutable UI state.
 	const base = structuredClone(baseline);
 	const changes = { ...patch };
@@ -88,7 +90,7 @@ export async function savePatch(file: string, baseline: ConfigSnapshot, patch: G
 	try {
 		const latest = await readSnapshot(file);
 		const raw = { ...latest.raw };
-		for (const field of Object.keys(changes) as (keyof GeneralSettingsPatch)[]) {
+		for (const field of Object.keys(changes) as (keyof SettingsPatch)[]) {
 			const desired = changes[field];
 			const sameDesired = desired === null ? !Object.hasOwn(latest.raw, field) : latest.raw[field] === desired;
 			const sameBase = Object.hasOwn(base.raw, field) === Object.hasOwn(latest.raw, field) &&
@@ -144,12 +146,12 @@ export async function savePatch(file: string, baseline: ConfigSnapshot, patch: G
 	return { snapshot, warnings: [] };
 }
 
-function validatePatch(patch: GeneralSettingsPatch): void {
+function validatePatch(patch: SettingsPatch): void {
 	for (const [field, value] of Object.entries(patch)) {
-		if (!Object.hasOwn(FIELD_VALUES, field) ||
-			(value !== null && !(FIELD_VALUES[field as keyof GeneralSettingsPatch] as readonly unknown[]).includes(value))) {
-			throw new Error(`Invalid General settings patch field ${field}`);
-		}
+		const valid = field === "leftColumnRatio"
+			? value === null || (typeof value === "number" && Number.isFinite(value) && value >= LEFT_COLUMN_RATIO_MIN && value <= LEFT_COLUMN_RATIO_MAX)
+			: Object.hasOwn(FIELD_VALUES, field) && (value === null || (FIELD_VALUES[field as keyof typeof FIELD_VALUES] as readonly unknown[]).includes(value));
+		if (!valid) throw new Error(`Invalid settings patch field ${field}`);
 	}
 }
 

@@ -190,7 +190,7 @@ export class LazyPanel implements Component, Focusable {
 	/** Session pi has open (see `LazyPanelOptions.currentSessionFile`): the one `d` must not delete. */
 	private readonly currentSessionFile: string | undefined;
 	private disposed = false;
-	private readonly ratio: number;
+	private ratio: number;
 	private readonly searchBar: SearchBar;
 	/** Shared centered text prompt: labelling a node, the custom summary instructions, renaming a session. */
 	private readonly inputDialog: InputDialog;
@@ -353,7 +353,8 @@ export class LazyPanel implements Component, Focusable {
 			settingsSource: o.settingsSource,
 			closeSettings: () => this.settingsDialog.close(),
 			refreshSettings: () => this.o.requestRender(),
-			refreshLocale: () => {
+			refreshConfig: (config) => {
+				this.ratio = config.leftColumnRatio;
 				// 正文排版含角色等本地化标题；仅清缓存，不重载会话或重置滚动位置。
 				this.contentViewport.setBlocks(this.contentViewport.blocks, this.contentViewport.leaf);
 				this.status = undefined;

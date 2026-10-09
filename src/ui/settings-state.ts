@@ -1,13 +1,13 @@
 /** Settings navigation and draft state, owned by PanelState. */
 
 import { resolveConfig, type ResolvedConfig } from "../config/config.ts";
-import type { ConfigSnapshot, GeneralSettingsPatch } from "../config/config-store.ts";
+import type { ConfigSnapshot, SettingsPatch } from "../config/config-store.ts";
 import type { KeyScope } from "../types.ts";
 
 export const SETTINGS_CATEGORIES = ["general", "layout", "keybindings", "theme"] as const;
 export type SettingsCategory = (typeof SETTINGS_CATEGORIES)[number];
 export type SettingsRegion = "categories" | "list" | "buttons";
-export type GeneralSetting = keyof GeneralSettingsPatch;
+export type EditableSetting = keyof SettingsPatch;
 
 export interface SettingsPosition {
 	cursor: number;
@@ -26,7 +26,7 @@ export interface SettingsState {
 	generation: number;
 	baseline: ConfigSnapshot | undefined;
 	config: ResolvedConfig | undefined;
-	patch: GeneralSettingsPatch;
+	patch: SettingsPatch;
 	loading: boolean;
 	saving: boolean;
 	error: string | undefined;
@@ -56,7 +56,7 @@ export function settingsDraft(state: SettingsState): ResolvedConfig | undefined 
 	return resolveConfig(raw);
 }
 
-export function setSettingsDraft<K extends GeneralSetting>(state: SettingsState, key: K, value: GeneralSettingsPatch[K]): void {
+export function setSettingsDraft<K extends EditableSetting>(state: SettingsState, key: K, value: SettingsPatch[K]): void {
 	if (!state.baseline || state.loading || state.saving) return;
 	const present = Object.hasOwn(state.baseline.raw, key);
 	// 改回隐式默认值也应清除草稿，不把没有 override 的字段变成显式配置。

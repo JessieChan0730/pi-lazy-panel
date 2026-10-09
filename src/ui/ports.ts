@@ -8,12 +8,12 @@
  */
 
 import type { ResolvedConfig } from "../config/config.ts";
-import type { ConfigSaveResult, ConfigSnapshot, GeneralSettingsPatch } from "../config/config-store.ts";
+import type { ConfigSaveResult, ConfigSnapshot, SettingsPatch } from "../config/config-store.ts";
 
 /** Configuration I/O and runtime language application are injected by the entry point. */
 export interface SettingsSource {
 	read(): Promise<ConfigSnapshot>;
-	save(baseline: ConfigSnapshot, patch: GeneralSettingsPatch): Promise<ConfigSaveResult>;
+	save(baseline: ConfigSnapshot, patch: SettingsPatch): Promise<ConfigSaveResult>;
 	apply(config: ResolvedConfig): void | Promise<void>;
 }
 
