@@ -49,16 +49,17 @@ test("settings values and local readonly notes replace global preview notice", (
 	assert.deepEqual(config, before);
 	assert.match(makeDialog().text(), /Follow system/);
 });
-test("layout category draws a three-pane preview that tracks the draft ratio", () => {
+test("layout category shows the ratio value and the width description in the detail box", () => {
 	const narrow = makeDialog(resolveConfig({ leftColumnRatio: 0.2 }));
 	narrow.state.category = "layout";
 	const wide = makeDialog(resolveConfig({ leftColumnRatio: 0.5 }));
 	wide.state.category = "layout";
 	const a = narrow.text();
-	assert.match(a, /SESSIONS/);
-	assert.match(a, /TREE/);
-	assert.match(a, /CONTENT/);
-	// 不同比例下小样分隔线位置不同，整幅渲染必然不一样。
+	assert.match(a, /20%/);
+	assert.match(wide.text(), /50%/);
+	// 不再画三栏小样，底部独立说明框承载宽度说明（提到三个面板）。
+	assert.match(a, /SESSIONS and TREE share this width/);
+	// 不同比例下显示的数值不同，整幅渲染必然不一样。
 	assert.notEqual(a, wide.text());
 });
 test("action shortcuts work from categories and list without focusing buttons", () => {
@@ -69,7 +70,7 @@ test("action shortcuts work from categories and list without focusing buttons", 
 		for (const key of ["s", "d", "r"]) h.dialog.handleInput(key);
 		assert.deepEqual(h.buttons, ["save", "defaults", "reload"]);
 		assert.equal(h.state.region, region);
-		const buttons = h.text().split("\n").at(-2)!;
+		const buttons = h.text().split("\n").find((l) => l.includes("[ s Save ]"))!;
 		assert.match(buttons, /s Save/);
 		assert.match(buttons, /q cancel/);
 		assert.match(buttons, /d Restore defaults/);
@@ -88,11 +89,12 @@ test("unavailable buttons are dimmed without an appended dash", () => {
 		onChange: () => {}, onClose: () => {},
 	});
 	state.baseline = { raw: {}, fingerprint: null };
-	const disabled = dialog.render(108, 28).at(-2)!;
+	const buttonLine = (): string => dialog.render(108, 28).find((l) => l.includes("[ s Save ]"))!;
+	const disabled = buttonLine();
 	assert.match(disabled, /\x1b\[2m +\[ s Save \]/);
 	assert.doesNotMatch(disabled, /—/);
 	setSettingsDraft(state, "locale", "zh");
-	assert.doesNotMatch(dialog.render(108, 28).at(-2)!, /\x1b\[2m +\[ s Save \]/);
+	assert.doesNotMatch(buttonLine(), /\x1b\[2m +\[ s Save \]/);
 });
 
 test("instant open/close marks closed before callback, is idempotent and has no timers", (ctx) => {
