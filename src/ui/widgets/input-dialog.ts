@@ -19,6 +19,7 @@
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Input, truncateToWidth } from "@earendil-works/pi-tui";
+import { matchesKeyId } from "../../config/keys.ts";
 import type { KeyHint } from "../../types.ts";
 import { dialogWidth, frame, metaBudget, overlayCentered } from "../frame.ts";
 
@@ -38,8 +39,18 @@ export interface InputDialogSpec {
 	subject?: string;
 	/** Footer hints while this prompt is open. */
 	hints: KeyHint[];
+	/** Optional percentage/number editor: arrows step by one, invalid input stays open. */
+	numeric?: { min: number; max: number; error: string };
 	onSubmit: (value: string) => void;
 	onCancel: () => void;
+}
+
+/** Decimal input only; blank, partial and out-of-range values remain editable. */
+export function numericInputValue(text: string, min: number, max: number): number | undefined {
+	const value = text.trim();
+	if (!/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(value)) return undefined;
+	const number = Number(value);
+	return Number.isFinite(number) && number >= min && number <= max ? number : undefined;
 }
 
 export interface InputDialogOptions {
@@ -52,6 +63,7 @@ export class InputDialog {
 	private input: Input;
 	private spec: InputDialogSpec | undefined;
 	private _focused = false;
+	private error: string | undefined;
 
 	constructor(private readonly o: InputDialogOptions) {
 		this.input = new Input({ prompt: "" });
@@ -79,6 +91,7 @@ export class InputDialog {
 	/** Start a prompt: a fresh field pre-filled with `spec.value`. */
 	open(spec: InputDialogSpec): void {
 		this.spec = spec;
+		this.error = undefined;
 		this.input = this.createInput(spec.value ?? "");
 		this.input.focused = this._focused;
 	}
@@ -93,7 +106,18 @@ export class InputDialog {
 	}
 
 	handleInput(data: string): void {
-		this.input.handleInput(data);
+		if (!this.spec) return;
+		this.error = undefined;
+		const numeric = this.spec.numeric;
+		if (numeric && (matchesKeyId(data, "left") || matchesKeyId(data, "right"))) {
+			const value = numericInputValue(this.input.getValue(), numeric.min, numeric.max);
+			if (value === undefined) this.error = numeric.error;
+			else {
+				const next = Math.max(numeric.min, Math.min(numeric.max, Number((value + (matchesKeyId(data, "left") ? -1 : 1)).toPrecision(15))));
+				this.input.setValue(String(next));
+				this.input.handleInput(END_KEY);
+			}
+		} else this.input.handleInput(data);
 		this.o.onChange();
 	}
 
@@ -106,9 +130,9 @@ export class InputDialog {
 		const field = ` ${this.input.render(Math.max(1, inner - 2))[0] ?? ""}`;
 		// 标题和说明之间至少留 3 个 ─，否则两者会贴在一起。
 		const meta = truncateToWidth(this.spec?.subject ?? "", metaBudget(width, title) - 3, "…", false);
-		return frame([field], {
+		return frame([field, ...(this.error ? [theme.fg("error", ` ${this.error}`)] : [])], {
 			width,
-			height: INPUT_DIALOG_HEIGHT,
+			height: INPUT_DIALOG_HEIGHT + (this.error ? 1 : 0),
 			title,
 			...(meta ? { meta } : {}),
 			border: (s) => theme.fg("borderAccent", s),
@@ -127,7 +151,11 @@ export class InputDialog {
 	private createInput(value: string): Input {
 		const input = new Input({ prompt: "" });
 		// 回调走 this.spec，而不是捕获当时的 spec：open 换了 spec 后旧 Input 也不会再被用到。
-		input.onSubmit = (v) => this.spec?.onSubmit(v);
+		input.onSubmit = (v) => {
+			const numeric = this.spec?.numeric;
+			if (numeric && numericInputValue(v, numeric.min, numeric.max) === undefined) this.error = numeric.error;
+			else this.spec?.onSubmit(v);
+		};
 		input.onEscape = () => this.spec?.onCancel();
 		input.setValue(value);
 		if (value) input.handleInput(END_KEY);

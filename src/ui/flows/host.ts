@@ -10,11 +10,19 @@
  * 弹窗流程对面板的全部依赖。flows 只认这个接口、不 import app.ts：分层清楚，也能用假 host 单测。
  */
 
+import type { ResolvedConfig } from "../../config/config.ts";
 import type { ContextUsageInfo, EnterOutcome, PanelMode, SessionInfo, SessionRow, TreeFilter } from "../../types.ts";
-import type { ActionSource, DataSource } from "../ports.ts";
+import type { ActionSource, DataSource, SettingsSource } from "../ports.ts";
 import type { PanelState } from "../state.ts";
 import type { InputDialogSpec } from "../widgets/input-dialog.ts";
 import type { SelectDialogSpec } from "../widgets/select-dialog.ts";
+
+export interface SettingsFlowHost extends FlowHost {
+	readonly settingsSource: SettingsSource | undefined;
+	closeSettings(): void;
+	refreshSettings(): void;
+	refreshConfig(config: ResolvedConfig): void;
+}
 
 export interface FlowHost {
 	/** Shared UI state, including the persisted pin / archive snapshot. */

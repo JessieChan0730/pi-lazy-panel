@@ -62,7 +62,8 @@ import type {
 } from "../types.ts";
 import { ContentViewport } from "./content-viewport.ts";
 import { toggleArchive, togglePin } from "./flows/archive-flows.ts";
-import type { FlowHost } from "./flows/host.ts";
+import type { SettingsFlowHost } from "./flows/host.ts";
+import { editSetting, exitSettings, readSettings, reloadSettings, restoreSettingsDefaults, saveSettings } from "./flows/settings-flows.ts";
 import {
 	confirmCloneSession,
 	confirmDeleteSession,
@@ -85,7 +86,7 @@ import { hitTest, listVisibleRows, type MouseTarget, panelGeometry } from "./mou
 import { renderContentPane } from "./panes/content-pane.ts";
 import { clampFirst, renderSessionsPane, scrollOffset, sessionAtLine, sessionFirstLine, sessionLineCount } from "./panes/sessions-pane.ts";
 import { renderTreePane } from "./panes/tree-pane.ts";
-import type { ActionSource, DataSource } from "./ports.ts";
+import type { ActionSource, DataSource, SettingsSource } from "./ports.ts";
 import { applySessionFileState, createInitialState, type PanelState } from "./state.ts";
 import { TreeView } from "./tree-view.ts";
 import { ChangelogDialog } from "./widgets/changelog-dialog.ts";
@@ -119,8 +120,10 @@ export interface LazyPanelOptions {
 	keymap?: Keymap;
 	initialState?: Partial<PanelState>;
 	leftColumnRatio?: number;
-	/** Configured defaults for the read-only settings page, independent of browsing state. */
+	/** Configured defaults for settings, independent of browsing state. */
 	configDefaults?: Pick<ResolvedConfig, "locale" | "defaultScope" | "defaultSort">;
+	/** Raw configuration persistence and save-time language application. */
+	settingsSource?: SettingsSource;
 	/** Initial footer status, e.g. config warnings. */
 	status?: string;
 	/** Extension version, shown muted at the far right of the footer. */
@@ -187,7 +190,7 @@ export class LazyPanel implements Component, Focusable {
 	/** Session pi has open (see `LazyPanelOptions.currentSessionFile`): the one `d` must not delete. */
 	private readonly currentSessionFile: string | undefined;
 	private disposed = false;
-	private readonly ratio: number;
+	private ratio: number;
 	private readonly searchBar: SearchBar;
 	/** Shared centered text prompt: labelling a node, the custom summary instructions, renaming a session. */
 	private readonly inputDialog: InputDialog;
@@ -203,7 +206,7 @@ export class LazyPanel implements Component, Focusable {
 	private readonly changelogDialog: ChangelogDialog;
 	private readonly settingsDialog: SettingsDialog;
 	/** What the dialog flows (./flows/) get from the panel; see `FlowHost`. */
-	private readonly flowHost: FlowHost;
+	private readonly flowHost: SettingsFlowHost;
 	/**
 	 * Every dialog / overlay, in the order they take the keys: the first open one
 	 * gets every key (`handleInput`) and gives the footer its hints (`renderBottom`),
@@ -281,6 +284,11 @@ export class LazyPanel implements Component, Focusable {
 			onClose: () => {
 				if (this.state.mode === "settings") this.state.mode = this.baseMode();
 			},
+			onExit: () => exitSettings(this.flowHost),
+			onEdit: (id) => editSetting(this.flowHost, id),
+			onSave: () => { void saveSettings(this.flowHost); },
+			onDefaults: () => restoreSettingsDefaults(this.flowHost),
+			onReload: () => reloadSettings(this.flowHost),
 		});
 		this.overlays = [
 			widgetOverlay(this.inputDialog),
@@ -342,6 +350,16 @@ export class LazyPanel implements Component, Focusable {
 			reloadTree: (file, entryId) => this.reloadTree(file, entryId),
 			setTreeFilter: (filter) => this.setTreeFilter(filter),
 			refreshSession: (file) => this.refreshSession(file),
+			settingsSource: o.settingsSource,
+			closeSettings: () => this.settingsDialog.close(),
+			refreshSettings: () => this.o.requestRender(),
+			refreshConfig: (config) => {
+				this.ratio = config.leftColumnRatio;
+				// 正文排版含角色等本地化标题；仅清缓存，不重载会话或重置滚动位置。
+				this.contentViewport.setBlocks(this.contentViewport.blocks, this.contentViewport.leaf);
+				this.status = undefined;
+				this.o.requestRender();
+			},
 		};
 	}
 
@@ -1730,6 +1748,7 @@ export class LazyPanel implements Component, Focusable {
 		this.keys.clear();
 		this.state.mode = "settings";
 		this.settingsDialog.open();
+		void readSettings(this.flowHost);
 	}
 
 	/** @: show pi's changelog. Rendering the whole file is slow, so the box opens with a loading spinner first. */

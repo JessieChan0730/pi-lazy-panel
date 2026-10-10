@@ -68,7 +68,8 @@ export function frame(body: string[], o: FrameOptions): string[] {
 }
 
 function topBorder(o: FrameOptions, inner: number): string {
-	const title = ` ${o.title} `;
+	// 标题为空时不画 " title " 段，顶边连成整条横线（避免 "┌─  ──┐" 中间的缺口）；meta 仍正常显示。
+	const title = o.title ? ` ${o.title} ` : "";
 	const meta = o.meta ? ` ${o.meta} ` : "";
 	const titleW = visibleWidth(title);
 	const metaW = visibleWidth(meta);
@@ -77,10 +78,11 @@ function topBorder(o: FrameOptions, inner: number): string {
 	if (fill < 0) {
 		// Not enough room: drop meta, then clip title.
 		const t = truncateToWidth(title, Math.max(0, inner - 2), "…", false);
-		return o.border(`┌─`) + o.titleStyle(t) + o.border("─".repeat(Math.max(0, inner - 1 - visibleWidth(t))) + "┐");
+		return o.border(`┌─`) + (t ? o.titleStyle(t) : "") + o.border("─".repeat(Math.max(0, inner - 1 - visibleWidth(t))) + "┐");
 	}
+	const styledTitle = title ? o.titleStyle(title) : "";
 	const metaPart = meta ? (o.metaStyle ?? o.titleStyle)(meta) + o.border("─") : "";
-	return o.border("┌─") + o.titleStyle(title) + o.border("─".repeat(fill)) + metaPart + o.border("┐");
+	return o.border("┌─") + styledTitle + o.border("─".repeat(fill)) + metaPart + o.border("┐");
 }
 
 /**

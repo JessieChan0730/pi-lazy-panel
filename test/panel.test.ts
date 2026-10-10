@@ -141,8 +141,7 @@ function makePanel(opts: { keymap?: typeof DEFAULT_KEYMAP; height?: number } = {
 	};
 }
 
-test("settings opens in all panes, owns keys and mouse throughout transitions, and preserves browsing state", async (ctx) => {
-	ctx.mock.timers.enable({ apis: ["setInterval"] });
+test("settings opens immediately in all panes, owns keys and mouse, and preserves browsing state", async () => {
 	for (const focus of ["sessions", "tree", "content"] as const) {
 		const h = makePanel();
 		await h.panel.load();
@@ -153,23 +152,19 @@ test("settings opens in all panes, owns keys and mouse throughout transitions, a
 		const before = structuredClone(h.panel.state);
 		h.panel.handleInput(",");
 		assert.equal(h.panel.state.mode, "settings");
-		assert.equal(h.panel.state.settings.phase, "opening");
+		assert.equal(h.panel.state.settings.phase, "open");
 		const click = () => h.panel.handleMouse(mouseEvent("click", 2, 3, { height: 20 }));
 		const wheel = () => h.panel.handleMouse(mouseEvent("wheel", 2, 3, { height: 20, wheelDelta: 1 }));
 		assert.deepEqual(click(), { handled: true });
 		assert.deepEqual(wheel(), { handled: true });
 		h.panel.handleInput("3");
 		h.panel.handleInput("d");
-		ctx.mock.timers.tick(120);
-		assert.match(h.text(120).join("\n"), /Settings · Read-only/);
+		assert.match(h.text(120).join("\n"), /Settings/);
+		assert.doesNotMatch(h.text(120).join("\n"), /Preview only|Settings · Read-only/);
 		assert.match(h.text(120).at(-1)!, /Esc\/q close/);
 		h.panel.handleInput("\x1b");
-		h.panel.handleInput("q");
-		h.panel.handleInput("\r");
-		assert.equal(h.panel.state.mode, "settings");
-		assert.equal(h.closed(), false);
-		assert.deepEqual(click(), { handled: true });
-		ctx.mock.timers.tick(120);
+		assert.equal(h.panel.state.settings.phase, "closed");
+		assert.equal(h.panel.state.mode, "normal");
 		assert.equal(h.closed(), false);
 		assert.deepEqual({ ...h.panel.state, settings: before.settings }, before);
 		h.panel.dispose();
@@ -185,7 +180,7 @@ test("settings supports remapped and multi-key entry, help execution and direct 
 	assert.equal(h.panel.state.settings.phase, "closed");
 	h.panel.handleInput("g");
 	h.panel.handleInput(",");
-	assert.equal(h.panel.state.settings.phase, "opening");
+	assert.equal(h.panel.state.settings.phase, "open");
 	h.panel.handleInput("q");
 	ctx.mock.timers.tick(120);
 	h.panel.handleInput("?");
@@ -193,13 +188,13 @@ test("settings supports remapped and multi-key entry, help execution and direct 
 	assert.ok(h.panel.state.helpCursor >= 0);
 	h.panel.handleInput("\r");
 	assert.equal(h.panel.state.helpOpen, false);
-	assert.equal(h.panel.state.settings.phase, "opening");
+	assert.equal(h.panel.state.settings.phase, "open");
 	const unbound = makePanel({ keymap: mergeKeymap(DEFAULT_KEYMAP, { global: { "settings-open": null } }) });
 	ctx.after(() => unbound.panel.dispose());
 	unbound.panel.handleInput(",");
 	assert.equal(unbound.panel.state.settings.phase, "closed");
 	unbound.panel.openSettings();
-	assert.equal(unbound.panel.state.settings.phase, "opening");
+	assert.equal(unbound.panel.state.settings.phase, "open");
 });
 
 test("settings entry cannot steal search input or keys from existing dialogs", async (ctx) => {
@@ -255,7 +250,7 @@ test("async info requested before settings stays above it and restores the corre
 	}
 });
 
-test("settings reports startup defaults, not temporary scope/sort, and both close paths stop animation", (ctx) => {
+test("settings reports startup defaults, not temporary scope/sort, and closing leaves no animation callbacks", (ctx) => {
 	ctx.mock.timers.enable({ apis: ["setInterval"] });
 	let renders = 0;
 	const panel = new LazyPanel({

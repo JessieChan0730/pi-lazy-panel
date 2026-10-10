@@ -7,6 +7,16 @@
  * 面板对外的两个端口：只读数据（DataSource）和副作用（ActionSource），由入口注入。
  */
 
+import type { ResolvedConfig } from "../config/config.ts";
+import type { ConfigSaveResult, ConfigSnapshot, SettingsPatch } from "../config/config-store.ts";
+
+/** Configuration I/O and runtime language application are injected by the entry point. */
+export interface SettingsSource {
+	read(): Promise<ConfigSnapshot>;
+	save(baseline: ConfigSnapshot, patch: SettingsPatch): Promise<ConfigSaveResult>;
+	apply(config: ResolvedConfig): void | Promise<void>;
+}
+
 import type {
 	ContentBlock,
 	ContextUsageInfo,

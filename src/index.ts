@@ -32,7 +32,7 @@ import {
 	shareSession,
 } from "./actions/session-actions.ts";
 import { copyNodeText, labelNode, restoreNode } from "./actions/tree-actions.ts";
-import { loadConfig } from "./config/config.ts";
+import { loadConfig, readConfigSnapshot, saveConfigPatch } from "./config/config.ts";
 import { loadSessionFileState, updateSessionFileState } from "./config/archive.ts";
 import { loadPiSettings } from "./config/pi-settings.ts";
 import { COMMAND_NAME } from "./constants.ts";
@@ -145,6 +145,11 @@ export default function (pi: ExtensionAPI) {
 						initialState: { scope: config.defaultScope, sort: config.defaultSort, treeFilter: piSettings.treeFilter },
 						leftColumnRatio: config.leftColumnRatio,
 						configDefaults: config,
+						settingsSource: {
+							read: () => readConfigSnapshot(getAgentDir()),
+							save: (baseline, patch) => saveConfigPatch(getAgentDir(), baseline, patch),
+							apply: (saved) => { initI18n(saved.locale); },
+						},
 						skipSummaryPrompt: piSettings.skipBranchSummaryPrompt,
 						// 打开时 SESSIONS 光标落到 pi 当前打开的会话上；新会话没有文件 / 还没列出时留在第一行。
 						...(currentFile ? { currentSessionFile: currentFile } : {}),
