@@ -53,10 +53,11 @@
       "add": "Add key…",
       "addTitle": "Add key",
       "save": "add",
+      "press": "Press a key…",
+      "undo": "undo",
       "remove": "Remove: {{key}}",
       "unbind": "Unbind (no key)",
-      "reset": "Reset to default",
-      "invalid": "Invalid key. Examples: j, ctrl+d, gg, G"
+      "reset": "Reset to default"
     },
     "layerDescription": "This scope only; inheritance is not expanded. Other scopes may still bind this action. Focus, priority and disabled actions affect execution.",
     "noBindings": "No bindings in this scope",

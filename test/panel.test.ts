@@ -2013,6 +2013,67 @@ test("InputDialog is a reusable 3-row prompt: title / value / subject / hints co
 	assert.equal(dlg.isOpen, false);
 });
 
+test("InputDialog capture mode records key presses instead of text", () => {
+	const submitted: string[] = [];
+	let cancelled = 0;
+	const dlg = new InputDialog({ theme: fakeTheme, onChange: () => {} });
+	const open = (): void => dlg.open({
+		title: "Add key", capture: true, placeholder: "Press a key…", hints: [["Enter", "add"]],
+		onSubmit: (v) => submitted.push(v), onCancel: () => cancelled++,
+	});
+
+	// 空的字段显示占位提示，还没有任何按键。
+	open();
+	const field = (): string => stripTerminalSequences(dlg.render(40)[1]!);
+	assert.ok(field().includes("Press a key…"), field());
+	// 释放事件和粘贴都不是单个按键，忽略掉。
+	dlg.handleInput("\x1b[103;1:3u");
+	dlg.handleInput("hello");
+	assert.ok(field().includes("Press a key…"), field());
+	// ctrl+d 录进来，字段显示成可读的 Ctrl+d；有按键时 Enter 保存原始 chord 文本。
+	dlg.handleInput("\x04");
+	assert.ok(field().includes("Ctrl+d"), field());
+	dlg.handleInput("\r");
+	assert.deepEqual(submitted, ["ctrl+d"]);
+	assert.equal(cancelled, 0);
+
+	// 多键序列按顺序累积（gg），Backspace 退回一步。
+	open();
+	dlg.handleInput("g");
+	dlg.handleInput("g");
+	assert.ok(field().includes("gg"), field());
+	dlg.handleInput("\x7f");
+	assert.ok(!field().includes("gg"), field());
+	dlg.handleInput("g");
+	dlg.handleInput("\r");
+	assert.deepEqual(submitted, ["ctrl+d", "g g"]);
+
+	// 序列为空时 Enter 当普通键录入（所以 enter 自己也能绑）；Backspace 是保留键，
+	// 只用来退回：没有可退的步骤时按它什么都不发生，永远录不进去。
+	open();
+	dlg.handleInput("\r");
+	dlg.handleInput("\r");
+	assert.deepEqual(submitted, ["ctrl+d", "g g", "enter"]);
+	open();
+	dlg.handleInput("\x7f");
+	dlg.handleInput("\x7f");
+	assert.ok(field().includes("Press a key…"), field());
+	dlg.handleInput("g");
+	dlg.handleInput("g");
+	dlg.handleInput("\x7f");
+	assert.ok(field().includes("g") && !field().includes("gg"), field());
+	dlg.handleInput("\x7f");
+	dlg.handleInput("\x7f");
+	assert.ok(field().includes("Press a key…"), field());
+	assert.deepEqual(submitted, ["ctrl+d", "g g", "enter"]);
+
+	// Esc 取消，不提交。
+	open();
+	dlg.handleInput("\x1b");
+	assert.equal(cancelled, 1);
+	assert.equal(submitted.length, 3);
+});
+
 test("SelectDialog is a reusable centered menu: items / cursor / subject / hints come from open()", () => {
 	const picked: number[] = [];
 	let cancelled = 0;

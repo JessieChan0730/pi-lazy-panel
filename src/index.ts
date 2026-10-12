@@ -44,6 +44,7 @@ import { filterSessions, listSessions, sortSessions } from "./data/sessions.ts";
 import { applyTreeFilter, loadTree } from "./data/tree.ts";
 import { LazyPanel } from "./ui/app.ts";
 import type { ActionSource, DataSource } from "./ui/ports.ts";
+import { attachKeyLog } from "./ui/key-log.ts";
 import { attachMouse } from "./ui/mouse-input.ts";
 import { mountPanelOverlay } from "./ui/overlay-lifecycle.ts";
 
@@ -121,6 +122,8 @@ export default function (pi: ExtensionAPI) {
 			let onOverlayHandle: ((handle: OverlayHandle) => void) | undefined;
 			// regular 模式下 pi 不开鼠标追踪，面板自己开；关闭时再关掉（fullscreen 由 pi 管，不碰）。
 			let disableMouse: (() => void) | undefined;
+			// 设了 LAZY_PANEL_KEY_LOG 才生效：把原始按键 dump 到文件，排查终端键位编码用。
+			let disableKeyLog: (() => void) | undefined;
 			const currentFile = ctx.sessionManager.getSessionFile();
 			const version = extensionVersion();
 
@@ -161,6 +164,7 @@ export default function (pi: ExtensionAPI) {
 					// fullscreen 模式 pi 已经开了鼠标并派给 overlay 的 handleMouse；regular 模式
 					// 由 attachMouse 自己开 SGR 上报并解析（fullscreen 下是 no-op）。
 					disableMouse = attachMouse(tui, panel);
+					disableKeyLog = attachKeyLog(tui);
 					if (args.trim() === "settings") panel.openSettings();
 					void panel.load();
 					return panel;
@@ -175,6 +179,7 @@ export default function (pi: ExtensionAPI) {
 			);
 			// 面板关闭后恢复终端自己的滚动 / 选择。
 			disableMouse?.();
+			disableKeyLog?.();
 		},
 	});
 }

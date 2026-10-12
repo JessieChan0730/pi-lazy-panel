@@ -129,9 +129,9 @@ export function editSetting(h: SettingsFlowHost, key: string): void {
 }
 /**
  * Edit the key bindings of one action in the current scope: a menu to add a
- * chord (typed in pi's chord syntax), remove an existing one, unbind the action
- * or reset it to the built-in default. Mutations reopen the menu so the list
- * stays visible for the next edit.
+ * chord (recorded by pressing the keys), remove an existing one, unbind the
+ * action or reset it to the built-in default. Mutations reopen the menu so the
+ * list stays visible for the next edit.
  */
 export function openBindingEditor(h: SettingsFlowHost, action: ActionId): void {
 	const s = h.state.settings;
@@ -162,15 +162,20 @@ export function openBindingEditor(h: SettingsFlowHost, action: ActionId): void {
 	});
 }
 
-/** Prompt for one new chord (validated with parseChord) to add to `action`. */
+/**
+ * Record one binding for `action`: the prompt captures key presses instead of
+ * text (`InputDialog`'s `capture` mode), so the user presses the key they want
+ * — including multi-key sequences like `gg`, confirmed with Enter — and never
+ * has to know pi's chord syntax.
+ */
 function openAddBinding(h: SettingsFlowHost, action: ActionId, chords: string[]): void {
 	const s = h.state.settings;
 	const scope = s.keyScope;
 	const generation = s.generation;
 	h.openPrompt("settings", {
 		title: t("settings.key.addTitle"), subject: scopeTitle(scope),
-		hints: [["Enter", t("settings.key.save")], ["Esc", t("hint.cancel")]],
-		validate: (text) => parseChord(text.trim()) ? undefined : t("settings.key.invalid"),
+		capture: true, placeholder: t("settings.key.press"),
+		hints: [["Enter", t("settings.key.save")], ["Backspace", t("settings.key.undo")], ["Esc", t("hint.cancel")]],
 		onSubmit: (text) => {
 			const chord = text.trim();
 			if (!parseChord(chord)) return;

@@ -53,10 +53,11 @@
       "add": "添加按键…",
       "addTitle": "添加按键",
       "save": "添加",
+      "press": "请按要绑定的键…",
+      "undo": "退回",
       "remove": "删除：{{key}}",
       "unbind": "解绑（无按键）",
-      "reset": "恢复默认",
-      "invalid": "无效按键。示例：j、ctrl+d、gg、G"
+      "reset": "恢复默认"
     },
     "layerDescription": "仅显示本层，不展开继承；本层无绑定不代表其他作用域无绑定。实际响应还受焦点、优先级及禁用规则影响。",
     "noBindings": "此作用域没有绑定",

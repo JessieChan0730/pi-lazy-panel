@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { mergeKeymap, resolveConfig } from "../src/config/config.ts";
 import { DEFAULT_KEYMAP } from "../src/config/keymap.ts";
-import { chordLabel, compileKeymap, labelsForFocus, matchesKeyId, normalizeKeyStep, parseChord, type ResolveResult, resolveKeys, scopeChain } from "../src/config/keys.ts";
+import { chordFromKeypress, chordLabel, compileKeymap, isReservedKey, labelsForFocus, matchesKeyId, normalizeKeyStep, parseChord, type ResolveResult, resolveKeys, scopeChain } from "../src/config/keys.ts";
 import { KeySequencer, PENDING_TIMEOUT_MS } from "../src/ui/key-sequencer.ts";
 
 /** Action of a resolve result, or undefined when it did not resolve to one. */
@@ -37,6 +37,36 @@ test("normalizeKeyStep: uppercase means shift, modifiers are ordered, named keys
 	assert.equal(normalizeKeyStep("+"), "+");
 	assert.equal(normalizeKeyStep("bogus"), undefined);
 	assert.equal(normalizeKeyStep("meta+x"), undefined);
+});
+
+test("reserved keys can never be bound, in any scope or form", () => {
+	// Esc is hard-coded by the panel, Backspace is the recorder's undo key.
+	for (const chord of ["escape", "esc", "Escape", "backspace", "Backspace"])
+		assert.equal(normalizeKeyStep(chord), undefined, chord);
+	assert.equal(isReservedKey("escape"), true);
+	assert.equal(isReservedKey(" Backspace "), true);
+	assert.equal(isReservedKey("ctrl+backspace"), false);
+	assert.equal(isReservedKey("enter"), false);
+	// With a modifier they are different keys, so they stay bindable …
+	assert.equal(normalizeKeyStep("ctrl+backspace"), "ctrl+backspace");
+	assert.deepEqual(parseChord("ctrl+backspace"), ["ctrl+backspace"]);
+	// … while the bare forms do not even parse, so they can never compile into a binding.
+	assert.equal(parseChord("escape"), undefined);
+	assert.equal(parseChord("backspace"), undefined);
+	assert.equal(parseChord("g backspace"), undefined);
+	const dropped = mergeKeymap(DEFAULT_KEYMAP, { global: { help: "escape", quit: "backspace" } });
+	assert.deepEqual(dropped.global.help, DEFAULT_KEYMAP.global.help, "the reserved value is dropped, the default stays");
+	assert.equal(compileKeymap(dropped).some((b) => b.chord === "escape" || b.chord === "backspace"), false);
+	// A hand-written reserved binding is dropped with a warning, not silently kept.
+	const warnings: string[] = [];
+	const merged = mergeKeymap(DEFAULT_KEYMAP, { sessions: { "session-resume": ["escape", "backspace"] } }, warnings);
+	assert.equal(warnings.length, 2);
+	assert.match(warnings[0]!, /"escape" is reserved/);
+	assert.equal(merged.sessions["session-resume"], "return", "the built-in default stays");
+	// A mixed list keeps the usable chords and only drops the reserved one.
+	const mixed: string[] = [];
+	assert.deepEqual(mergeKeymap(DEFAULT_KEYMAP, { global: { help: ["?", "escape"] } }, mixed).global.help, ["?"]);
+	assert.equal(mixed.length, 1);
 });
 
 test("parseChord: single keys, combos, verbatim sequences and spaced sequences", () => {
@@ -72,9 +102,67 @@ test("matchesKeyId: raw terminal bytes match canonical ids", () => {
 	assert.equal(matchesKeyId("\x1b[57365;2u", "f2"), false); // modifier mismatch
 	assert.equal(matchesKeyId("\x1b[57366u", "f2"), false); // F3 is not F2
 	assert.equal(matchesKeyId("\x1b[57365;1:3u", "f2"), false); // release never matches
+	// The whole functional-key family arrives as kitty CSI-u in a kitty terminal
+	// (herdr), and pi-tui only maps the keypad codepoints 57421–57426.
+	assert.ok(matchesKeyId("\x1b[57349u", "delete"));
+	assert.ok(matchesKeyId("\x1b[57349;5u", "ctrl+delete"));
+	assert.ok(matchesKeyId("\x1b[57348u", "insert"));
+	assert.ok(matchesKeyId("\x1b[57356u", "home"));
+	assert.ok(matchesKeyId("\x1b[57357u", "end"));
+	assert.ok(matchesKeyId("\x1b[57354u", "pageUp"));
+	assert.ok(matchesKeyId("\x1b[57355u", "pageDown"));
+	assert.ok(matchesKeyId("\x1b[57352u", "up"));
+	assert.equal(matchesKeyId("\x1b[57352;2u", "up"), false); // shift+up is not up
+	assert.equal(matchesKeyId("\x1b[57349u", "insert"), false);
 	// key release events never match
 	assert.equal(matchesKeyId("\x1b[103;1:3u", "g"), false);
 	assert.equal(matchesKeyId("x", "y"), false);
+});
+
+test("chordFromKeypress: raw bytes become the chord the recorder stores", () => {
+	// Plain keys, uppercase-as-shift, named keys.
+	assert.equal(chordFromKeypress("a"), "a");
+	assert.equal(chordFromKeypress("G"), "shift+g");
+	assert.equal(chordFromKeypress("?"), "?");
+	assert.equal(chordFromKeypress("+"), undefined); // pi-tui cannot match "+" back, so it is not offered
+	assert.equal(chordFromKeypress("\t"), "tab");
+	assert.equal(chordFromKeypress("\r"), "enter");
+	assert.equal(chordFromKeypress(" "), "space");
+	assert.equal(chordFromKeypress("\x7f"), "backspace");
+	assert.equal(chordFromKeypress("\x1b"), "escape");
+	// Modifiers, legacy and kitty forms of the same key.
+	assert.equal(chordFromKeypress("\x04"), "ctrl+d");
+	assert.equal(chordFromKeypress("\x1b[100;5u"), "ctrl+d");
+	assert.equal(chordFromKeypress("\x1b[Z"), "shift+tab");
+	assert.equal(chordFromKeypress("\x1b[A"), "up");
+	assert.equal(chordFromKeypress("\x1b[1;5A"), "ctrl+up");
+	assert.equal(chordFromKeypress("\x1b[63;2u"), "shift+?");
+	// Function keys: the legacy sequence and the kitty functional codepoint that
+	// pi-tui's parseKey does not know.
+	assert.equal(chordFromKeypress("\x1bOP"), "f1");
+	assert.equal(chordFromKeypress("\x1b[57365u"), "f2");
+	assert.equal(chordFromKeypress("\x1b[57365;2u"), "shift+f2");
+	assert.equal(chordFromKeypress("\x1b[57375u"), "f12");
+	// Same for the rest of the functional family: Delete / Home / PageUp … only
+	// arrive as kitty CSI-u in a kitty terminal, and pi-tui cannot parse them.
+	assert.equal(chordFromKeypress("\x1b[57349u"), "delete");
+	assert.equal(chordFromKeypress("\x1b[57348u"), "insert");
+	assert.equal(chordFromKeypress("\x1b[57356u"), "home");
+	assert.equal(chordFromKeypress("\x1b[57357u"), "end");
+	assert.equal(chordFromKeypress("\x1b[57354u"), "pageUp");
+	assert.equal(chordFromKeypress("\x1b[57349;5u"), "ctrl+delete");
+	// A lone modifier key is not a chord (Fn never reaches the terminal at all).
+	assert.equal(chordFromKeypress("\x1b[57441u"), undefined);
+	assert.equal(chordFromKeypress("\x1b[57442u"), undefined);
+	// Nothing to record: releases, auto-repeats, pastes and unknown bytes.
+	assert.equal(chordFromKeypress("\x1b[103;1:3u"), undefined);
+	assert.equal(chordFromKeypress("\x1b[103;1:2u"), undefined);
+	assert.equal(chordFromKeypress("hello"), undefined);
+	assert.equal(chordFromKeypress(""), undefined);
+	// Whatever it returns is matched back by our own matcher, so a recorded key
+	// always fires later.
+	for (const data of ["a", "G", "\x04", "\x1b[100;5u", "\t", "\r", " ", "\x1b[Z", "\x1b[1;5A", "\x1b[57365u", "\x1b[57349u", "\x1b[57354u"])
+		assert.ok(matchesKeyId(data, chordFromKeypress(data)!), data);
 });
 
 test("resolveKeys: pane bindings shadow global, multi-key sequences go through pending", () => {

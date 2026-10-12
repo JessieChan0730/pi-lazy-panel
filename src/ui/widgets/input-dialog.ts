@@ -11,15 +11,17 @@
  * subject for the title bar and the callbacks on each `open`, so the same
  * widget serves node labels (`L`), session renames and any later prompt. The
  * dialog only collects text and draws the box; key hints go to the footer
- * (see `hints`), like lazygit.
+ * (see `hints`), like lazygit. With `capture` the field is not typed into at
+ * all: it records key presses, which is how the settings page rebinds actions.
  *
  * 通用的居中单行输入弹窗：包装 pi-tui `Input`，标题 / 预填值 / 右上角说明 / 回调都在 open 时传入，
  * 打标签、给 session 起名等场景共用同一个组件；快捷键提示由 app.ts 放在底部 footer。
+ * 传 `capture` 时改成按键录入（设置页改键位用），不打字。
  */
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Input, truncateToWidth } from "@earendil-works/pi-tui";
-import { matchesKeyId } from "../../config/keys.ts";
+import { chordFromKeypress, chordLabel, isReservedKey, matchesKeyId } from "../../config/keys.ts";
 import type { KeyHint } from "../../types.ts";
 import { dialogWidth, frame, metaBudget, overlayCentered } from "../frame.ts";
 
@@ -35,6 +37,8 @@ export interface InputDialogSpec {
 	title: string;
 	/** Pre-filled text; the cursor starts at its end. */
 	value?: string;
+	/** Dimmed text shown while the field is empty (e.g. "Press a key…"). */
+	placeholder?: string;
 	/** One-line description shown at the right end of the title bar (e.g. the node being labelled). */
 	subject?: string;
 	/** Footer hints while this prompt is open. */
@@ -43,6 +47,13 @@ export interface InputDialogSpec {
 	numeric?: { min: number; max: number; error: string };
 	/** Optional validation on Enter; returning a message keeps the prompt open and shows it. */
 	validate?: (value: string) => string | undefined;
+	/**
+	 * Key recorder instead of a text field: the user presses the keys to bind
+	 * (see `InputDialog.handleInput`), and `onSubmit` receives the chord text
+	 * ("ctrl+d", or "g g" for a multi-key sequence). Used by the settings
+	 * keybindings page.
+	 */
+	capture?: boolean;
 	onSubmit: (value: string) => void;
 	onCancel: () => void;
 }
@@ -66,6 +77,8 @@ export class InputDialog {
 	private spec: InputDialogSpec | undefined;
 	private _focused = false;
 	private error: string | undefined;
+	/** Keys recorded so far in `capture` mode, as canonical key ids ("ctrl+d", "g", "g"). */
+	private steps: string[] = [];
 
 	constructor(private readonly o: InputDialogOptions) {
 		this.input = new Input({ prompt: "" });
@@ -94,6 +107,7 @@ export class InputDialog {
 	open(spec: InputDialogSpec): void {
 		this.spec = spec;
 		this.error = undefined;
+		this.steps = [];
 		this.input = this.createInput(spec.value ?? "");
 		this.input.focused = this._focused;
 	}
@@ -101,6 +115,7 @@ export class InputDialog {
 	/** Drop the current prompt without firing a callback. */
 	close(): void {
 		this.spec = undefined;
+		this.steps = [];
 	}
 
 	getValue(): string {
@@ -110,6 +125,10 @@ export class InputDialog {
 	handleInput(data: string): void {
 		if (!this.spec) return;
 		this.error = undefined;
+		if (this.spec.capture) {
+			this.recordKey(data);
+			return;
+		}
 		const numeric = this.spec.numeric;
 		if (numeric && (matchesKeyId(data, "left") || matchesKeyId(data, "right"))) {
 			const value = numericInputValue(this.input.getValue(), numeric.min, numeric.max);
@@ -121,6 +140,42 @@ export class InputDialog {
 			}
 		} else this.input.handleInput(data);
 		this.o.onChange();
+	}
+
+	/**
+	 * 按键录入（`spec.capture`）：每按一个键就追加成序列的一步，字段里显示已录入的键。
+	 * Esc 取消、Backspace 退回一步 —— 这两个都是面板保留键（见 keys.ts 的 RESERVED_KEYS），
+	 * 永远录不进去，所以没有可退的步骤时 Backspace 什么都不做。
+	 * 已经有按键时 Enter 保存；序列为空时 Enter 按普通键录入，这样 enter 自己也能绑。
+	 * 认不出的输入（粘贴、按键释放、长按重复）直接忽略，继续等下一个键。
+	 */
+	private recordKey(data: string): void {
+		const spec = this.spec;
+		if (!spec) return;
+		// Esc 先当取消，不管下面能不能解析出 chord。
+		if (matchesKeyId(data, "escape")) {
+			spec.onCancel();
+			return;
+		}
+		const chord = chordFromKeypress(data);
+		if (chord === undefined) return;
+		if (isReservedKey(chord)) {
+			// Backspace 只用来退回上一步，没有可退的就什么都不做。
+			if (chord !== "backspace" || !this.steps.length) return;
+			this.steps.pop();
+		} else if (this.steps.length && (chord === "enter" || chord === "return")) {
+			spec.onSubmit(this.steps.join(" "));
+			return;
+		} else this.steps.push(chord);
+		this.showSteps();
+		this.o.onChange();
+	}
+
+	/** Mirror the recorded keys into the field (display only; `onSubmit` gets the raw chord text). */
+	private showSteps(): void {
+		const text = this.steps.length ? chordLabel(this.steps.join(" ")) : "";
+		this.input.setValue(text);
+		if (text) this.input.handleInput(END_KEY);
 	}
 
 	/** Render the box itself, every line exactly `width` columns. */
@@ -151,7 +206,8 @@ export class InputDialog {
 
 	/** New input wired to the current spec; `setValue` leaves the cursor at 0, so move it to the end. */
 	private createInput(value: string): Input {
-		const input = new Input({ prompt: "" });
+		const placeholder = this.spec?.placeholder;
+		const input = new Input({ prompt: "", ...(placeholder ? { placeholder, placeholderStyle: (text: string) => this.o.theme.fg("dim", text) } : {}) });
 		// 回调走 this.spec，而不是捕获当时的 spec：open 换了 spec 后旧 Input 也不会再被用到。
 		input.onSubmit = (v) => {
 			const numeric = this.spec?.numeric;

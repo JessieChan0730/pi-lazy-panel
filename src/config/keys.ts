@@ -7,13 +7,16 @@
  *   - match one raw terminal input chunk against one key id
  *   - resolve a (scope, pending keys) pair to an ActionId with multi-key
  *     sequence support (vim-style "gg")
+ *   - do the reverse for the settings recorder: one raw input chunk back to a
+ *     chord (`chordFromKeypress`), so key bindings can be recorded by pressing
+ *     the key instead of typing its name
  *
  * 键位解析：用户配置里的 "G" 等价于 "shift+g"，"gg" 会被拆成两步按键序列。
  * 匹配时优先用 pi-tui 的 matchesKey（它已经处理 ctrl/alt/shift/kitty 协议），
  * 再回退到 kitty CSI-u 里解码出来的可打印字符（例如 kitty 终端下的 "?"）。
  */
 
-import { decodeKittyPrintable, isKeyRelease, type KeyId, matchesKey } from "@earendil-works/pi-tui";
+import { decodeKittyPrintable, isKeyRelease, isKeyRepeat, type KeyId, matchesKey, parseKey } from "@earendil-works/pi-tui";
 import { KEY_SCOPES, TREE_DIALOG_SCOPE } from "../constants.ts";
 import type { ActionId, KeyChord, Keymap, KeyScope, PaneKeymap } from "../types.ts";
 
@@ -53,12 +56,34 @@ const NAMED_KEYS = new Set([
 
 const MODIFIERS = new Set(["ctrl", "shift", "alt", "super"]);
 
+/**
+ * Keys that can never be bound to an action, in any scope.
+ *
+ * `escape` is hard-coded by the panel itself — clear the search, clear the
+ * multi-select, leave the panel — before the keymap is even consulted, so a
+ * binding on it would never fire. `backspace` is what the settings key recorder
+ * uses to undo a recorded step, and the text fields need it while editing
+ * (search bar, prompts). Only the bare keys are reserved: `ctrl+backspace`
+ * is a different key and stays bindable.
+ *
+ * 任何 scope 都不能绑的两个键：Esc 被面板自己占用（清搜索 / 清多选 / 退出面板，
+ * 在键位表之前就吃掉了），Backspace 是设置页录入的“退回”键、输入框也要用。
+ * 只禁裸键，`ctrl+backspace` 这类带修饰键的写法仍然是另一个键。
+ */
+const RESERVED_KEYS = new Set(["escape", "esc", "backspace"]);
+
+/** Is this chord a reserved key that can never be bound (see `RESERVED_KEYS`)? */
+export function isReservedKey(chord: string): boolean {
+	return RESERVED_KEYS.has(chord.trim().toLowerCase());
+}
+
 /** Canonical (pi-tui) key ids that make up one chord, in press order. */
 export type KeySequence = string[];
 
 /**
  * Normalise one key step. Accepts "G", "shift+g", "Ctrl+D", "Tab", "?".
- * Returns the lowercase pi-tui key id, or undefined when the step is invalid.
+ * Returns the lowercase pi-tui key id, or undefined when the step is invalid —
+ * including the reserved keys (see `RESERVED_KEYS`).
  */
 export function normalizeKeyStep(step: string): string | undefined {
 	const raw = step.trim();
@@ -86,6 +111,7 @@ export function normalizeKeyStep(step: string): string | undefined {
 		base = lower === "pageup" ? "pageUp" : lower === "pagedown" ? "pageDown" : lower;
 	}
 	const order = ["ctrl", "shift", "alt", "super"].filter((m) => mods.has(m));
+	if (order.length === 0 && RESERVED_KEYS.has(base)) return undefined;
 	return order.length ? `${order.join("+")}+${base}` : base;
 }
 
@@ -110,6 +136,9 @@ export function parseChord(chord: KeyChord): KeySequence | undefined {
 			out.push(single);
 			continue;
 		}
+		// 保留键的**名字**（"escape" / "esc" / "backspace"）不能再落到下面那段
+		// “逐字符拆开”的分支上，否则 "escape" 会被当成 e s c a p e 六个按键。
+		if (isReservedKey(step)) return undefined;
 		// Multi-character run like "gg" / "yy" / "zz": every char must be a plain key.
 		if (step.length > 1 && !step.includes("+")) {
 			const chars = [...step];
@@ -134,17 +163,46 @@ export function matchesKeyId(data: string, keyId: string): boolean {
 		const printable = decodeKittyPrintable(data);
 		if (printable === keyId) return true;
 	}
-	// 功能键（F1–F12）在 kitty 键盘协议下以 CSI-u functional 形式到达（例如 F2 = \x1b[57365u），
-	// 当前 pi-tui 的 matchesKey 只认 legacy 序列、识别不了，这里补一手。pi 默认开启 kitty 协议
-	// （flags=7 含 report event types），所以绑到功能键时必须走这条路。
-	if (matchesKittyFunctionKey(data, keyId)) return true;
+	// 功能键在 kitty 键盘协议下以 CSI-u functional 形式到达（Delete = \x1b[57349u、F2 = \x1b[57365u），
+	// 当前 pi-tui 的 matchesKey 只认 legacy 序列和键盘区的 57421–57426 码位、识别不了这些，
+	// 这里补一手。pi 默认开启 kitty 协议（flags=7 含 report event types），她终端里必须有这条路。
+	if (matchesKittyFunctionalKey(data, keyId)) return true;
 	return false;
 }
 
-/** kitty functional codepoints for F1–F12 (not covered by pi-tui's key maps). */
-const FUNCTION_KEY_CODEPOINTS: Record<string, number> = {
-	f1: 57364, f2: 57365, f3: 57366, f4: 57367, f5: 57368, f6: 57369,
-	f7: 57370, f8: 57371, f9: 57372, f10: 57373, f11: 57374, f12: 57375,
+/**
+ * kitty keyboard protocol codepoints of the functional keys. pi-tui only maps
+ * the *keypad* variants (57421–57426) and the legacy escape sequences, so in a
+ * kitty terminal every one of these arrives as CSI-u and would never match.
+ * See docs/issues.md (自定义功能键在 kitty 键盘协议下不生效).
+ */
+const KITTY_FUNCTIONAL_KEYS: Readonly<Record<number, string>> = {
+	57344: "escape",
+	57345: "enter",
+	57346: "tab",
+	57347: "backspace",
+	57348: "insert",
+	57349: "delete",
+	57350: "left",
+	57351: "right",
+	57352: "up",
+	57353: "down",
+	57354: "pageUp",
+	57355: "pageDown",
+	57356: "home",
+	57357: "end",
+	57364: "f1",
+	57365: "f2",
+	57366: "f3",
+	57367: "f4",
+	57368: "f5",
+	57369: "f6",
+	57370: "f7",
+	57371: "f8",
+	57372: "f9",
+	57373: "f10",
+	57374: "f11",
+	57375: "f12",
 };
 
 /** kitty modifier bit values. */
@@ -154,21 +212,61 @@ const KITTY_MODIFIER_BITS: Record<string, number> = { shift: 1, alt: 2, ctrl: 4,
 const KITTY_LOCK_MASK = 64 + 128;
 
 /**
- * Match a kitty CSI-u functional sequence for an F-key against a chord key id
- * such as "f2" or "shift+f2". Returns false for anything that is not an F-key
- * CSI-u sequence, so it is a safe fallback after matchesKey.
+ * Match a kitty CSI-u functional sequence against a chord key id such as "f2",
+ * "delete" or "shift+pageUp". Returns false for anything that is not a
+ * functional-key CSI-u sequence, so it is a safe fallback after matchesKey.
  */
-function matchesKittyFunctionKey(data: string, keyId: string): boolean {
+function matchesKittyFunctionalKey(data: string, keyId: string): boolean {
 	// \x1b[<codepoint>u | \x1b[<codepoint>;<mod>u | \x1b[<codepoint>;<mod>:<event>u
 	const match = data.match(/^\x1b\[(\d+)(?:;(\d+)(?::\d+)?)?u$/);
 	if (!match) return false;
 	const parts = keyId.split("+");
-	const base = parts[parts.length - 1]!;
-	if (FUNCTION_KEY_CODEPOINTS[base] !== Number(match[1])) return false;
+	if (parts[parts.length - 1] !== KITTY_FUNCTIONAL_KEYS[Number(match[1])]) return false;
 	let expected = 1; // kitty reports (modifier bitmask + 1); 1 = no modifiers.
 	for (const mod of parts.slice(0, -1)) expected += KITTY_MODIFIER_BITS[mod] ?? 0;
 	const reported = ((match[2] ? Number(match[2]) : 1) - 1 & ~KITTY_LOCK_MASK) + 1;
 	return reported === expected;
+}
+
+/** Key names the recorder can put into a chord, for the fallback scan below. */
+const CAPTURE_KEY_NAMES = [
+	"up", "down", "left", "right", "home", "end", "pageUp", "pageDown", "insert", "delete",
+	"backspace", "tab", "enter", "space", "escape",
+	"f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10", "f11", "f12",
+];
+
+/** Modifier combinations tried before the bare key, so the most specific chord wins. */
+const CAPTURE_MODIFIERS = [["ctrl", "shift"], ["ctrl", "alt"], ["shift", "alt"], ["ctrl", "super"], ["ctrl"], ["shift"], ["alt"], ["super"]];
+
+/** Chords the recorder's fallback scan tries, in order (see `chordFromKeypress`). */
+const CAPTURE_CHORDS: KeyChord[] = CAPTURE_KEY_NAMES.flatMap((key) => [
+	...CAPTURE_MODIFIERS.map((mods) => [...mods, key].join("+")),
+	key,
+]);
+
+/**
+ * The chord one raw terminal input chunk stands for — the inverse of
+ * `matchesKeyId`, as an "press the key you want" recorder needs it.
+ *
+ * Runs the chunk through pi-tui's mode-aware `parseKey`, normalises the result
+ * with `normalizeKeyStep` ("A" → "shift+a") and only in the end keeps it when
+ * our own matcher really accepts it back: whatever the recorder stores is
+ * guaranteed to fire later. Key releases and auto-repeats (kitty protocol
+ * reports both) return undefined so a recorder can ignore them, and so do
+ * pastes and anything else that is not a single key.
+ *
+ * 按键录入用的反向解析：把终端的原始输入还原成 chord 文本（"A" → shift+a）。
+ * `parseKey` 认不出的（kitty 协议下的功能键等）再按候选表逐个用 `matchesKeyId` 试，
+ * 只有真的认得才返回，保证录进去的键以后一定触发。
+ * 注意：单独的修饰键（Ctrl / Shift / Alt / Fn）不是 chord，这里永远返回 undefined。
+ */
+export function chordFromKeypress(data: string): KeyChord | undefined {
+	if (isKeyRelease(data) || isKeyRepeat(data)) return undefined;
+	const parsed = parseKey(data);
+	const normalized = parsed === undefined ? undefined : normalizeKeyStep(parsed);
+	if (normalized !== undefined && matchesKeyId(data, normalized)) return normalized;
+	for (const chord of CAPTURE_CHORDS) if (matchesKeyId(data, chord)) return chord;
+	return undefined;
 }
 
 /** One compiled binding: action + the key sequence that triggers it. */

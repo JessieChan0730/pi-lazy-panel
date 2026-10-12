@@ -310,9 +310,9 @@ test("keybinding editor adds, removes, unbinds and resets a binding", async () =
 	assert.equal(h.menu()?.items.length, 4); // add + remove d + unbind + reset
 	h.menu()!.onSelect(0); // Add key…
 	assert.ok(h.prompt());
-	assert.equal(h.prompt()!.validate!("ctrl+"), h.prompt()!.validate!("ctrl+")); // invalid is truthy
-	assert.ok(h.prompt()!.validate!("ctrl+"));
-	assert.equal(h.prompt()!.validate!("ctrl+d"), undefined);
+	// The prompt records key presses instead of collecting text.
+	assert.equal(h.prompt()!.capture, true);
+	assert.equal(h.prompt()!.validate, undefined);
 	h.prompt()!.onSubmit("ctrl+d");
 	assert.deepEqual(keymapDraftChords(h.state, "sessions", "session-delete"), ["d", "ctrl+d"]);
 	assert.ok(keymapActionDirty(h.state, "sessions", "session-delete"));

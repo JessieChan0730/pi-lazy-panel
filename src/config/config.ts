@@ -22,6 +22,7 @@ import { join } from "node:path";
 import { CONFIG_FILE_NAME, KEY_SCOPES, LEFT_COLUMN_RATIO, LEFT_COLUMN_RATIO_MAX, LEFT_COLUMN_RATIO_MIN, SESSION_SORT_MODES } from "../constants.ts";
 import { type Locale, SUPPORTED_LOCALES } from "../i18n/index.ts";
 import type { ActionId, KeyChord, Keymap, KeyScope, PaneKeymap, SessionSortMode, UserConfig, UserPaneKeymap } from "../types.ts";
+import { isReservedKey } from "./keys.ts";
 import type { ConfigSaveResult, ConfigSnapshot, SettingsPatch } from "./config-store.ts";
 import { readSnapshot, savePatch } from "./config-store.ts";
 import { DEFAULT_KEYMAP } from "./keymap.ts";
@@ -147,11 +148,19 @@ export function mergeKeymap(base: Keymap, user: UserConfig["keymap"], warnings: 
 				delete target[action as ActionId];
 				continue;
 			}
-			if (isChordValue(value)) {
-				target[action as ActionId] = value;
-			} else {
+			if (!isChordValue(value)) {
 				warnings.push(`config: keymap.${scopeName}.${action} must be a string, string[] or null`);
+				continue;
 			}
+			// Esc / Backspace 是保留键（见 keys.ts 的 RESERVED_KEYS）：写进来也不会触发，
+			// 这里丢掉并提示，而不是留一条看起来生效的失效绑定。
+			const chords = (Array.isArray(value) ? value : [value]).filter((chord) => {
+				if (!isReservedKey(chord)) return true;
+				warnings.push(`config: keymap.${scopeName}.${action}: "${chord}" is reserved by the panel and cannot be bound`);
+				return false;
+			});
+			const kept: KeyChord | KeyChord[] | undefined = chords.length === 0 ? undefined : Array.isArray(value) ? chords : chords[0];
+			if (kept !== undefined) target[action as ActionId] = kept;
 		}
 	}
 	return out;
