@@ -60,6 +60,18 @@ test("matchesKeyId: raw terminal bytes match canonical ids", () => {
 	assert.ok(matchesKeyId("/", "/"));
 	// kitty CSI-u for "?" (shift+/) is decoded as a printable
 	assert.ok(matchesKeyId("\x1b[47:63;2u", "?"));
+	// Function keys arrive as kitty CSI-u functional sequences when pi has the
+	// kitty keyboard protocol on (flags=7); pi-tui's matchesKey only knows the
+	// legacy forms, so matchesKeyId matches the functional codepoints itself.
+	assert.ok(matchesKeyId("\x1b[57365u", "f2"));
+	assert.ok(matchesKeyId("\x1b[57365;1u", "f2"));
+	assert.ok(matchesKeyId("\x1b[57365;1:1u", "f2"));
+	assert.ok(matchesKeyId("\x1bOQ", "f2")); // legacy still matches
+	assert.ok(matchesKeyId("\x1b[57375u", "f12"));
+	assert.ok(matchesKeyId("\x1b[57365;2u", "shift+f2"));
+	assert.equal(matchesKeyId("\x1b[57365;2u", "f2"), false); // modifier mismatch
+	assert.equal(matchesKeyId("\x1b[57366u", "f2"), false); // F3 is not F2
+	assert.equal(matchesKeyId("\x1b[57365;1:3u", "f2"), false); // release never matches
 	// key release events never match
 	assert.equal(matchesKeyId("\x1b[103;1:3u", "g"), false);
 	assert.equal(matchesKeyId("x", "y"), false);

@@ -134,7 +134,41 @@ export function matchesKeyId(data: string, keyId: string): boolean {
 		const printable = decodeKittyPrintable(data);
 		if (printable === keyId) return true;
 	}
+	// 功能键（F1–F12）在 kitty 键盘协议下以 CSI-u functional 形式到达（例如 F2 = \x1b[57365u），
+	// 当前 pi-tui 的 matchesKey 只认 legacy 序列、识别不了，这里补一手。pi 默认开启 kitty 协议
+	// （flags=7 含 report event types），所以绑到功能键时必须走这条路。
+	if (matchesKittyFunctionKey(data, keyId)) return true;
 	return false;
+}
+
+/** kitty functional codepoints for F1–F12 (not covered by pi-tui's key maps). */
+const FUNCTION_KEY_CODEPOINTS: Record<string, number> = {
+	f1: 57364, f2: 57365, f3: 57366, f4: 57367, f5: 57368, f6: 57369,
+	f7: 57370, f8: 57371, f9: 57372, f10: 57373, f11: 57374, f12: 57375,
+};
+
+/** kitty modifier bit values. */
+const KITTY_MODIFIER_BITS: Record<string, number> = { shift: 1, alt: 2, ctrl: 4, super: 8 };
+
+/** Caps Lock + Num Lock bits in a kitty modifier report; ignored when matching. */
+const KITTY_LOCK_MASK = 64 + 128;
+
+/**
+ * Match a kitty CSI-u functional sequence for an F-key against a chord key id
+ * such as "f2" or "shift+f2". Returns false for anything that is not an F-key
+ * CSI-u sequence, so it is a safe fallback after matchesKey.
+ */
+function matchesKittyFunctionKey(data: string, keyId: string): boolean {
+	// \x1b[<codepoint>u | \x1b[<codepoint>;<mod>u | \x1b[<codepoint>;<mod>:<event>u
+	const match = data.match(/^\x1b\[(\d+)(?:;(\d+)(?::\d+)?)?u$/);
+	if (!match) return false;
+	const parts = keyId.split("+");
+	const base = parts[parts.length - 1]!;
+	if (FUNCTION_KEY_CODEPOINTS[base] !== Number(match[1])) return false;
+	let expected = 1; // kitty reports (modifier bitmask + 1); 1 = no modifiers.
+	for (const mod of parts.slice(0, -1)) expected += KITTY_MODIFIER_BITS[mod] ?? 0;
+	const reported = ((match[2] ? Number(match[2]) : 1) - 1 & ~KITTY_LOCK_MASK) + 1;
+	return reported === expected;
 }
 
 /** One compiled binding: action + the key sequence that triggers it. */
