@@ -178,6 +178,21 @@ test("overlayCentered draws the box in the middle of the base lines and keeps ev
 	assert.equal(overlayCentered(["yy"], box, 4, 2).length, 1);
 });
 
+test("overlayCentered keeps the right border aligned when a wide char straddles the box edge", () => {
+	const termW = 60;
+	// 右侧内容是中文（宽字符），行尾是面板右边框 │；弹窗居中后右边界会落在某个中文字符中间。
+	let content = "│ 板应该具有更好的视觉层级和交互反馈效果来提升整体";
+	content = content + " ".repeat(termW - 1 - visibleWidth(content)) + "│";
+	const base = [content];
+	const boxW = 31; // 奇数宽度，保证右边界落在中文字符上
+	const box = ["X".repeat(boxW)];
+	const dim = (s: string) => s;
+	const out = overlayCentered(base, box, boxW, termW, dim);
+	assert.equal(visibleWidth(out[0]!), termW);
+	// 修复前右边框会被挤到倒数第二列、末尾多出一个空格；修复后 │ 仍在最后一列。
+	assert.equal(stripTerminalSequences(out[0]!).at(-1), "│");
+});
+
 test("scrollOffset keeps the cursor visible", () => {
 	assert.equal(scrollOffset(0, 5, 10), 0);
 	assert.equal(scrollOffset(9, 10, 4), 6);
