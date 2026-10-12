@@ -36,7 +36,9 @@ The config file lives at `~/.pi/agent/lazy-panel.json`. Every field is optional 
 
 Press **`,`** in any main pane, select **Open plugin settings** from `?`, or run **`/lazy-panel settings`**. The command works even when `settings-open` is unbound. Existing dialogs and search inputs keep their keys; settings cannot be opened inside the full tree dialog.
 
-**General** edits the language and configured default scope/sort (not temporary browsing choices). Enter opens a choice menu; selections update a draft until you explicitly save. Language changes apply immediately after saving; default scope/sort apply the next time the panel opens, without moving or reordering the current session list. Follow system removes the language override. Layout, keybinding editing and theme selection remain read-only for now.
+**General** edits the language and configured default scope/sort (not temporary browsing choices). Enter opens a choice menu; selections update a draft until you explicitly save. Language changes apply immediately after saving; default scope/sort apply the next time the panel opens, without moving or reordering the current session list. Follow system removes the language override.
+
+**Keybindings** are editable: the top **Scope** row chooses which scope to edit (global / sessions / tree / content / tree dialog), and each action row below shows its current binding. Press Enter on an action row to open its management menu: `Add key…` (a prompt where you type a chord in pi's syntax — `j`, `ctrl+d`, `gg`, `G`; invalid input is rejected), `Remove: <key>` (drop one bound key), `Unbind (no key)` and `Reset to default`. Edits only touch the draft and apply immediately after saving (bindings are rebuilt; an unfinished multi-key sequence is dropped). `d` (Restore defaults) on the keybindings page resets every action of the current scope to its built-in binding. Layout width is editable; theme selection remains read-only for now.
 
 | Fixed key inside settings | Action |
 | --- | --- |
@@ -44,18 +46,18 @@ Press **`,`** in any main pane, select **Open plugin settings** from `?`, or run
 | `l` / `→` | Focus the item list (right); no effect if already focused |
 | `Tab` / `Shift+Tab` | Cycle categories, item list and action buttons |
 | `j/k/↑/↓` | Select a category, item or button; keep selection visible |
-| `Enter` | Enter the list, edit a General item, choose a keybinding scope, or activate a button |
+| `Enter` | Enter the list, edit a General item, choose a keybinding scope, edit an action's binding, or activate a button |
 | `s` | Save the draft from any region of the settings main view; no Tab needed |
-| `d` | Confirm restoring General defaults in the draft; no Tab needed |
+| `d` | Confirm restoring defaults in the draft (General / Layout / current keybinding scope); no Tab needed |
 | `r` | Reload the configuration; confirm before discarding a dirty draft |
 | `PageUp` / `PageDown` in the item list | Scroll a long item description / binding value |
 | `Esc` / `q` | Exit settings; unsaved changes offer continue editing, save and exit, or discard with confirmation |
 
-Save, Cancel and Restore defaults are available as buttons; restoring General defaults requires confirmation and changes only the draft until saved. A child choice menu consumes keys before the settings view, and Esc cancels just that choice. To browse another keybinding scope, select the **Scope** row and press Enter.
+Save, Cancel and Restore defaults are available as buttons; restoring defaults requires confirmation and changes only the draft until saved. A child choice menu consumes keys before the settings view, and Esc cancels just that choice. To browse or edit another keybinding scope, select the **Scope** row and press Enter.
 
 Settings opens and closes immediately, without animation. These management keys are fixed, independent of custom keymaps, and retain their logical focus meanings on narrow terminals. Background mouse actions are blocked while settings is open. Keybinding rows show **only the selected scope's own bindings**; “No local binding” does not mean other scopes cannot bind that action. Inheritance, priority and disabled actions still determine execution.
 
-Saving patches only edited fields in `lazy-panel.json`, preserving other settings and unknown fields. Invalid files are not overwritten; reload after correcting the file. Concurrent unrelated changes are merged; conflicting changes stop the save and keep your draft. Merely opening settings or canceling does not write the file.
+Saving patches only edited fields in `lazy-panel.json` (including per-scope / per-action changes under `keymap`), preserving other settings and unknown fields. Invalid files are not overwritten; reload after correcting the file. Concurrent unrelated changes are merged; a conflict on the same field or the same binding stops the save and keeps your draft. Merely opening settings or canceling does not write the file.
 
 ## Custom keybindings
 
@@ -96,7 +98,7 @@ Help uses a fixed 28-row popup (including borders), shrinking on smaller termina
 | `C` | `scope-current` | List scope: current folder |
 | `A` | `scope-all` | List scope: all |
 | `?` | `help` | Commands for the current pane: `j` / `k` / `↑` / `↓` select, `Enter` closes help and runs the selected command; `?` / `Esc` / `q` closes without running |
-| `,` | `settings-open` | Open plugin settings immediately; edit and save General options (see Plugin settings above) |
+| `,` | `settings-open` | Open plugin settings immediately; edit and save General, Layout and Keybindings (see Plugin settings above) |
 | `q` / `Ctrl+c` | `quit` | Quit the panel |
 | `@` | `changelog` | pi's changelog (`/changelog`) as a large popup: `j` `k` `↑` `↓` scroll, `Ctrl+d` / `Ctrl+u` half-page, `g` / `G` top / bottom, `Esc` / `q` / `@` close. The whole file renders slowly, so the popup first shows a spinning square `◰ Loading changelog…` in the center, then the content (cached, so a second `@` opens instantly). The newest version is on top (pi's own `/changelog` puts it last). Not available inside the tree dialog |
 | `Esc` | — (built-in, not configurable) | In order: discard an unfinished keystroke → clear the current pane's search → clear the SESSIONS multi-selection → return from archive to normal sessions → quit |
