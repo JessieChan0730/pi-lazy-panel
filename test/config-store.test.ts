@@ -79,7 +79,7 @@ test("three-way equality compares invalid raw objects structurally", async (t) =
 
 test("invalid patch fields and values are rejected before I/O", async (t) => {
 	const file = await fixture(t);
-	for (const patch of [{ keymap: {} }, { locale: "auto" }, { defaultSort: undefined }, { leftColumnRatio: 0.9 }, { leftColumnRatio: "0.3" }]) {
+	for (const patch of [{ keymap: { nope: {} } }, { keymap: { global: { help: { set: [""] } } } }, { locale: "auto" }, { defaultSort: undefined }, { leftColumnRatio: 0.9 }, { leftColumnRatio: "0.3" }]) {
 		await assert.rejects(savePatch(file, { raw: {}, fingerprint: null }, patch as SettingsPatch), /Invalid settings patch/);
 	}
 	// leftColumnRatio 在合法区间内可写入（null 清除、数字落盘）。
@@ -146,4 +146,32 @@ test("existing cross-process lock times out without deleting its owner lock", as
 	await fs.mkdir(`${file}.lock`);
 	await assert.rejects(savePatch(file, await readSnapshot(file), { locale: "en" }, { lockTimeoutMs: 0 }), /Timed out/);
 	assert.equal((await fs.stat(`${file}.lock`)).isDirectory(), true);
+});
+
+test("keymap edits write set / unbind / reset and drop empty scopes", async (t) => {
+	const file = await fixture(t);
+	// set: single chord written as a string, multiple as an array.
+	const first = await savePatch(file, await readSnapshot(file), {
+		keymap: { sessions: { "session-delete": { set: ["ctrl+d"] }, "move-down": { set: ["j", "down"] } } },
+	});
+	assert.deepEqual(first.snapshot.raw.keymap, { sessions: { "session-delete": "ctrl+d", "move-down": ["j", "down"] } });
+	// unbind writes null; reset deletes the key; the now-empty scope is dropped.
+	const second = await savePatch(file, first.snapshot, {
+		keymap: { sessions: { "session-delete": { unbind: true }, "move-down": { reset: true } } },
+	});
+	assert.deepEqual(second.snapshot.raw.keymap, { sessions: { "session-delete": null } });
+	const third = await savePatch(file, second.snapshot, { keymap: { sessions: { "session-delete": { reset: true } } } });
+	assert.equal(third.snapshot.raw.keymap, undefined);
+});
+
+test("keymap conflict only when another writer changed the same binding", async (t) => {
+	const file = await fixture(t);
+	const base = (await savePatch(file, await readSnapshot(file), { keymap: { tree: { "tree-copy": { set: ["y"] } } } })).snapshot;
+	// External edit to a different binding does not conflict.
+	await fs.writeFile(file, JSON.stringify({ keymap: { tree: { "tree-copy": "y", "tree-fold": "z" } } }));
+	const ok = await savePatch(file, base, { keymap: { tree: { "tree-copy": { set: ["c"] } } } });
+	assert.deepEqual(ok.snapshot.raw.keymap, { tree: { "tree-copy": "c", "tree-fold": "z" } });
+	// External edit to the same binding conflicts.
+	await fs.writeFile(file, JSON.stringify({ keymap: { tree: { "tree-copy": "x" } } }));
+	await assert.rejects(savePatch(file, base, { keymap: { tree: { "tree-copy": { set: ["c"] } } } }), /Config conflict in keymap\.tree\.tree-copy/);
 });

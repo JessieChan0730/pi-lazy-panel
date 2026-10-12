@@ -41,6 +41,8 @@ export interface InputDialogSpec {
 	hints: KeyHint[];
 	/** Optional percentage/number editor: arrows step by one, invalid input stays open. */
 	numeric?: { min: number; max: number; error: string };
+	/** Optional validation on Enter; returning a message keeps the prompt open and shows it. */
+	validate?: (value: string) => string | undefined;
 	onSubmit: (value: string) => void;
 	onCancel: () => void;
 }
@@ -153,8 +155,16 @@ export class InputDialog {
 		// 回调走 this.spec，而不是捕获当时的 spec：open 换了 spec 后旧 Input 也不会再被用到。
 		input.onSubmit = (v) => {
 			const numeric = this.spec?.numeric;
-			if (numeric && numericInputValue(v, numeric.min, numeric.max) === undefined) this.error = numeric.error;
-			else this.spec?.onSubmit(v);
+			if (numeric && numericInputValue(v, numeric.min, numeric.max) === undefined) {
+				this.error = numeric.error;
+				return;
+			}
+			const validationError = this.spec?.validate?.(v);
+			if (validationError) {
+				this.error = validationError;
+				return;
+			}
+			this.spec?.onSubmit(v);
 		};
 		input.onEscape = () => this.spec?.onCancel();
 		input.setValue(value);

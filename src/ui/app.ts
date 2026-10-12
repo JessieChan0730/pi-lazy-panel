@@ -172,8 +172,8 @@ interface SearchOrigin {
 
 export class LazyPanel implements Component, Focusable {
 	readonly state: PanelState;
-	readonly keymap: Keymap;
-	private readonly bindings: Binding[];
+	keymap: Keymap;
+	private bindings: Binding[];
 	private sessions: SessionRow[] = [];
 	/** Discard out-of-order list / metadata reads. */
 	private sessionListRequest = 0;
@@ -226,7 +226,7 @@ export class LazyPanel implements Component, Focusable {
 	/** True while an Enter action is waiting for pi (keys are ignored, the panel is hidden). */
 	private entering = false;
 	/** Keys of an unfinished multi-key sequence such as "gg" (panes and tree dialog alike). */
-	private readonly keys: KeySequencer;
+	private keys: KeySequencer;
 	private _focused = false;
 	/** Debounced reload of tree + content after the sessions cursor moved. */
 	private sessionLoadTimer: ReturnType<typeof setTimeout> | undefined;
@@ -354,6 +354,10 @@ export class LazyPanel implements Component, Focusable {
 			closeSettings: () => this.settingsDialog.close(),
 			refreshSettings: () => this.o.requestRender(),
 			refreshConfig: (config) => {
+				// 重建键位让编辑过的快捷键立即生效（未完成的多键序列被丢弃）。
+				this.keymap = config.keymap;
+				this.bindings = compileKeymap(this.keymap);
+				this.keys = new KeySequencer(this.bindings, () => this.o.requestRender());
 				this.ratio = config.leftColumnRatio;
 				// 正文排版含角色等本地化标题；仅清缓存，不重载会话或重置滚动位置。
 				this.contentViewport.setBlocks(this.contentViewport.blocks, this.contentViewport.leaf);

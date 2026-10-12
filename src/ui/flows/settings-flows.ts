@@ -1,10 +1,11 @@
 /** Settings menus and persistence orchestration. Widgets never read or write files. */
 import { resolveConfig } from "../../config/config.ts";
-import { scopeTitle } from "../../config/keymap.ts";
+import { chordLabel, parseChord } from "../../config/keys.ts";
+import { actionDescription, DEFAULT_KEYMAP, scopeTitle } from "../../config/keymap.ts";
 import { KEY_SCOPES, LEFT_COLUMN_RATIO_MAX, LEFT_COLUMN_RATIO_MIN } from "../../constants.ts";
 import { t } from "../../i18n/index.ts";
-import type { KeyHint } from "../../types.ts";
-import { setSettingsDraft, settingsDirtyCount, settingsDraft, type EditableSetting } from "../settings-state.ts";
+import type { ActionId, KeyHint } from "../../types.ts";
+import { keymapDraftChords, setKeymapDraft, setSettingsDraft, settingsDirtyCount, settingsDraft, type EditableSetting } from "../settings-state.ts";
 import { confirmDialogSpec } from "../widgets/confirm-dialog.ts";
 import { numericInputValue } from "../widgets/input-dialog.ts";
 import type { SettingsFlowHost } from "./host.ts";
@@ -78,6 +79,10 @@ export function editSetting(h: SettingsFlowHost, key: string): void {
 		});
 		return;
 	}
+	if (s.category === "keybindings") {
+		if (s.baseline) openBindingEditor(h, key as ActionId);
+		return;
+	}
 	if (!s.baseline)
 		return;
 	const draft = settingsDraft(s)!;
@@ -122,8 +127,71 @@ export function editSetting(h: SettingsFlowHost, key: string): void {
 		onCancel: () => h.closeDialogs(),
 	});
 }
+/**
+ * Edit the key bindings of one action in the current scope: a menu to add a
+ * chord (typed in pi's chord syntax), remove an existing one, unbind the action
+ * or reset it to the built-in default. Mutations reopen the menu so the list
+ * stays visible for the next edit.
+ */
+export function openBindingEditor(h: SettingsFlowHost, action: ActionId): void {
+	const s = h.state.settings;
+	if (!s.baseline || s.loading || s.saving) return;
+	const scope = s.keyScope;
+	const generation = s.generation;
+	const chords = keymapDraftChords(s, scope, action);
+	const removeOffset = 1;
+	const unbindIndex = removeOffset + chords.length;
+	const resetIndex = unbindIndex + 1;
+	const items = [t("settings.key.add"), ...chords.map((c) => t("settings.key.remove", { key: chordLabel(c) })), t("settings.key.unbind"), t("settings.key.reset")];
+	h.openMenu("settings", {
+		title: actionDescription(action), subject: scopeTitle(scope), items, hints: hints(),
+		onSelect: (index) => {
+			h.closeDialogs();
+			if (!current(h, generation)) return;
+			if (index === 0) {
+				openAddBinding(h, action, chords);
+				return;
+			}
+			if (index === unbindIndex) setKeymapDraft(s, scope, action, "unbind");
+			else if (index === resetIndex) setKeymapDraft(s, scope, action, "reset");
+			else setKeymapDraft(s, scope, action, chords.filter((_, i) => i !== index - removeOffset));
+			h.refreshSettings();
+			openBindingEditor(h, action);
+		},
+		onCancel: () => h.closeDialogs(),
+	});
+}
+
+/** Prompt for one new chord (validated with parseChord) to add to `action`. */
+function openAddBinding(h: SettingsFlowHost, action: ActionId, chords: string[]): void {
+	const s = h.state.settings;
+	const scope = s.keyScope;
+	const generation = s.generation;
+	h.openPrompt("settings", {
+		title: t("settings.key.addTitle"), subject: scopeTitle(scope),
+		hints: [["Enter", t("settings.key.save")], ["Esc", t("hint.cancel")]],
+		validate: (text) => parseChord(text.trim()) ? undefined : t("settings.key.invalid"),
+		onSubmit: (text) => {
+			const chord = text.trim();
+			if (!parseChord(chord)) return;
+			h.closeDialogs();
+			if (current(h, generation) && !chords.includes(chord)) setKeymapDraft(s, scope, action, [...chords, chord]);
+			h.refreshSettings();
+			if (current(h, generation)) openBindingEditor(h, action);
+		},
+		onCancel: () => {
+			h.closeDialogs();
+			if (current(h, generation)) openBindingEditor(h, action);
+		},
+	});
+}
+
 export function restoreSettingsDefaults(h: SettingsFlowHost): void {
 	const s = h.state.settings;
+	if (s.category === "keybindings") {
+		restoreScopeBindings(h);
+		return;
+	}
 	const fields = s.category === "general" ? ["locale", "defaultScope", "defaultSort"] as const : s.category === "layout" ? ["leftColumnRatio"] as const : undefined;
 	if (!fields || !s.baseline || s.loading || s.saving)
 		return;
@@ -136,6 +204,29 @@ export function restoreSettingsDefaults(h: SettingsFlowHost): void {
 				return;
 			for (const key of fields)
 				setSettingsDraft(s, key, null);
+			h.refreshSettings();
+		},
+		onCancel: () => h.closeDialogs(),
+	}));
+}
+
+/** Reset every action in the current scope back to its built-in default binding. */
+function restoreScopeBindings(h: SettingsFlowHost): void {
+	const s = h.state.settings;
+	if (!s.baseline || s.loading || s.saving)
+		return;
+	const scope = s.keyScope;
+	const generation = s.generation;
+	const userScope = (s.baseline.raw.keymap as Record<string, Record<string, unknown>> | undefined)?.[scope];
+	const actions = new Set([...Object.keys(userScope ?? {}), ...Object.keys(s.patch.keymap?.[scope] ?? {}), ...Object.keys(DEFAULT_KEYMAP[scope])]);
+	h.openMenu("settings", confirmDialogSpec({
+		title: t("settings.restoreScopeConfirm", { scope: scopeTitle(scope) }),
+		onConfirm: () => {
+			h.closeDialogs();
+			if (!current(h, generation))
+				return;
+			for (const action of actions)
+				setKeymapDraft(s, scope, action as ActionId, "reset");
 			h.refreshSettings();
 		},
 		onCancel: () => h.closeDialogs(),

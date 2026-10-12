@@ -230,3 +230,21 @@ test("complete instant overlay and all locales stay within wide/narrow viewport"
 		initI18n("en");
 	}
 });
+test("keybinding category is editable: no read-only note, dirty marker, Enter edits the action", () => {
+	const h = makeDialog();
+	h.dialog.open();
+	h.state.baseline = { raw: { keymap: { sessions: { "session-delete": "ctrl+d" } } }, fingerprint: null };
+	h.state.category = "keybindings";
+	h.state.keyScope = "sessions";
+	// Editable now, so no "Read-only" heading like Theme has.
+	assert.doesNotMatch(h.text(60, 30), /Keybindings · Read-only/);
+	// A per-action draft override shows the "*" marker and the new chord.
+	h.state.patch = { keymap: { sessions: { "session-delete": { set: ["ctrl+x"] } } } };
+	assert.match(h.text(108, 40), /\* Delete session/);
+	assert.match(h.text(108, 40), /Ctrl\+x/);
+	// Enter on an action row (not the scope row) edits that action.
+	h.state.region = "list";
+	h.state.positions.sessions = { cursor: 1, scroll: 0, detailScroll: 0 };
+	h.dialog.handleInput("\r");
+	assert.equal(h.edits.at(-1), "session-resume");
+});

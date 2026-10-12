@@ -9,7 +9,7 @@ import { t } from "../../i18n/index.ts";
 import type { ActionId, KeyHint } from "../../types.ts";
 import { clamp } from "../../utils/indices.ts";
 import { fit, frame, FRAME_DIVIDER, overlayCentered } from "../frame.ts";
-import { settingsDirtyCount, settingsDraft, SETTINGS_CATEGORIES, type SettingsPosition, type SettingsRegion, type SettingsState } from "../settings-state.ts";
+import { keymapActionDirty, settingsDirtyCount, settingsDraft, SETTINGS_CATEGORIES, type SettingsPosition, type SettingsRegion, type SettingsState } from "../settings-state.ts";
 import { dialogHeader } from "./dialog-header.ts";
 
 const REGIONS: SettingsRegion[] = ["categories", "list", "buttons"];
@@ -21,6 +21,8 @@ interface SettingsItem {
 	label: string;
 	value: string;
 	description: string;
+	/** True when the draft changes this item (shows the `*` marker). */
+	dirty?: boolean;
 }
 
 export interface SettingsDialogOptions {
@@ -142,25 +144,27 @@ export class SettingsDialog {
 	private items(): SettingsItem[] {
 		const { state } = this.o;
 		const config = settingsDraft(state) ?? this.o.config;
+		const dirty = (id: string): boolean => Object.hasOwn(state.patch, id);
 		switch (state.category) {
 			case "general":
 				return [
-					{ id: "locale", label: t("settings.locale"), value: config.locale ? t(`settings.language.${config.locale}`) : t("settings.system"), description: t("settings.localeDescription") },
-					{ id: "defaultScope", label: t("settings.defaultScope"), value: t(`settings.scope.${config.defaultScope}`), description: t("settings.defaultDescription") },
-					{ id: "defaultSort", label: t("settings.defaultSort"), value: t(`settings.sort.${config.defaultSort}`), description: t("settings.defaultDescription") },
+					{ id: "locale", label: t("settings.locale"), value: config.locale ? t(`settings.language.${config.locale}`) : t("settings.system"), description: t("settings.localeDescription"), dirty: dirty("locale") },
+					{ id: "defaultScope", label: t("settings.defaultScope"), value: t(`settings.scope.${config.defaultScope}`), description: t("settings.defaultDescription"), dirty: dirty("defaultScope") },
+					{ id: "defaultSort", label: t("settings.defaultSort"), value: t(`settings.sort.${config.defaultSort}`), description: t("settings.defaultDescription"), dirty: dirty("defaultSort") },
 				];
 			case "layout":
-				return [{ id: "leftColumnRatio", label: t("settings.leftWidth"), value: `${Number((config.leftColumnRatio * 100).toFixed(2))}%`, description: t("settings.widthDescription") }];
+				return [{ id: "leftColumnRatio", label: t("settings.leftWidth"), value: `${Number((config.leftColumnRatio * 100).toFixed(2))}%`, description: t("settings.widthDescription"), dirty: dirty("leftColumnRatio") }];
 			case "theme":
 				return [{ id: "", label: t("settings.category.theme"), value: t("settings.followPi"), description: t("settings.themeDescription") }];
 			case "keybindings": {
 				// 本层合并结果，不使用会展开继承的 help/labelsForFocus；默认表只用于保留已解绑的动作行。
 				const actions = new Set([...Object.keys(DEFAULT_KEYMAP[state.keyScope]), ...Object.keys(config.keymap[state.keyScope])]);
-				return [{ id: "keyScope", label: t("settings.keyScope"), value: scopeTitle(state.keyScope), description: t("settings.layerDescription") }, ...[...actions].map((id) => ({
+				return [{ id: "keyScope", label: t("settings.keyScope"), value: scopeTitle(state.keyScope), description: t("settings.scopeDescription") }, ...[...actions].map((id) => ({
 					id,
 					label: actionDescription(id as ActionId),
 					value: labelsFor(config.keymap, state.keyScope, id as ActionId).join(" / ") || t("settings.unbound"),
 					description: t("settings.layerDescription"),
+					dirty: keymapActionDirty(state, state.keyScope, id as ActionId),
 				}))];
 			}
 		}
@@ -190,7 +194,7 @@ export class SettingsDialog {
 		const sidebarWidth = wide ? Math.max(16, ...SETTINGS_CATEGORIES.map((c) => visibleWidth(t(`settings.category.${c}`)) + 4)) : 0;
 		const contentWidth = wide ? inner - sidebarWidth - 3 : inner - 2;
 		const category = t(`settings.category.${state.category}`);
-		const heading = state.category === "general" || state.category === "layout" ? category : `${category} · ${t("settings.readOnly")}`;
+		const heading = state.category === "theme" ? `${category} · ${t("settings.readOnly")}` : category;
 		let area: string[];
 		if (wide) {
 			const content = this.renderContent(contentWidth, areaHeight - 1);
@@ -212,7 +216,7 @@ export class SettingsDialog {
 			const disabled = state.saving || (i === 0
 				? !state.baseline || !settingsDirtyCount(state) || state.loading
 				: i === 2
-					? state.category !== "general" || !state.baseline || state.loading
+					? state.category === "theme" || !state.baseline || state.loading
 					: i === 3 && state.loading);
 			return disabled
 				? theme.fg("dim", fit(`${selected ? "›" : " "} ${text}`, width))
@@ -238,7 +242,7 @@ export class SettingsDialog {
 	private renderContent(width: number, height: number): string[] {
 		if (height <= 0) return [];
 		const { theme, state } = this.o;
-		const items = this.items().map((item) => ({ ...item, label: `${Object.hasOwn(state.patch, item.id) ? "* " : ""}${item.label}` }));
+		const items = this.items().map((item) => ({ ...item, label: `${item.dirty ? "* " : ""}${item.label}` }));
 		const pos = this.position();
 		pos.cursor = clamp(pos.cursor, 0, Math.max(0, items.length - 1));
 		if (!items[pos.cursor]) return [fit(t("settings.noBindings"), width)];

@@ -3,7 +3,9 @@ import * as fs from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
-import { LEFT_COLUMN_RATIO_MAX, LEFT_COLUMN_RATIO_MIN } from "../constants.ts";
+import { KEY_SCOPES, LEFT_COLUMN_RATIO_MAX, LEFT_COLUMN_RATIO_MIN } from "../constants.ts";
+import type { ActionId, KeyChord, KeyScope } from "../types.ts";
+import { parseChord } from "./keys.ts";
 
 export interface ConfigSnapshot {
 	raw: Record<string, unknown>;
@@ -16,7 +18,18 @@ export interface SettingsPatch {
 	defaultScope?: "all" | "current-folder" | null;
 	defaultSort?: "recent" | "created" | "title" | "threaded" | null;
 	leftColumnRatio?: number | null;
+	/** Per-(scope, action) key binding edits; see KeymapPatchValue. */
+	keymap?: KeymapPatch;
 }
+
+/**
+ * One key binding edit relative to the on-disk user config:
+ *   { set }    override the action with these chords (written to the user file)
+ *   { unbind } write null (remove the built-in default binding)
+ *   { reset }  delete the user override (fall back to the built-in default)
+ */
+export type KeymapPatchValue = { set: KeyChord[] } | { unbind: true } | { reset: true };
+export type KeymapPatch = Partial<Record<KeyScope, Partial<Record<ActionId, KeymapPatchValue>>>>;
 
 export interface ConfigSaveResult {
 	snapshot: ConfigSnapshot;
@@ -33,7 +46,7 @@ const FIELD_VALUES = {
 	locale: ["en", "zh"],
 	defaultScope: ["all", "current-folder"],
 	defaultSort: ["recent", "created", "title", "threaded"],
-} satisfies Record<Exclude<keyof SettingsPatch, "leftColumnRatio">, string[]>;
+} satisfies Record<Exclude<keyof SettingsPatch, "leftColumnRatio" | "keymap">, string[]>;
 
 /** Unlike loadConfig, this never converts a broken file to writable defaults. */
 export async function readSnapshot(file: string): Promise<ConfigSnapshot> {
@@ -91,6 +104,24 @@ export async function savePatch(file: string, baseline: ConfigSnapshot, patch: S
 		const latest = await readSnapshot(file);
 		const raw = { ...latest.raw };
 		for (const field of Object.keys(changes) as (keyof SettingsPatch)[]) {
+			if (field === "keymap") {
+				const edits = changes.keymap!;
+				const desired = applyKeymapPatch(latest.raw.keymap, edits);
+				// 冲突检测按单个绑定粒度：别人改了同一个 (scope, action) 且和我们想写的不一致才算冲突。
+				for (const [scope, actions] of Object.entries(edits)) {
+					for (const action of Object.keys(actions!)) {
+						const bv = userBinding(base.raw.keymap, scope, action);
+						const lv = userBinding(latest.raw.keymap, scope, action);
+						const dv = userBinding(desired, scope, action);
+						const sameBase = bv.has === lv.has && isDeepStrictEqual(bv.value, lv.value);
+						const sameDesired = dv.has === lv.has && isDeepStrictEqual(dv.value, lv.value);
+						if (!sameBase && !sameDesired) throw new Error(`Config conflict in keymap.${scope}.${action}; reload settings before saving`);
+					}
+				}
+				if (Object.keys(desired).length) raw.keymap = desired;
+				else delete raw.keymap;
+				continue;
+			}
 			const desired = changes[field];
 			const sameDesired = desired === null ? !Object.hasOwn(latest.raw, field) : latest.raw[field] === desired;
 			const sameBase = Object.hasOwn(base.raw, field) === Object.hasOwn(latest.raw, field) &&
@@ -148,11 +179,63 @@ export async function savePatch(file: string, baseline: ConfigSnapshot, patch: S
 
 function validatePatch(patch: SettingsPatch): void {
 	for (const [field, value] of Object.entries(patch)) {
+		if (field === "keymap") {
+			validateKeymapPatch(value);
+			continue;
+		}
 		const valid = field === "leftColumnRatio"
 			? value === null || (typeof value === "number" && Number.isFinite(value) && value >= LEFT_COLUMN_RATIO_MIN && value <= LEFT_COLUMN_RATIO_MAX)
 			: Object.hasOwn(FIELD_VALUES, field) && (value === null || (FIELD_VALUES[field as keyof typeof FIELD_VALUES] as readonly unknown[]).includes(value));
 		if (!valid) throw new Error(`Invalid settings patch field ${field}`);
 	}
+}
+
+function validateKeymapPatch(value: unknown): void {
+	if (!isPlainObject(value)) throw new Error("Invalid settings patch field keymap");
+	for (const [scope, actions] of Object.entries(value)) {
+		if (!(KEY_SCOPES as readonly string[]).includes(scope)) throw new Error(`Invalid settings patch field keymap.${scope}`);
+		if (!isPlainObject(actions)) throw new Error(`Invalid settings patch field keymap.${scope}`);
+		for (const [action, edit] of Object.entries(actions)) {
+			const valid = isPlainObject(edit) && (
+				("reset" in edit && edit.reset === true) ||
+				("unbind" in edit && edit.unbind === true) ||
+				("set" in edit && Array.isArray(edit.set) && edit.set.length > 0 && edit.set.every((c) => typeof c === "string" && parseChord(c) !== undefined))
+			);
+			if (!valid) throw new Error(`Invalid settings patch field keymap.${scope}.${action}`);
+		}
+	}
+}
+
+/**
+ * Apply a keymap patch to the user file's `keymap` value, returning a fresh object.
+ * `set` of a single chord is written as a plain string to match the hand-edited
+ * config style; empty scopes are dropped so the file stays clean.
+ */
+export function applyKeymapPatch(baseKeymap: unknown, patch: KeymapPatch): Record<string, unknown> {
+	const out: Record<string, unknown> = isPlainObject(baseKeymap) ? structuredClone(baseKeymap) : {};
+	for (const [scope, actions] of Object.entries(patch)) {
+		const scopeMap: Record<string, unknown> = isPlainObject(out[scope]) ? { ...(out[scope] as Record<string, unknown>) } : {};
+		for (const [action, edit] of Object.entries(actions!)) {
+			if ("reset" in edit) delete scopeMap[action];
+			else if ("unbind" in edit) scopeMap[action] = null;
+			else scopeMap[action] = edit.set.length === 1 ? edit.set[0] : edit.set;
+		}
+		if (Object.keys(scopeMap).length) out[scope] = scopeMap;
+		else delete out[scope];
+	}
+	return out;
+}
+
+/** The user-file binding for one (scope, action): whether it is present and its raw value (string / array / null). */
+function userBinding(keymap: unknown, scope: string, action: string): { has: boolean; value: unknown } {
+	if (!isPlainObject(keymap)) return { has: false, value: undefined };
+	const scopeMap = keymap[scope];
+	if (!isPlainObject(scopeMap) || !Object.hasOwn(scopeMap, action)) return { has: false, value: undefined };
+	return { has: true, value: scopeMap[action] };
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function fingerprint(bytes: Buffer): string {
