@@ -25,11 +25,12 @@
  * counts them; folded matches are unfolded by the panel when jumped to.
  */
 
-import type { Theme } from "@earendil-works/pi-coding-agent";
+import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { t } from "../../i18n/index.ts";
 import type { SearchView, TreeFilter, TreeRow } from "../../types.ts";
 import { formatShortDate, formatTime } from "../../utils/format.ts";
+import { cursorTone } from "../cursor-tone.ts";
 import { fit, frame, metaBudget } from "../frame.ts";
 import { highlightLine, matchStyle, type RowHighlight, searchMeta } from "../search-highlight.ts";
 import { type OutlinePrefix, treeOutline } from "../tree-outline.ts";
@@ -75,7 +76,7 @@ export function renderTreePane(p: TreePaneProps, width: number, height: number):
 			const row = p.rows[i]!;
 			const search = p.search;
 			const highlight = search?.matches.has(i) ? { terms: search.terms, current: i === search.current } : undefined;
-			body.push(renderTreeRow(row, styleOutline(outline.get(row.entryId) ?? NO_PREFIX, theme), inner, i === p.cursor, theme, highlight, p.showLabelTimestamps));
+			body.push(renderTreeRow(row, styleOutline(outline.get(row.entryId) ?? NO_PREFIX, theme, i === p.cursor), inner, i === p.cursor, theme, highlight, p.showLabelTimestamps));
 		}
 	}
 
@@ -107,8 +108,8 @@ export function treeMeta(total: number, cursor: number, filter: TreeFilter, budg
 }
 
 /** Indent as dim as guide lines; the fold marker a notch brighter so a folded branch still shows on a dimmed row. */
-function styleOutline(prefix: OutlinePrefix, theme: Theme): string {
-	return theme.fg("dim", prefix.indent) + theme.fg("muted", prefix.marker);
+function styleOutline(prefix: OutlinePrefix, theme: Theme, isCursor: boolean): string {
+	return theme.fg(cursorTone("dim", isCursor), prefix.indent) + theme.fg(cursorTone("muted", isCursor), prefix.marker);
 }
 
 /**
@@ -117,16 +118,20 @@ function styleOutline(prefix: OutlinePrefix, theme: Theme): string {
  * time, `role: ` (omitted for system rows whose text already is a
  * `[system]`-style tag) and the text truncated to what is left. Shared with
  * the tree dialog. With `highlight` (a row matching the pane's search) the
- * terms are painted on top of the finished line.
+ * terms are painted on top of the finished line. The cursor row steps its
+ * secondary tones up one notch (see ../cursor-tone.ts) because it is drawn on
+ * `selectedBg`.
  */
 export function renderTreeRow(row: TreeRow, prefix: string, inner: number, isCursor: boolean, theme: Theme, highlight?: RowHighlight, showLabelTimestamps = false): string {
 	const marker = isCursor ? "› " : "  ";
+	// 光标行整行刷 selectedBg，把 dim / muted 提亮一档，免得次级文字糊在底色里。
+	const tone = (color: ThemeColor) => cursorTone(color, isCursor);
 	// 和 pi 一样，活动路径上的节点在文字前加 `• `。
 	const path = row.onActiveBranch ? "• " : "";
 	const labelTime = showLabelTimestamps && row.labelTimestamp !== undefined ? formatShortDate(row.labelTimestamp) : "";
 	// 时间放进标签括号内，与后面的消息时间区分；时间缺失时不猜测。
 	const label = row.label
-		? theme.fg("warning", `[${row.label}`) + (labelTime ? theme.fg("dim", ` · ${labelTime}`) : "") + theme.fg("warning", "] ")
+		? theme.fg("warning", `[${row.label}`) + (labelTime ? theme.fg(tone("dim"), ` · ${labelTime}`) : "") + theme.fg("warning", "] ")
 		: "";
 	const time = `${formatTime(row.timestamp)} `;
 	const role = row.role === "system" ? "" : `${t(`role.${row.role}`)}: `;
@@ -139,17 +144,17 @@ export function renderTreeRow(row: TreeRow, prefix: string, inner: number, isCur
 			? theme.fg("userMessageText", s)
 			: row.role === "assistant"
 				? theme.fg("accent", s)
-				: theme.fg("muted", s);
-	const branchStyle = (s: string) => (row.onActiveBranch ? s : theme.fg("dim", s));
+				: theme.fg(tone("muted"), s);
+	const branchStyle = (s: string) => (row.onActiveBranch ? s : theme.fg(tone("dim"), s));
 	// system 行（[system] / [branch summary]: …）整行用 muted，和 pi 的 dim 标签一致。
-	const textStyle = (s: string) => (row.role === "system" ? theme.fg("muted", s) : branchStyle(s));
+	const textStyle = (s: string) => (row.role === "system" ? theme.fg(tone("muted"), s) : branchStyle(s));
 
 	const line =
 		theme.fg("accent", marker) +
 		prefix +
 		theme.fg("accent", path) +
 		label +
-		theme.fg("dim", time) +
+		theme.fg(tone("dim"), time) +
 		branchStyle(roleStyle(role)) +
 		textStyle(text);
 	// 和会话列表一样，截断的完整重置码之后需要补回选中背景。

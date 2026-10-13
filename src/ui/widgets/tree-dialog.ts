@@ -35,6 +35,7 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { t } from "../../i18n/index.ts";
 import type { KeyHint, TreeFilter, TreeRow } from "../../types.ts";
 import { clamp } from "../../utils/indices.ts";
+import { cursorTone } from "../cursor-tone.ts";
 import { FRAME_DIVIDER, frame, overlayCentered } from "../frame.ts";
 import { renderTreeRow } from "../panes/tree-pane.ts";
 import { scrollOffset } from "../panes/sessions-pane.ts";
@@ -237,7 +238,9 @@ export class TreeDialog {
 			const prefixes = treePrefixes(rows, this.folded);
 			const first = scrollOffset(this.index, rows.length, visible);
 			for (let i = first; i < Math.min(rows.length, first + visible); i++) {
-				body.push(renderTreeRow(rows[i]!, theme.fg("dim", prefixes[i]!), inner, i === this.index, theme, undefined, showLabelTimestamps));
+				// 树线整段 dim；光标行和面板一样提亮一档，否则底色上的树线看不见了。
+				const prefix = theme.fg(cursorTone("dim", i === this.index), prefixes[i]!);
+				body.push(renderTreeRow(rows[i]!, prefix, inner, i === this.index, theme, undefined, showLabelTimestamps));
 			}
 		}
 		while (body.length < visible + 2) body.push("");
