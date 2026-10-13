@@ -9,7 +9,7 @@ import { t } from "../../i18n/index.ts";
 import type { ActionId, KeyHint } from "../../types.ts";
 import { clamp } from "../../utils/indices.ts";
 import { fit, frame, FRAME_DIVIDER, overlayCentered } from "../frame.ts";
-import { keymapActionDirty, settingsDirtyCount, settingsDraft, SETTINGS_CATEGORIES, type SettingsPosition, type SettingsRegion, type SettingsState } from "../settings-state.ts";
+import { keymapActionDirty, settingsDirtyCount, settingsDraft, settingsRetryKind, SETTINGS_CATEGORIES, type SettingsPosition, type SettingsRegion, type SettingsState } from "../settings-state.ts";
 import { dialogHeader } from "./dialog-header.ts";
 
 const REGIONS: SettingsRegion[] = ["categories", "list", "buttons"];
@@ -33,9 +33,21 @@ export interface SettingsDialogOptions {
 	onClose: () => void;
 	onExit?: () => void;
 	onEdit?: (id: string) => void;
-	onSave?: () => void;
+	/** `s`: redo whatever the last commit failed at (see `settingsRetryKind`). */
+	onRetry?: () => void;
 	onDefaults?: () => void;
 	onReload?: () => void;
+}
+
+/**
+ * One button of the settings main view. `key` is the shortcut that reaches it
+ * from any region, and the label prints it: `[ s Retry ]`.
+ */
+interface SettingsButton {
+	key: string;
+	label: string;
+	disabled: boolean;
+	run: () => void;
 }
 
 export class SettingsDialog {
@@ -48,7 +60,34 @@ export class SettingsDialog {
 	}
 
 	get hints(): KeyHint[] {
-		return [["Esc/q", t("hint.close")], ["h/←", t("settings.categories")], ["l/→", t("settings.list")], ["Tab", t("settings.switchRegion")], ["j/k/↑↓", t("hint.move")], ["Enter", t("hint.choose")], ["s", t("settings.save")], ["d", t("settings.restore")], ["r", t("settings.reload")], ["PgUp/PgDn", t("settings.scrollDetails")]];
+		// 正常路径上每一次改动都已经落盘，所以只有失败时才有"重试"这一项。
+		const retry: KeyHint[] = this.retryable() ? [["s", t("settings.retry")]] : [];
+		return [["Esc/q", t("hint.close")], ["h/←", t("settings.categories")], ["l/→", t("settings.list")], ["Tab", t("settings.switchRegion")], ["j/k/↑↓", t("hint.move")], ["Enter", t("hint.choose")], ...retry, ["d", t("settings.restore")], ["r", t("settings.reload")], ["PgUp/PgDn", t("settings.scrollDetails")]];
+	}
+
+	/** Is there a failed write / read for `s` to redo? */
+	private retryable(): boolean {
+		return settingsRetryKind(this.o.state) !== undefined;
+	}
+
+	/**
+	 * The button bar. Retry is only listed while something actually failed, so
+	 * the count moves — every reader goes through here and clamps `state.button`
+	 * against it. The keys are the same ones that work from any region.
+	 */
+	private buttons(): SettingsButton[] {
+		const { state } = this.o;
+		const buttons: SettingsButton[] = [];
+		if (this.retryable())
+			buttons.push({ key: "s", label: t("settings.retry"), disabled: false, run: () => this.o.onRetry?.() });
+		buttons.push({ key: "q", label: t("hint.cancel"), disabled: false, run: () => this.exit() });
+		buttons.push({
+			key: "d", label: t("settings.restore"), run: () => this.o.onDefaults?.(),
+			// 主题页的 d 撤的是切换失败的那个主题；没有失败就没什么可撤的。
+			disabled: state.loading || (state.category === "theme" ? state.themeDraft === undefined : !state.baseline),
+		});
+		buttons.push({ key: "r", label: t("settings.reload"), disabled: state.loading, run: () => this.o.onReload?.() });
+		return buttons;
 	}
 
 	open(): void {
@@ -98,18 +137,14 @@ export class SettingsDialog {
 		} else if (matchesKeyId(data, "l") || matchesKeyId(data, "right")) {
 			state.region = "list";
 		} else if (matchesKeyId(data, "s")) {
-			this.o.onSave?.();
+			this.o.onRetry?.();
 		} else if (matchesKeyId(data, "d")) {
 			this.o.onDefaults?.();
 		} else if (matchesKeyId(data, "r")) {
 			this.o.onReload?.();
 		} else if (matchesKeyId(data, "return")) {
-			if (state.region === "buttons") {
-				if (state.button === 0) this.o.onSave?.();
-				else if (state.button === 1) this.exit();
-				else if (state.button === 2) this.o.onDefaults?.();
-				else this.o.onReload?.();
-			} else if (state.region === "categories") state.region = "list";
+			if (state.region === "buttons") this.buttons()[this.buttonIndex()]?.run();
+			else if (state.region === "categories") state.region = "list";
 			else this.o.onEdit?.(this.items()[this.position().cursor]?.id ?? "");
 		} else if (matchesKeyId(data, "j") || matchesKeyId(data, "down")) {
 			this.move(1);
@@ -131,8 +166,15 @@ export class SettingsDialog {
 			position.cursor = clamp(position.cursor + delta, 0, Math.max(0, this.items().length - 1));
 			position.detailScroll = 0;
 		} else {
-			state.button = clamp(state.button + delta, 0, 3);
+			state.button = clamp(state.button + delta, 0, this.buttons().length - 1);
 		}
+	}
+
+	/** `state.button` clamped into the button bar, which grows and shrinks with the failures. */
+	private buttonIndex(): number {
+		const state = this.o.state;
+		state.button = clamp(state.button, 0, Math.max(0, this.buttons().length - 1));
+		return state.button;
 	}
 
 	private position(): SettingsPosition {
@@ -172,23 +214,23 @@ export class SettingsDialog {
 
 	/**
 	 * The theme page is one row like every other setting: the value is the theme
-	 * the panel currently paints with — pi's saved one, or the preview picked in
-	 * the menu — and Enter opens the picker. The description names the theme's
-	 * file (so the list column needs no 内置 / 自定义 tag) and says how the choice
-	 * takes effect; a preview marks the row as an unsaved draft.
+	 * pi has active — or the one pi refused to switch to — and Enter opens the
+	 * picker, which switches pi right away. The description names the theme's file
+	 * (so the list column needs no 内置 / 自定义 tag); a failed switch marks the row
+	 * as an unsaved change to retry with `s`.
 	 */
 	private themeItems(): SettingsItem[] {
-		const { themes, activeTheme: saved, themeDraft: draft } = this.o.state;
+		const { themes, activeTheme: active, themeDraft: failed } = this.o.state;
 		if (!themes.length)
 			return [{ id: "theme", label: t("settings.category.theme"), value: "", description: t("settings.themeEmpty") }];
-		const selected = draft ?? saved;
+		const selected = failed ?? active;
 		const path = themes.find((ref) => ref.name === selected)?.path ?? t("settings.themeBuiltInPath");
 		return [{
 			id: "theme",
 			label: t("settings.category.theme"),
 			value: selected ?? "",
-			description: draft === undefined ? t("settings.themeDescription", { path }) : t("settings.themePreviewDescription", { name: draft }),
-			...(draft === undefined ? {} : { dirty: true }),
+			description: failed === undefined ? t("settings.themeDescription", { path }) : t("settings.themePendingDescription", { name: failed }),
+			...(failed === undefined ? {} : { dirty: true }),
 		}];
 	}
 
@@ -231,25 +273,23 @@ export class SettingsDialog {
 			area = [this.selected(title, inner, true, state.region === "categories")];
 			area.push(...this.renderContent(contentWidth, areaHeight - area.length).map((line) => ` ${line}`));
 		}
-		const buttons = [`s ${t("settings.save")}`, `q ${t("hint.cancel")}`, `d ${t("settings.restore")}`, `r ${t("settings.reload")}`];
+		// 按钮标签就写着它的直连键（任意区域都能按），重试只在失败时出现在表里。
+		const buttons = this.buttons();
+		const selectedButton = this.buttonIndex();
 		const renderButton = (i: number, text: string, width: number): string => {
-			const selected = state.region === "buttons" && state.button === i;
-			const disabled = state.saving || (i === 0
-				? !state.baseline || !settingsDirtyCount(state) || state.loading
-				: i === 2
-					// 主题页的 d 撤的是预览草稿；没有预览就没什么可还原的。
-					? state.loading || (state.category === "theme" ? state.themeDraft === undefined : !state.baseline)
-					: i === 3 && state.loading);
+			const selected = state.region === "buttons" && selectedButton === i;
+			const disabled = state.saving || buttons[i]?.disabled;
 			return disabled
 				? theme.fg("dim", fit(`${selected ? "›" : " "} ${text}`, width))
 				: this.selected(text, width, selected, state.region === "buttons");
 		};
-		const close = buttons.map((label, i) => renderButton(i, `[ ${label} ]`, visibleWidth(label) + 6)).join(" ");
+		const labels = buttons.map((button) => `${button.key} ${button.label}`);
+		const close = labels.map((label, i) => renderButton(i, `[ ${label} ]`, visibleWidth(label) + 6)).join(" ");
 		const main = frame([
 			...area,
 			...messageLines.map((line) => theme.fg(state.error ? "error" : "muted", ` ${line}`)),
 			FRAME_DIVIDER,
-			fit(width < 76 ? renderButton(state.button, `[ ${buttons[state.button]} ] ${state.button + 1}/4`, inner) : close, inner),
+			fit(width < 76 ? renderButton(selectedButton, `[ ${labels[selectedButton]} ] ${selectedButton + 1}/${labels.length}`, inner) : close, inner),
 		], {
 			width,
 			height: mainHeight,

@@ -5,7 +5,7 @@ import { actionDescription, DEFAULT_KEYMAP, scopeTitle } from "../../config/keym
 import { KEY_SCOPES, LEFT_COLUMN_RATIO_MAX, LEFT_COLUMN_RATIO_MIN } from "../../constants.ts";
 import { t } from "../../i18n/index.ts";
 import type { ActionId, KeyHint } from "../../types.ts";
-import { keymapDraftChords, setKeymapDraft, setSettingsDraft, settingsDirtyCount, settingsDraft, type EditableSetting } from "../settings-state.ts";
+import { keymapDraftChords, setKeymapDraft, setSettingsDraft, settingsDirtyCount, settingsDraft, settingsRetryKind, type EditableSetting } from "../settings-state.ts";
 import { confirmDialogSpec } from "../widgets/confirm-dialog.ts";
 import { numericInputValue } from "../widgets/input-dialog.ts";
 import type { SettingsFlowHost } from "./host.ts";
@@ -14,6 +14,35 @@ function current(h: SettingsFlowHost, generation: number): boolean {
 }
 function hints(): KeyHint[] {
 	return [["j/k", t("hint.move")], ["Enter", t("hint.choose")], ["Esc", t("hint.cancel")]];
+}
+/**
+ * Every edit goes through here: the draft is written and immediately persisted.
+ * A value that round-trips to the on-disk one leaves no draft (setSettingsDraft /
+ * setKeymapDraft drop it), so nothing is written for a no-op pick.
+ *
+ * 每一次改动都由这里落盘：草稿与磁盘一致时什么都不做。保存进行中（saving）时
+ * setSettingsDraft 会直接返回，极快地连改两项时第二次选择可能被丢掉——每次落盘
+ * 只是一次本地文件写 + initI18n，窗口很小，这里不引入排队。
+ */
+function commitDraft(h: SettingsFlowHost): void {
+	if (settingsDirtyCount(h.state.settings)) {
+		void saveSettings(h);
+		return;
+	}
+	// 选回磁盘上已有的值 = 没有改动（草稿被 setSettingsDraft 清掉了）：上一次的失败也一并
+	// 清掉，没有东西可重试了，别留一条没有重试按钮的错误。
+	h.state.settings.error = undefined;
+	h.refreshSettings();
+}
+/**
+ * Retry whatever the last commit failed at: a failed read is re-read, a failed
+ * write (or a theme pi refused to switch to) re-runs the commit routine — which
+ * keeps the draft, so the retry has something to write.
+ */
+export function retrySettings(h: SettingsFlowHost): void {
+	const kind = settingsRetryKind(h.state.settings);
+	if (kind === "read") void readSettings(h);
+	else if (kind === "commit") void saveSettings(h);
 }
 export async function readSettings(h: SettingsFlowHost): Promise<void> {
 	const s = h.state.settings;
@@ -25,10 +54,9 @@ export async function readSettings(h: SettingsFlowHost): Promise<void> {
 	s.patch = {};
 	s.error = undefined;
 	s.notice = undefined;
-	// 主题是 pi 的状态、不走配置草稿：读它当前的主题列表和已保存的主题，并撤掉上一次
-	// 留下的预览（`r` 重新加载要回到 pi 真正保存的那个主题）。每次打开都重新扫描列表，
-	// 新丢进 pi 主题目录的文件立刻可见。
-	if (s.themeDraft !== undefined) h.themeSource?.preview(undefined);
+	// 主题是 pi 的状态、不走配置草稿：读它当前的主题列表和已保存的主题，并丢掉上一次
+	// 切换失败留下的待重试主题（`r` 重新加载要回到 pi 真正生效的那个主题）。每次打开都
+	// 重新扫描列表，新丢进 pi 主题目录的文件立刻可见。
 	s.themeDraft = undefined;
 	s.themes = h.themeSource?.list() ?? [];
 	s.activeTheme = h.themeSource?.savedName();
@@ -112,7 +140,7 @@ export function editSetting(h: SettingsFlowHost, key: string): void {
 				h.closeDialogs();
 				// 原值确认不做浮点往返转换，保留手写配置的小数精度。
 				if (current(h, generation)) setSettingsDraft(s, "leftColumnRatio", text.trim() === initial ? draft.leftColumnRatio : value / 100);
-				h.refreshSettings();
+				commitDraft(h);
 			},
 			onCancel: () => h.closeDialogs(),
 		});
@@ -133,7 +161,7 @@ export function editSetting(h: SettingsFlowHost, key: string): void {
 			h.closeDialogs();
 			if (current(h, generation))
 				setSettingsDraft(s, field, options[index]!);
-			h.refreshSettings();
+			commitDraft(h);
 		},
 		onCancel: () => h.closeDialogs(),
 	});
@@ -141,9 +169,8 @@ export function editSetting(h: SettingsFlowHost, key: string): void {
 
 /**
  * Theme picker. Unlike every other picker this one shows pi's themes rather than
- * a fixed list, and it previews: picking one repaints pi (and the panel) in it at
- * once, but pi's saved theme only moves when the user saves (see docs/theme.md).
- * Picking pi's current theme again clears the draft instead of pinning it.
+ * a fixed list; picking one switches pi right away (pi persists it in its own
+ * settings.json), so there is no preview and no save step (see docs/theme.md).
  */
 function openThemePicker(h: SettingsFlowHost, generation: number): void {
 	const s = h.state.settings;
@@ -167,29 +194,48 @@ function openThemePicker(h: SettingsFlowHost, generation: number): void {
 			h.closeDialogs();
 			if (!current(h, generation)) return;
 			const name = s.themes[index]?.name;
-			if (name !== undefined) setThemeDraft(h, name);
+			if (name !== undefined) applyTheme(h, name);
 		},
 		onCancel: () => h.closeDialogs(),
 	});
 }
 
 /**
- * Draft a theme choice: the panel (and pi's whole interface) repaint in it right
- * away, while pi's saved theme only moves in `saveSettings`. `undefined` drops
- * the preview and goes back to the saved theme. Choosing what is already there
- * (pi's own theme with no preview up) leaves pi alone.
+ * Switch pi to the picked theme on the spot: `set` goes through pi's own
+ * `ctx.ui.setTheme`, which persists the choice in pi's settings.json. A failure
+ * (pi refused the theme) keeps the name as the pending change, so the panel can
+ * report it and `s` can retry the switch. Picking the theme pi already has means
+ * "never mind" — it drops a pending failed switch.
  */
-function setThemeDraft(h: SettingsFlowHost, name: string | undefined): void {
+function applyTheme(h: SettingsFlowHost, name: string): void {
 	const s = h.state.settings;
-	const draft = name === s.activeTheme ? undefined : name;
-	if (draft === s.themeDraft) {
+	if (name === s.activeTheme) {
+		if (s.themeDraft === undefined) {
+			h.refreshSettings();
+			return;
+		}
+		s.themeDraft = undefined;
+		s.error = undefined;
+		s.notice = undefined;
 		h.refreshSettings();
 		return;
 	}
-	s.themeDraft = draft;
-	s.error = undefined;
-	s.notice = undefined;
-	h.themeSource?.preview(draft);
+	if (!h.themeSource) {
+		s.error = t("settings.themeUnavailable");
+		h.refreshSettings();
+		return;
+	}
+	const switched = h.themeSource.set(name);
+	if (switched.success) {
+		s.activeTheme = name;
+		s.themeDraft = undefined;
+		s.error = undefined;
+		s.notice = t("settings.themeApplied", { name });
+	} else {
+		s.themeDraft = name;
+		s.error = t("settings.themeApplyFailed", { error: switched.error ?? name });
+		s.notice = undefined;
+	}
 	h.refreshSettings();
 }
 
@@ -221,8 +267,11 @@ export function openBindingEditor(h: SettingsFlowHost, action: ActionId): void {
 			if (index === unbindIndex) setKeymapDraft(s, scope, action, "unbind");
 			else if (index === resetIndex) setKeymapDraft(s, scope, action, "reset");
 			else setKeymapDraft(s, scope, action, chords.filter((_, i) => i !== index - removeOffset));
-			h.refreshSettings();
-			openBindingEditor(h, action);
+			// 立即落盘，落完再把菜单打开（可以接着编下一条绑定）；失败就留在主视图，
+			// 让错误行和重试按钮露出来（openBindingEditor 在 saving 时本来也会早退）。
+			void saveSettings(h).then(() => {
+				if (current(h, generation) && !s.error) openBindingEditor(h, action);
+			});
 		},
 		onCancel: () => h.closeDialogs(),
 	});
@@ -247,8 +296,10 @@ function openAddBinding(h: SettingsFlowHost, action: ActionId, chords: string[])
 			if (!parseChord(chord)) return;
 			h.closeDialogs();
 			if (current(h, generation) && !chords.includes(chord)) setKeymapDraft(s, scope, action, [...chords, chord]);
-			h.refreshSettings();
-			if (current(h, generation)) openBindingEditor(h, action);
+			// 同 openBindingEditor：先落盘，成功后再回到绑定菜单。
+			void saveSettings(h).then(() => {
+				if (current(h, generation) && !s.error) openBindingEditor(h, action);
+			});
 		},
 		onCancel: () => {
 			h.closeDialogs();
@@ -261,7 +312,7 @@ export function restoreSettingsDefaults(h: SettingsFlowHost): void {
 	const s = h.state.settings;
 	if (s.loading || s.saving)
 		return;
-	// 主题页的 d 撤掉预览：回到 pi 已保存的那个主题（它没有"默认值"可还原）。
+	// 主题页的 d 撤掉切换失败的那个主题（它没有"默认值"可还原，成功切换过的也没得撤）。
 	if (s.category === "theme") {
 		if (s.themeDraft === undefined) return;
 		const generation = s.generation;
@@ -269,7 +320,11 @@ export function restoreSettingsDefaults(h: SettingsFlowHost): void {
 			title: t("settings.restoreThemeConfirm"),
 			onConfirm: () => {
 				h.closeDialogs();
-				if (current(h, generation)) setThemeDraft(h, undefined);
+				if (!current(h, generation)) return;
+				s.themeDraft = undefined;
+				s.error = undefined;
+				s.notice = undefined;
+				h.refreshSettings();
 			},
 			onCancel: () => h.closeDialogs(),
 		}));
@@ -291,7 +346,7 @@ export function restoreSettingsDefaults(h: SettingsFlowHost): void {
 				return;
 			for (const key of fields)
 				setSettingsDraft(s, key, null);
-			h.refreshSettings();
+			commitDraft(h);
 		},
 		onCancel: () => h.closeDialogs(),
 	}));
@@ -314,11 +369,12 @@ function restoreScopeBindings(h: SettingsFlowHost): void {
 				return;
 			for (const action of actions)
 				setKeymapDraft(s, scope, action as ActionId, "reset");
-			h.refreshSettings();
+			commitDraft(h);
 		},
 		onCancel: () => h.closeDialogs(),
 	}));
 }
+// 正常路径上改动都已经落盘，只有上一次提交失败时才会走到这个菜单（草稿还在）。
 export function exitSettings(h: SettingsFlowHost): void {
 	const s = h.state.settings;
 	if (s.saving)
@@ -329,7 +385,7 @@ export function exitSettings(h: SettingsFlowHost): void {
 	}
 	const generation = s.generation;
 	h.openMenu("settings", {
-		title: t("settings.unsavedTitle"), items: [t("settings.continue"), t("settings.saveExit"), t("settings.discardExit")], hints: hints(), initialIndex: 0,
+		title: t("settings.unsavedTitle"), items: [t("settings.continue"), t("settings.retryExit"), t("settings.discardExit")], hints: hints(), initialIndex: 0,
 		onSelect: (index) => {
 			h.closeDialogs();
 			if (!current(h, generation))
@@ -341,8 +397,13 @@ export function exitSettings(h: SettingsFlowHost): void {
 					title: t("settings.discardConfirm"),
 					onConfirm: () => {
 						h.closeDialogs();
-						if (current(h, generation))
-							h.closeSettings();
+						if (!current(h, generation))
+							return;
+						// 放弃就是真的丢掉：没写成功的草稿和没切过去的主题都不再留着。
+						s.patch = {};
+						s.themeDraft = undefined;
+						s.error = undefined;
+						h.closeSettings();
 					},
 					onCancel: () => h.closeDialogs(),
 				}));
@@ -382,8 +443,8 @@ export async function saveSettings(h: SettingsFlowHost, exit = false): Promise<v
 				return;
 			s.error = t("settings.applyFailed", { error: String(error) });
 		}
-		// 主题不在面板的配置文件里：草稿单独交给 pi（它写自己的 settings.json）。放在 apply
-		// 之后，失败也不盖掉上面的错误；失败时保留草稿，预览和"未保存"标记都还在。
+		// 主题不在面板的配置文件里：待重试的切换单独交给 pi（它写自己的 settings.json）。
+		// 放在 apply 之后，失败也不盖掉上面的错误；失败时保留 themeDraft，`s` 可以再试。
 		let themeNotice: string | undefined;
 		if (s.themeDraft !== undefined) {
 			const name = s.themeDraft;

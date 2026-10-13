@@ -10,7 +10,7 @@
  *   ui/       TUI components (panes, dialogs, footer, search bar)
  */
 
-import { getAgentDir, initTheme, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { OverlayHandle } from "@earendil-works/pi-tui";
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -126,9 +126,6 @@ export default function (pi: ExtensionAPI) {
 			let disableKeyLog: (() => void) | undefined;
 			const currentFile = ctx.sessionManager.getSessionFile();
 			const version = extensionVersion();
-			// 打开面板时 pi 的活动主题就是它保存的那个（见 themeSource.savedName）：预览
-			// 之后 ctx.ui.theme 指向预览的实例，所以这里先记下来，还原时用它。
-			let savedTheme = ctx.ui.theme.name;
 
 			await ctx.ui.custom<void>(
 				(tui, theme, _keybindings, done) => {
@@ -159,25 +156,22 @@ export default function (pi: ExtensionAPI) {
 							save: (baseline, patch) => saveConfigPatch(getAgentDir(), baseline, patch),
 							apply: (saved) => { initI18n(saved.locale); },
 						},
-						// 主题只有一个来源：pi。设置页列出 pi 能加载的主题，选中先"预览"（切换 pi 的
-						// 全局主题但不写设置，pi 自己的设置页也是这么预览的），按 s 保存才走
-						// ctx.ui.setTheme —— 由 pi 负责写它自己的 settings.json 和热重载。
+						// 主题只有一个来源：pi。设置页列出 pi 能加载的主题，选中即切（走
+						// ctx.ui.setTheme，由 pi 负责写它自己的 settings.json 和热重载）；
+						// 失败时面板留下待重试的主题，s 再试一次。
 						themeSource: {
 							list: () => ctx.ui.getAllThemes(),
 							theme: ctx.ui.theme,
-							// 打开面板时 pi 的活动主题就是"已保存"的那个：预览要还原回它，
-							// 而预览之后 ctx.ui.theme 已经是预览中的实例了，不能再当基准。
-							savedName: () => savedTheme,
-							preview: (name) => {
-								initTheme(name ?? savedTheme, true);
-								// 换主题后带颜色的缓存（CONTENT 排版 / changelog）要跟着丢，面板自己
-								// 的重绘交给 requestRender。
-								tui.invalidate();
-								tui.requestRender();
-							},
+							// 面板不自己记主题：ctx.ui.theme 就是 pi 当前活动（也是它保存）的那个。
+							savedName: () => ctx.ui.theme.name,
 							set: (name) => {
 								const result = ctx.ui.setTheme(name);
-								if (result.success) savedTheme = name;
+								if (result.success) {
+									// 换主题后带颜色的缓存（CONTENT 排版 / changelog）要跟着丢，
+									// 面板自己的重绘交给 requestRender。
+									tui.invalidate();
+									tui.requestRender();
+								}
 								return result;
 							},
 						},

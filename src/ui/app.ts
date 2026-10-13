@@ -63,7 +63,7 @@ import type {
 import { ContentViewport } from "./content-viewport.ts";
 import { toggleArchive, togglePin } from "./flows/archive-flows.ts";
 import type { SettingsFlowHost } from "./flows/host.ts";
-import { editSetting, exitSettings, readSettings, reloadSettings, restoreSettingsDefaults, saveSettings } from "./flows/settings-flows.ts";
+import { editSetting, exitSettings, readSettings, reloadSettings, restoreSettingsDefaults, retrySettings } from "./flows/settings-flows.ts";
 import {
 	confirmCloneSession,
 	confirmDeleteSession,
@@ -124,7 +124,7 @@ export interface LazyPanelOptions {
 	configDefaults?: Pick<ResolvedConfig, "locale" | "defaultScope" | "defaultSort">;
 	/** Raw configuration persistence and save-time language application. */
 	settingsSource?: SettingsSource;
-	/** pi's themes: the settings page lists them, previews a pick and saves it (the panel has no theme of its own). */
+	/** pi's themes: the settings page lists them and switches to one (the panel has no theme of its own). */
 	themeSource?: ThemeSource;
 	/** Initial footer status, e.g. config warnings. */
 	status?: string;
@@ -288,7 +288,7 @@ export class LazyPanel implements Component, Focusable {
 			},
 			onExit: () => exitSettings(this.flowHost),
 			onEdit: (id) => editSetting(this.flowHost, id),
-			onSave: () => { void saveSettings(this.flowHost); },
+			onRetry: () => retrySettings(this.flowHost),
 			onDefaults: () => restoreSettingsDefaults(this.flowHost),
 			onReload: () => reloadSettings(this.flowHost),
 		});
@@ -354,9 +354,7 @@ export class LazyPanel implements Component, Focusable {
 			refreshSession: (file) => this.refreshSession(file),
 			settingsSource: o.settingsSource,
 			themeSource: o.themeSource,
-			// 关掉设置页 = 放弃未保存的主题预览：让 pi 回到它自己保存的那个主题上。
 			closeSettings: () => {
-				this.dropThemePreview();
 				this.settingsDialog.close();
 			},
 			refreshSettings: () => this.o.requestRender(),
@@ -1909,7 +1907,6 @@ export class LazyPanel implements Component, Focusable {
 	private close(): void {
 		if (this.disposed) return;
 		this.disposed = true;
-		this.dropThemePreview();
 		this.settingsDialog.dispose();
 		this.keys.clear();
 		this.clearSessionLoad();
@@ -1918,21 +1915,10 @@ export class LazyPanel implements Component, Focusable {
 
 	dispose(): void {
 		this.disposed = true;
-		this.dropThemePreview();
 		this.settingsDialog.dispose();
 		this.stopChangelogSpinner();
 		this.keys.clear();
 		this.clearSessionLoad();
-	}
-
-	/**
-	 * 面板带着一个没保存的主题预览被关掉（设置页退出、面板销毁）时，把 pi 的主题还原
-	 * 回它保存的那个 —— 预览只是看看，没按 s 就不该留下痕迹。
-	 */
-	private dropThemePreview(): void {
-		if (this.state.settings.themeDraft === undefined) return;
-		this.state.settings.themeDraft = undefined;
-		this.o.themeSource?.preview(undefined);
 	}
 
 	private clearSessionLoad(): void {

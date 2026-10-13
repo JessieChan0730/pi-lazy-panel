@@ -29,9 +29,10 @@ export interface SettingsState {
 	config: ResolvedConfig | undefined;
 	/**
 	 * Theme page: pi's themes as of the last read, the name of the theme pi has
-	 * saved, and the preview picked in the picker but not saved yet. None of it
-	 * goes into the config patch — pi owns the theme (see docs/theme.md) — but the
-	 * preview counts as one unsaved change and is dropped when the page closes.
+	 * active, and the theme pi refused to switch to (kept only so `s` can retry
+	 * the switch). None of it goes into the config patch — pi owns the theme (see
+	 * docs/theme.md) — a failed switch counts as one unsaved change, so leaving
+	 * the page still asks what to do with it.
 	 */
 	themes: readonly ThemeRef[];
 	activeTheme: string | undefined;
@@ -51,14 +52,34 @@ export function createSettingsState(): SettingsState {
 	};
 }
 
+/**
+ * What is left to write. Every edit commits right away, so this is 0 on the
+ * happy path and only counts what a failed commit still owes — which is what
+ * the header's `*` markers, the retry gate and the exit prompt key off.
+ */
 export function settingsDirtyCount(state: SettingsState): number {
-	// 主题预览也是一处未保存的改动（保存时才写进 pi），所以计入数量、退出时要挽留。
+	// 切换失败的主题也是这样一处待重试的改动（重试时交给 pi 去写），所以计入数量。
 	let count = state.themeDraft === undefined ? 0 : 1;
 	for (const [key, value] of Object.entries(state.patch)) {
 		if (key === "keymap") for (const actions of Object.values(value as NonNullable<SettingsPatch["keymap"]>)) count += Object.keys(actions!).length;
 		else count++;
 	}
 	return count;
+}
+
+/**
+ * What a Retry would redo, or undefined when there is nothing to retry — the
+ * error then comes from something this button cannot fix (an apply that failed
+ * after the file was already written, an unavailable source, an empty theme
+ * list), and the message says what to do instead.
+ *
+ * This only answers what is pending; a save already in flight is not a reason to
+ * hide the button (read/save no-op while `saving` anyway), the dialog dims it.
+ */
+export function settingsRetryKind(state: SettingsState): "read" | "commit" | undefined {
+	if (state.error === undefined) return undefined;
+	if (!state.baseline) return "read";
+	return settingsDirtyCount(state) > 0 ? "commit" : undefined;
 }
 
 /** Does the draft change the binding of `action` in `scope` (shows the `*` marker)? */

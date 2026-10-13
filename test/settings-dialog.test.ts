@@ -32,7 +32,7 @@ function makeDialog(config = DEFAULT_CONFIG, withThemes = true) {
 			closes++;
 		},
 		onEdit: (id) => edits.push(id),
-		onSave: () => buttons.push("save"),
+		onRetry: () => buttons.push("retry"),
 		onDefaults: () => buttons.push("defaults"),
 		onReload: () => buttons.push("reload"),
 	});
@@ -61,10 +61,10 @@ test("settings values and local readonly notes replace global preview notice", (
 	assert.match(h.text(), /Theme {2,}nord/);
 	h.state.region = "list";
 	assert.match(h.text(), /\/home\/user\/\.pi\/agent\/themes\/nord\.json/);
-	// 预览中的草稿：行上换成预览的主题并带 * 标记，说明文字也跟着换。
+	// 切换失败留下的主题：行上换成 pi 没切过去的那一个并带 * 标记，说明文字也跟着换。
 	h.state.themeDraft = "light";
 	assert.match(h.text(), /\* Theme {2,}light/);
-	assert.match(h.text(), /Previewing light/);
+	assert.match(h.text(), /Switching to light failed/);
 	assert.deepEqual(config, before);
 	assert.match(makeDialog().text(), /Follow system/);
 });
@@ -85,16 +85,22 @@ test("action shortcuts work from categories and list without focusing buttons", 
 	for (const region of ["categories", "list"] as const) {
 		const h = makeDialog();
 		h.dialog.open();
+		h.state.baseline = { raw: {}, fingerprint: null };
 		h.state.region = region;
+		// 正常状态：改动都已经落盘，按钮栏里没有"保存"，也没有"重试"。
+		const idle = h.text().split("\n").find((l) => l.includes("[ q cancel ]"))!;
+		assert.match(idle, /q cancel/);
+		assert.match(idle, /d Restore defaults/);
+		assert.match(idle, /r Reload/);
+		assert.doesNotMatch(idle, /Retry|Save/);
+		assert.doesNotMatch(idle, /—/);
+		// 上一次提交失败后才多出重试按钮，s 在任意区域都能直接重试。
+		setSettingsDraft(h.state, "locale", "zh");
+		h.state.error = "Not saved: conflict";
+		assert.match(h.text().split("\n").find((l) => l.includes("[ s Retry ]"))!, /s Retry/);
 		for (const key of ["s", "d", "r"]) h.dialog.handleInput(key);
-		assert.deepEqual(h.buttons, ["save", "defaults", "reload"]);
+		assert.deepEqual(h.buttons, ["retry", "defaults", "reload"]);
 		assert.equal(h.state.region, region);
-		const buttons = h.text().split("\n").find((l) => l.includes("[ s Save ]"))!;
-		assert.match(buttons, /s Save/);
-		assert.match(buttons, /q cancel/);
-		assert.match(buttons, /d Restore defaults/);
-		assert.match(buttons, /r Reload/);
-		assert.doesNotMatch(buttons, /—/);
 		h.dialog.handleInput("q");
 		assert.equal(h.dialog.isOpen, false);
 	}
@@ -108,18 +114,22 @@ test("unavailable buttons are dimmed without an appended dash", () => {
 		onChange: () => {}, onClose: () => {},
 	});
 	state.baseline = { raw: {}, fingerprint: null };
-	const buttonLine = (): string => dialog.render(108, 28).find((l) => l.includes("[ s Save ]"))!;
-	const restoreLine = (): string => dialog.render(108, 28).find((l) => l.includes("[ d Restore defaults ]"))!;
-	const disabled = buttonLine();
-	assert.match(disabled, /\x1b\[2m +\[ s Save \]/);
-	assert.doesNotMatch(disabled, /—/);
-	setSettingsDraft(state, "locale", "zh");
-	assert.doesNotMatch(buttonLine(), /\x1b\[2m +\[ s Save \]/);
-	// 主题页的 d 撤的是预览草稿：没有预览就是灰的，有了才能按。
+	const line = (needle: string): string => dialog.render(108, 28).find((l) => l.includes(needle))!;
+	// 没有失败就没有重试按钮（每个正常改动都已经落盘）。
+	assert.equal(dialog.render(108, 28).some((l) => l.includes("Retry")), false);
+	// 主题页的 d 撤的是切换失败的那个主题：没有失败就是灰的，有了才能按。
 	state.category = "theme";
-	assert.match(restoreLine(), /\x1b\[2m +\[ d Restore defaults \]/);
+	assert.match(line("[ d Restore defaults ]"), /\x1b\[2m +\[ d Restore defaults \]/);
 	state.themeDraft = "nord";
-	assert.doesNotMatch(restoreLine(), /\x1b\[2m +\[ d/);
+	assert.doesNotMatch(line("[ d Restore defaults ]"), /\x1b\[2m +\[ d/);
+	// 失败后出现重试按钮，保存进行中变灰。
+	state.category = "general";
+	setSettingsDraft(state, "locale", "zh");
+	state.error = "Not saved: conflict";
+	assert.doesNotMatch(line("[ s Retry ]"), /\x1b\[2m +\[ s Retry \]/);
+	assert.doesNotMatch(line("[ s Retry ]"), /—/);
+	state.saving = true;
+	assert.match(line("[ s Retry ]"), /\x1b\[2m +\[ s Retry \]/);
 });
 
 test("instant open/close marks closed before callback, is idempotent and has no timers", (ctx) => {
@@ -163,13 +173,12 @@ test("h/l direct focus, Tab cycles and Enter activates scope row instead of cycl
 	assert.equal(h.state.positions.global?.cursor, 1);
 	h.dialog.handleInput("\t");
 	assert.equal(h.state.region, "buttons");
-	h.dialog.handleInput("\r");
-	h.dialog.handleInput("j");
-	h.dialog.handleInput("j");
-	h.dialog.handleInput("\r");
+	// 按钮栏是 cancel / restore / reload，Enter 激活光标所在的那一个（没有失败就没有重试）。
 	h.dialog.handleInput("j");
 	h.dialog.handleInput("\r");
-	assert.deepEqual(h.buttons, ["save", "defaults", "reload"]);
+	h.dialog.handleInput("j");
+	h.dialog.handleInput("\r");
+	assert.deepEqual(h.buttons, ["defaults", "reload"]);
 	h.dialog.handleInput("\t");
 	assert.equal(h.state.region, "categories");
 	h.dialog.handleInput("\x1b[Z");
@@ -235,12 +244,17 @@ test("long values have scrollable detail without changing selected action", () =
 	assert.equal(h.state.positions.global?.detailScroll, 0);
 });
 test("complete instant overlay and all locales stay within wide/narrow viewport", () => {
-	// 主题页带上一个预览草稿（`*` 标记 + 预览说明），和没有主题（空行）两种情况都要画得下。
+	// 一次失败（主题切不过去）让按钮栏带上重试按钮，和没有主题（空行）两种情况都要画得下。
 	const h = makeDialog();
 	h.dialog.open();
+	h.state.baseline = { raw: {}, fingerprint: null };
 	h.state.themeDraft = "light";
+	h.state.error = "Cannot switch theme: boom";
 	const bare = makeDialog(DEFAULT_CONFIG, false);
 	bare.dialog.open();
+	bare.state.baseline = { raw: {}, fingerprint: null };
+	setSettingsDraft(bare.state, "locale", "zh");
+	bare.state.error = "Not saved: conflict";
 	try {
 		for (const language of ["en", "zh"] as const) {
 			initI18n(language);

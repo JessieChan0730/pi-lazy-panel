@@ -114,7 +114,7 @@ async function settingsIdle(panel: LazyPanel): Promise<void> {
 	assert.equal(panel.state.settings.error, undefined);
 }
 
-test("settings saves General fields, applies language now and scope/sort only on next open", async (ctx) => {
+test("settings writes General fields as soon as they are picked, applies language now and scope/sort only on next open", async (ctx) => {
 	const dir = await mkdtemp(join(tmpdir(), "lazy-panel-save-"));
 	const previous = process.env.PI_CODING_AGENT_DIR;
 	process.env.PI_CODING_AGENT_DIR = dir;
@@ -148,14 +148,18 @@ test("settings saves General fields, applies language now and scope/sort only on
 					panel.state.selectedSessionFiles.add("keep-selection");
 					panel.state.search.content = { query: "keep-search", matches: [], current: -1 };
 					panel.render(120); // Prime the English render before changing language.
-					for (const key of ["l", "\r", "k", "\r"]) panel.handleInput(key);
-					assert.equal(currentLocale(), "en", "draft does not change language");
-					panel.handleInput("s");
+					// 打开语言菜单、把光标移到中文都还不算改动，回车那一下才落盘并当场生效。
+					for (const key of ["l", "\r", "k"]) panel.handleInput(key);
+					assert.equal(currentLocale(), "en", "还没选中，语言不变");
+					panel.handleInput("\r");
 					await settingsIdle(panel);
 					assert.equal(currentLocale(), "zh");
 					assert.match(panel.render(120).join("\n"), /界面语言/);
-					// Scope: all -> current folder; sort: created -> title.
-					for (const key of ["j", "\r", "k", "\r", "j", "\r", "j", "\r", "s"]) panel.handleInput(key);
+					// Scope: all -> current folder; sort: created -> title（每次选中都立刻落盘，
+					// 保存进行中 handleInput 会让路，所以一项一项来）。
+					for (const key of ["j", "\r", "k", "\r"]) panel.handleInput(key);
+					await settingsIdle(panel);
+					for (const key of ["j", "\r", "j", "\r"]) panel.handleInput(key);
 					await settingsIdle(panel);
 					assert.equal(panel.state.scope, "all");
 					assert.equal(panel.state.sort, "created");

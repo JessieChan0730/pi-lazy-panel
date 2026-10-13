@@ -5,30 +5,26 @@ import { applyKeymapPatch } from "../src/config/config-store.ts";
 import { initI18n } from "../src/i18n/index.ts";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { SettingsFlowHost } from "../src/ui/flows/host.ts";
-import { editSetting, exitSettings, openBindingEditor, readSettings, reloadSettings, restoreSettingsDefaults, saveSettings } from "../src/ui/flows/settings-flows.ts";
+import { editSetting, exitSettings, openBindingEditor, readSettings, reloadSettings, restoreSettingsDefaults, retrySettings, saveSettings } from "../src/ui/flows/settings-flows.ts";
 import type { SettingsSource } from "../src/ui/ports.ts";
-import { keymapActionDirty, keymapDraftChords, setKeymapDraft, setSettingsDraft, settingsDirtyCount, settingsDraft } from "../src/ui/settings-state.ts";
+import { keymapActionDirty, keymapDraftChords, setKeymapDraft, setSettingsDraft, settingsDirtyCount, settingsDraft, settingsRetryKind } from "../src/ui/settings-state.ts";
 import { createInitialState } from "../src/ui/state.ts";
 import type { InputDialogSpec } from "../src/ui/widgets/input-dialog.ts";
 import type { SelectDialogSpec } from "../src/ui/widgets/select-dialog.ts";
 initI18n("en");
 /**
  * A fake pi theme port: `list` is the list `readSettings` scans, `active` is the
- * theme pi has saved, `preview` records the (non-persisting) previews and `set`
- * records the real switches (or fails, to cover the error path).
+ * theme pi has active (and saved), and `set` records the real switches (or fails,
+ * to cover the error path). There is no preview: the page switches on the spot.
  */
 function themeFixture(list = [{ name: "dark", path: "/pi/theme/dark.json" }, { name: "nord", path: "/home/u/.pi/agent/themes/nord.json" }], fail = false) {
 	let active = "dark";
 	const sets: string[] = [];
-	const previews: (string | undefined)[] = [];
 	return {
 		source: {
 			list: () => list,
 			theme: { name: active } as unknown as Theme,
 			savedName: () => active,
-			preview: (name: string | undefined) => {
-				previews.push(name);
-			},
 			set: (name: string) => {
 				if (fail) return { success: false, error: "invalid theme" };
 				sets.push(name);
@@ -38,9 +34,12 @@ function themeFixture(list = [{ name: "dark", path: "/pi/theme/dark.json" }, { n
 		},
 		list,
 		sets: () => sets,
-		previews: () => previews,
 		active: () => active,
 	};
+}
+/** 改动现在是选中即落盘（fire-and-forget），多让几轮微任务跑完再断言。 */
+async function settle(): Promise<void> {
+	for (let i = 0; i < 8; i++) await Promise.resolve();
 }
 function deferred<T>() {
 	let resolve!: (value: T) => void;
@@ -112,7 +111,7 @@ function fixture(raw: Record<string, unknown> = {}, overrides: Partial<SettingsS
 		disposed = true;
 	}, writes: () => writes, applies: () => applies, refreshes: () => refreshes, localeRefreshes: () => localeRefreshes };
 }
-test("General pickers only draft, cancel closes child; undo and no-op never write", async () => {
+test("General pickers write immediately; cancel closes the child and undo never writes", async () => {
 	const h = fixture({ locale: "en", defaultScope: "all" });
 	await readSettings(h.host);
 	editSetting(h.host, "locale");
@@ -120,23 +119,34 @@ test("General pickers only draft, cancel closes child; undo and no-op never writ
 	h.menu()!.onCancel();
 	assert.equal(h.menu(), undefined);
 	assert.equal(settingsDirtyCount(h.state), 0);
+	assert.equal(h.writes(), 0);
+	// 选中即落盘并生效：不再需要按 s。
 	editSetting(h.host, "locale");
 	h.menu()!.onSelect(1);
 	assert.equal(h.menu(), undefined);
-	assert.deepEqual(h.state.patch, { locale: "zh" });
+	await settle();
+	assert.equal(h.writes(), 1);
+	assert.equal(h.applies(), 1);
+	assert.deepEqual(h.state.baseline?.raw, { locale: "zh", defaultScope: "all" });
 	assert.equal(settingsDraft(h.state)?.locale, "zh");
-	assert.equal(h.applies(), 0);
+	assert.equal(settingsDirtyCount(h.state), 0);
+	assert.match(h.state.notice!, /applied|Saved/i);
+	// 再选一次当前值：没有改动，也就没有写入。
 	editSetting(h.host, "locale");
-	h.menu()!.onSelect(2);
-	await saveSettings(h.host);
-	assert.equal(h.writes(), 0);
-	assert.equal(h.applies(), 0);
+	h.menu()!.onSelect(1);
+	await settle();
+	assert.equal(h.writes(), 1);
+	assert.equal(h.applies(), 1);
 	assert.equal(settingsDirtyCount(h.state), 0);
 	editSetting(h.host, "defaultScope");
 	h.menu()!.onSelect(0);
+	// 保存进行中 handleInput / setSettingsDraft 都会让路，等这次落盘结束再改下一项。
+	await settle();
 	editSetting(h.host, "defaultSort");
 	h.menu()!.onSelect(3);
-	assert.deepEqual(h.state.patch, { defaultScope: "current-folder", defaultSort: "threaded" });
+	await settle();
+	assert.deepEqual(h.state.baseline?.raw, { locale: "zh", defaultScope: "current-folder", defaultSort: "threaded" });
+	assert.equal(h.writes(), 3);
 });
 test("returning to implicit defaults clears edits without writing explicit overrides", async () => {
 	const h = fixture();
@@ -170,22 +180,24 @@ test("restore defaults confirms, marks only existing overrides for deletion, pre
 	assert.equal(h.menu()?.initialIndex, 1);
 	h.menu()!.onSelect(1);
 	assert.equal(settingsDirtyCount(h.state), 0);
+	assert.equal(h.writes(), 0);
 	restoreSettingsDefaults(h.host);
 	h.menu()!.onSelect(0);
-	assert.deepEqual(h.state.patch, { locale: null, defaultScope: null });
-	assert.equal(h.writes(), 0);
-	assert.equal(settingsDraft(h.state)?.locale, undefined);
-	await saveSettings(h.host);
+	// 确认即落盘：两个覆盖都被删掉，没写过的未知字段原样保留。
+	await settle();
+	assert.equal(h.writes(), 1);
 	assert.deepEqual(h.state.baseline?.raw, { unknown: { future: true } });
 	assert.equal(h.state.phase, "open");
 	assert.equal(h.applies(), 1);
 	assert.equal(h.localeRefreshes(), 1);
 	assert.deepEqual(h.state.patch, {});
-	assert.match(h.state.notice!, /Saved/i);
+	assert.equal(settingsDraft(h.state)?.locale, undefined);
+	assert.match(h.state.notice!, /applied|Saved/i);
 });
 test("dirty exit defaults continue, discard requires second confirmation, clean exit immediate", async () => {
 	const h = fixture();
 	await readSettings(h.host);
+	// 正常路径上改动都已经落盘，只有上一次提交失败才会留下草稿（这里直接构造）。
 	setSettingsDraft(h.state, "locale", "zh");
 	exitSettings(h.host);
 	assert.equal(h.menu()?.initialIndex, 0);
@@ -225,6 +237,60 @@ test("save and exit waits for successful write and retains state on failure", as
 	await saveSettings(h.host, true);
 	assert.equal(h.state.phase, "closed");
 	assert.deepEqual(h.state.baseline?.raw, { locale: "zh", external: 12 });
+});
+test("a failed write keeps the change, and s retries it", async () => {
+	const h = fixture({ locale: "en" });
+	const realSave = h.source.save;
+	let fail = true;
+	h.source.save = async (baseline, patch) => {
+		if (fail) throw new Error("locale conflict");
+		return realSave(baseline, patch);
+	};
+	await readSettings(h.host);
+	editSetting(h.host, "locale");
+	h.menu()!.onSelect(1);
+	await settle();
+	// 落盘失败：改动留着（重试还有东西可写），错误显示出来，语言还没切。
+	assert.match(h.state.error!, /locale conflict/);
+	assert.deepEqual(h.state.patch, { locale: "zh" });
+	assert.equal(settingsDirtyCount(h.state), 1);
+	assert.equal(settingsRetryKind(h.state), "commit");
+	assert.equal(h.applies(), 0);
+	assert.equal(h.state.baseline?.raw.locale, "en");
+	assert.equal(h.writes(), 0, "失败的这次没有写成功");
+	// 重试：这一次写成功，草稿清空、语言应用、错误和重试按钮都消失。
+	fail = false;
+	retrySettings(h.host);
+	await settle();
+	assert.equal(h.writes(), 1);
+	assert.equal(h.applies(), 1);
+	assert.deepEqual(h.state.patch, {});
+	assert.equal(h.state.error, undefined);
+	assert.equal(h.state.baseline?.raw.locale, "zh");
+	assert.equal(settingsRetryKind(h.state), undefined);
+	// 改回磁盘上已有的值 = 放弃这次改动：还没有落盘的改动和错误一起清掉，也不去写文件。
+	fail = true;
+	editSetting(h.host, "locale");
+	h.menu()!.onSelect(1); // zh，也就是文件里的值
+	await settle();
+	assert.deepEqual(h.state.patch, {});
+	assert.equal(h.state.error, undefined);
+	assert.equal(settingsRetryKind(h.state), undefined);
+	assert.equal(h.writes(), 1);
+});
+test("a failed read is retryable: s reads the file again", async () => {
+	const h = fixture({}, { read: async () => {
+		throw new Error("bad JSON");
+	} });
+	await readSettings(h.host);
+	assert.equal(settingsRetryKind(h.state), "read");
+	h.source.read = async () => ({ raw: { locale: "zh" }, fingerprint: "fixed" });
+	retrySettings(h.host);
+	await settle();
+	assert.equal(h.state.baseline?.fingerprint, "fixed");
+	assert.equal(h.state.error, undefined);
+	assert.equal(settingsDirtyCount(h.state), 0);
+	assert.equal(settingsRetryKind(h.state), undefined);
 });
 test("save is single-flight, frozen during persistence and language applies only after write", async () => {
 	const pending = deferred<ConfigSaveResult>();
@@ -331,8 +397,10 @@ test("persisted warnings and runtime apply failure are distinct and retained on 
 	assert.match(h.state.error!, /saved|Saved/);
 	assert.equal(h.state.phase, "open");
 	assert.equal(h.state.saving, false);
+	// 文件已经写好了，重试也没用：不显示重试按钮（提示让人重新打开面板）。
+	assert.equal(settingsRetryKind(h.state), undefined);
 });
-test("keybinding editor adds, removes, unbinds and resets a binding", async () => {
+test("keybinding editor adds, removes, unbinds and resets a binding, writing each edit", async () => {
 	const h = fixture();
 	await readSettings(h.host);
 	h.state.category = "keybindings";
@@ -347,16 +415,23 @@ test("keybinding editor adds, removes, unbinds and resets a binding", async () =
 	assert.equal(h.prompt()!.capture, true);
 	assert.equal(h.prompt()!.validate, undefined);
 	h.prompt()!.onSubmit("ctrl+d");
-	assert.deepEqual(keymapDraftChords(h.state, "sessions", "session-delete"), ["d", "ctrl+d"]);
-	assert.ok(keymapActionDirty(h.state, "sessions", "session-delete"));
+	// 加完就落盘，落完菜单再打开（可以接着编下一条）。
+	await settle();
+	assert.deepEqual(h.state.baseline?.raw.keymap, { sessions: { "session-delete": ["d", "ctrl+d"] } });
+	assert.equal(settingsDirtyCount(h.state), 0);
+	assert.ok(h.menu());
 	// Menu reopened after the add; remove the original "d".
 	h.menu()!.onSelect(1);
+	await settle();
 	assert.deepEqual(keymapDraftChords(h.state, "sessions", "session-delete"), ["ctrl+d"]);
-	// Reset back to default clears the draft.
+	assert.deepEqual(h.state.baseline?.raw.keymap, { sessions: { "session-delete": "ctrl+d" } });
+	// Reset back to the default deletes the override again.
 	h.menu()!.onSelect(3);
+	await settle();
 	assert.deepEqual(keymapDraftChords(h.state, "sessions", "session-delete"), ["d"]);
 	assert.ok(!keymapActionDirty(h.state, "sessions", "session-delete"));
-	assert.equal(h.writes(), 0);
+	assert.equal(h.state.baseline?.raw.keymap, undefined);
+	assert.equal(h.writes(), 3);
 });
 test("unbinding a default binding persists null and reset deletes the override on save", async () => {
 	const h = fixture();
@@ -379,11 +454,11 @@ test("restore defaults in a keybinding scope resets every overridden action", as
 	h.state.keyScope = "tree";
 	restoreSettingsDefaults(h.host);
 	h.menu()!.onSelect(0); // confirm
+	await settle();
 	assert.deepEqual(keymapDraftChords(h.state, "tree", "tree-copy"), ["y"]);
 	assert.deepEqual(keymapDraftChords(h.state, "tree", "tree-fold"), ["z"]);
-	assert.equal(settingsDirtyCount(h.state), 2);
-	await saveSettings(h.host);
 	assert.equal(h.state.baseline?.raw.keymap, undefined);
+	assert.equal(settingsDirtyCount(h.state), 0);
 });
 test("openBindingEditor Esc on the add prompt returns to the action menu", async () => {
 	const h = fixture();
@@ -398,7 +473,7 @@ test("openBindingEditor Esc on the add prompt returns to the action menu", async
 	assert.ok(h.menu()); // back on the action menu
 	assert.equal(settingsDirtyCount(h.state), 0);
 });
-test("theme picker lists pi's themes, previews the pick and only saves on s", async () => {
+test("theme picker switches pi on the spot, without a preview or a save step", async () => {
 	const h = fixture();
 	await readSettings(h.host);
 	assert.equal(h.state.activeTheme, "dark");
@@ -407,53 +482,50 @@ test("theme picker lists pi's themes, previews the pick and only saves on s", as
 	// pi 已保存的那个带标记、光标一开始就落在它上面。
 	assert.deepEqual(h.menu()?.items, ["dark (active)", "nord"]);
 	assert.equal(h.menu()?.initialIndex, 0);
-	// 选当前主题：什么都不做（不预览、不写、不报）。
+	// 选当前主题：什么都不做。
 	h.menu()!.onSelect(0);
-	assert.deepEqual(h.themes.previews(), []);
+	assert.deepEqual(h.themes.sets(), []);
 	assert.equal(h.state.themeDraft, undefined);
-	// 换主题：先预览（pi 那边一点没动），算一处未保存的改动。
+	assert.equal(h.state.notice, undefined);
+	// 换主题：回车当场切 pi（由 pi 持久化），草稿清空，不用再按 s。
 	editSetting(h.host, "theme");
 	h.menu()!.onSelect(1);
-	assert.deepEqual(h.themes.previews(), ["nord"]);
-	assert.deepEqual(h.themes.sets(), []);
-	assert.equal(h.state.themeDraft, "nord");
-	assert.equal(h.state.activeTheme, "dark");
-	assert.equal(h.state.notice, undefined);
-	assert.equal(settingsDirtyCount(h.state), 1);
-	// 再打开：光标落在预览中的那个上面（pi 已保存的仍然是 dark）。
-	editSetting(h.host, "theme");
-	assert.equal(h.menu()?.initialIndex, 1);
-	assert.deepEqual(h.menu()?.items, ["dark (active)", "nord"]);
-	h.menu()!.onCancel();
-	assert.equal(h.state.themeDraft, "nord");
-	assert.equal((h.state.patch as Record<string, unknown>).theme, undefined, "主题不写进面板草稿");
-	// 保存：这一下才真的切 pi（pi 负责持久化），草稿清空。
-	await saveSettings(h.host);
 	assert.deepEqual(h.themes.sets(), ["nord"]);
 	assert.equal(h.themes.active(), "nord");
 	assert.equal(h.state.activeTheme, "nord");
 	assert.equal(h.state.themeDraft, undefined);
 	assert.equal(settingsDirtyCount(h.state), 0);
-	assert.equal(h.state.notice, "Settings saved · Theme: nord");
+	assert.equal(h.state.notice, "Theme: nord");
+	assert.equal((h.state.patch as Record<string, unknown>).theme, undefined, "主题不写进面板配置草稿");
+	assert.equal(h.writes(), 0, "主题走 pi，不碰面板的配置文件");
+	// 再打开：光标落在当前主题上，pi 生效的就是它。
+	editSetting(h.host, "theme");
+	assert.deepEqual(h.menu()?.items, ["dark", "nord (active)"]);
+	assert.equal(h.menu()?.initialIndex, 1);
+	h.menu()!.onCancel();
+	assert.equal(h.state.themeDraft, undefined);
 });
-test("d on the theme page confirms and drops the preview", async () => {
+test("d on the theme page gives up on a failed switch, and does nothing without one", async () => {
 	const h = fixture();
+	(h.host as unknown as { themeSource: unknown }).themeSource = themeFixture(undefined, true).source;
 	await readSettings(h.host);
 	h.state.category = "theme";
+	// 没有失败时 d 什么都不做（按钮本身也是灰的）。
+	restoreSettingsDefaults(h.host);
+	assert.equal(h.menu(), undefined);
 	editSetting(h.host, "theme");
 	h.menu()!.onSelect(1);
 	assert.equal(h.state.themeDraft, "nord");
+	assert.match(h.state.error ?? "", /invalid theme/);
 	restoreSettingsDefaults(h.host);
 	h.menu()!.onCancel();
 	assert.equal(h.state.themeDraft, "nord");
 	restoreSettingsDefaults(h.host);
 	h.menu()!.onSelect(0);
 	assert.equal(h.state.themeDraft, undefined);
-	assert.deepEqual(h.themes.previews(), ["nord", undefined]);
+	assert.equal(h.state.error, undefined);
+	assert.equal(h.state.activeTheme, "dark");
 	assert.equal(settingsDirtyCount(h.state), 0);
-	// 没有预览时 d 什么都不做（按钮本身也是灰的）。
-	restoreSettingsDefaults(h.host);
-	assert.equal(h.menu(), undefined);
 });
 test("theme picker reports a missing port and an empty theme list without opening a menu", async () => {
 	// 入口没注入 themeSource（例如别处复用面板）时只提示，不崩。
@@ -475,7 +547,37 @@ test("theme picker reports a missing port and an empty theme list without openin
 	assert.match(empty.state.error ?? "", /theme/i);
 	assert.equal(empty.menu(), undefined);
 });
-test("a failed theme switch keeps the preview as an unsaved draft", async () => {
+test("a failed theme switch keeps the theme as a retryable change", async () => {
+	const h = fixture();
+	(h.host as unknown as { themeSource: unknown }).themeSource = themeFixture(undefined, true).source;
+	await readSettings(h.host);
+	h.state.category = "theme";
+	editSetting(h.host, "theme");
+	h.menu()!.onSelect(1);
+	// pi 没切过去：当前主题没动，失败的那个留着等重试。
+	assert.equal(h.state.activeTheme, "dark");
+	assert.equal(h.state.themeDraft, "nord", "失败保留待重试的主题");
+	assert.match(h.state.error ?? "", /invalid theme/);
+	assert.equal(settingsRetryKind(h.state), "commit");
+	assert.deepEqual(h.themes.sets(), []);
+	// 带着一处没生效的改动退出，仍然会被挽留。
+	exitSettings(h.host);
+	assert.ok(h.menu());
+	assert.equal(h.state.phase, "open");
+	h.menu()!.onCancel();
+	// 重试：pi 这次接受了，草稿清空、错误消失（主题重试也走同一条提交例程）。
+	const fixed = themeFixture();
+	(h.host as unknown as { themeSource: unknown }).themeSource = fixed.source;
+	retrySettings(h.host);
+	await settle();
+	assert.deepEqual(fixed.sets(), ["nord"]);
+	assert.equal(h.state.themeDraft, undefined);
+	assert.equal(h.state.activeTheme, "nord");
+	assert.equal(h.state.error, undefined);
+	assert.equal(settingsRetryKind(h.state), undefined);
+	assert.equal(h.state.phase, "open");
+});
+test("reloading settings drops a pending failed theme switch", async () => {
 	const h = fixture();
 	(h.host as unknown as { themeSource: unknown }).themeSource = themeFixture(undefined, true).source;
 	await readSettings(h.host);
@@ -483,22 +585,10 @@ test("a failed theme switch keeps the preview as an unsaved draft", async () => 
 	editSetting(h.host, "theme");
 	h.menu()!.onSelect(1);
 	assert.equal(h.state.themeDraft, "nord");
-	await saveSettings(h.host, true);
-	assert.equal(h.state.activeTheme, "dark");
-	assert.equal(h.state.themeDraft, "nord", "失败保留草稿，可以重试");
-	assert.match(h.state.error ?? "", /invalid theme/);
-	assert.equal(h.state.phase, "open", "有错误就不退出");
-});
-test("reloading settings drops the preview back to pi's saved theme", async () => {
-	const h = fixture();
-	await readSettings(h.host);
-	h.state.category = "theme";
-	editSetting(h.host, "theme");
-	h.menu()!.onSelect(1);
 	reloadSettings(h.host);
 	h.menu()!.onSelect(0);
-	await Promise.resolve();
-	assert.deepEqual(h.themes.previews(), ["nord", undefined]);
+	await settle();
 	assert.equal(h.state.themeDraft, undefined);
+	assert.equal(h.state.error, undefined);
 	assert.equal(h.state.activeTheme, "dark");
 });
