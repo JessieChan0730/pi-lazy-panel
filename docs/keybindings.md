@@ -52,7 +52,7 @@ Press **`,`** in any main pane, select **Open plugin settings** from `?`, or run
 | `s` | Retry what the last write failed at (a failed save, or a theme pi refused); shown as the Retry button only while something is pending; no Tab needed |
 | `d` | Confirm restoring defaults (General / Layout / current keybinding scope), or give up on a failed theme switch; no Tab needed |
 | `r` | Reload the configuration; confirm before discarding a change that was not saved |
-| `PageUp` / `PageDown` in the item list | Scroll a long item description / binding value |
+| `PageUp` / `PageDown` in the item list | Scroll a long item description / binding value (the bottom detail box only exists for items that **carry one**: layout width, every keybinding row, and the theme row once a switch failed or no theme was found) |
 | `Esc` / `q` | Exit settings; a change that was not saved offers continue editing, retry and exit, or discard with confirmation |
 
 Close, Restore defaults and Reload are available as buttons, and Retry joins them while a write is pending; restoring defaults requires confirmation and is written at once. A child choice menu consumes keys before the settings view, and Esc cancels just that choice. To browse or edit another keybinding scope, select the **Scope** row and press Enter.
