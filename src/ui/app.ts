@@ -745,8 +745,9 @@ export class LazyPanel implements Component, Focusable {
 	/**
 	 * 鼠标只做三件事：滚轮 / 三指滚动指针下的面板；单击切焦点并选中列表项；
 	 * 双击 SESSIONS 进入会话、双击 TREE 折叠 / 展开分支。press / drag / move 不处理，
-	 * 交回终端做文本选择。注意：只有 pi 跑在 fullscreen TUI 模式下才会收到鼠标事件，
-	 * regular（默认）模式由终端自己处理滚动 / 选择。
+	 * 交回终端做文本选择。两种 TUI 模式的事件都汇到这里：fullscreen 由 pi 派给 overlay，
+	 * regular（默认）由 index.ts 的 attachMouse 自己开 SGR 上报、解析后喂进来（关闭面板时
+	 * 恢复终端自己的滚动 / 选择）。
 	 */
 	handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
 		if (this.disposed || this.entering) return undefined;
