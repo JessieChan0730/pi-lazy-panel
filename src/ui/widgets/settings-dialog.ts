@@ -80,7 +80,9 @@ export class SettingsDialog {
 		const buttons: SettingsButton[] = [];
 		if (this.retryable())
 			buttons.push({ key: "s", label: t("settings.retry"), disabled: false, run: () => this.o.onRetry?.() });
-		buttons.push({ key: "q", label: t("hint.cancel"), disabled: false, run: () => this.exit() });
+		// 设置是改一项立刻落盘一项，这里出去不带任何回滚语义，所以是"关闭"不是"取消"
+		// （和同一行的 Esc/q 提示用同一个词）。
+		buttons.push({ key: "q", label: t("hint.close"), disabled: false, run: () => this.exit() });
 		buttons.push({
 			key: "d", label: t("settings.restore"), run: () => this.o.onDefaults?.(),
 			// 主题页的 d 撤的是切换失败的那个主题；没有失败就没什么可撤的。

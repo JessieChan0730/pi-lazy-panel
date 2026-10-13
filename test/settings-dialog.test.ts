@@ -88,8 +88,8 @@ test("action shortcuts work from categories and list without focusing buttons", 
 		h.state.baseline = { raw: {}, fingerprint: null };
 		h.state.region = region;
 		// 正常状态：改动都已经落盘，按钮栏里没有"保存"，也没有"重试"。
-		const idle = h.text().split("\n").find((l) => l.includes("[ q cancel ]"))!;
-		assert.match(idle, /q cancel/);
+		const idle = h.text().split("\n").find((l) => l.includes("[ q close ]"))!;
+		assert.match(idle, /q close/);
 		assert.match(idle, /d Restore defaults/);
 		assert.match(idle, /r Reload/);
 		assert.doesNotMatch(idle, /Retry|Save/);
@@ -173,7 +173,7 @@ test("h/l direct focus, Tab cycles and Enter activates scope row instead of cycl
 	assert.equal(h.state.positions.global?.cursor, 1);
 	h.dialog.handleInput("\t");
 	assert.equal(h.state.region, "buttons");
-	// 按钮栏是 cancel / restore / reload，Enter 激活光标所在的那一个（没有失败就没有重试）。
+	// 按钮栏是 close / restore / reload，Enter 激活光标所在的那一个（没有失败就没有重试）。
 	h.dialog.handleInput("j");
 	h.dialog.handleInput("\r");
 	h.dialog.handleInput("j");
