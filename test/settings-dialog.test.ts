@@ -38,6 +38,18 @@ function makeDialog(config = DEFAULT_CONFIG, withThemes = true) {
 	});
 	return { dialog, state, edits, buttons, changes: () => changes, closes: () => closes, text: (width = 108, height = 28) => dialog.render(width, height).map(stripTerminalSequences).join("\n") };
 }
+
+/** 画到屏幕上（overlay 会记下这次的位置，鼠标命中照着它算），返回去掉颜色后的整屏。 */
+function screen(dialog: SettingsDialog, termW = 108, termH = 28): string[] {
+	return dialog.overlay(Array.from({ length: termH }, () => "x".repeat(termW)), termW).map(stripTerminalSequences);
+}
+
+/** 某一行上 `needle` 的屏幕坐标（分类 / 设置名 / 按钮都直接点自己那一列）。 */
+function cellAt(lines: string[], needle: string): { x: number; y: number } {
+	const y = lines.findIndex((line) => line.includes(needle));
+	assert.ok(y >= 0, `"${needle}" is on screen`);
+	return { x: lines[y]!.indexOf(needle), y };
+}
 test("settings values and local readonly notes replace global preview notice", () => {
 	const config = resolveConfig({ locale: "zh", defaultScope: "all", defaultSort: "threaded", leftColumnRatio: 0.4 });
 	const before = structuredClone(config);
@@ -331,4 +343,114 @@ test("keybinding category is editable: no read-only note, dirty marker, Enter ed
 	h.state.positions.sessions = { cursor: 1, scroll: 0, detailScroll: 0 };
 	h.dialog.handleInput("\r");
 	assert.equal(h.edits.at(-1), "session-resume");
+});
+
+test("mouse: a click focuses the sidebar category, the setting row or the button it lands on", () => {
+	const h = makeDialog();
+	h.dialog.open();
+	const lines = screen(h.dialog);
+
+	// 侧栏：点 Layout → 切到 Layout，区域跟着变成分类栏
+	const layout = cellAt(lines, "Layout");
+	h.dialog.focusHit(h.dialog.hitAt(layout.x, layout.y)!);
+	assert.equal(h.state.category, "layout");
+	assert.equal(h.state.region, "categories");
+
+	// 设置行：点某一条 → 区域变成列表、光标落在它上面
+	h.state.category = "general";
+	const rows = screen(h.dialog);
+	const row = cellAt(rows, t("settings.defaultSort"));
+	const hit = h.dialog.hitAt(row.x, row.y);
+	assert.ok(hit);
+	assert.equal(hit.region, "list");
+	h.dialog.focusHit(hit);
+	assert.equal(h.state.region, "list");
+	assert.equal(h.state.positions.general?.cursor, 2, "第 3 条设置");
+
+	// 按钮栏：点 [ q Close ] → 区域变成按钮栏，光标停在那个按钮上
+	const buttons = screen(h.dialog);
+	const close = cellAt(buttons, `[ q ${t("hint.close")} ]`);
+	const closeHit = h.dialog.hitAt(close.x, close.y);
+	assert.deepEqual(closeHit, { region: "buttons", index: 0 });
+
+	// 边框 / 说明框 / 消息行上什么都不做
+	assert.equal(h.dialog.hitAt(0, close.y), undefined, "框外");
+	assert.equal(h.dialog.hitAt(close.x, 0), undefined, "标题边框");
+	h.dialog.close();
+});
+
+test("mouse: a double-click is Enter — edit the setting, run the button, and a disabled button matches the keyboard", () => {
+	const h = makeDialog();
+	h.dialog.open();
+	const lines = screen(h.dialog);
+	const row = cellAt(lines, t("settings.locale"));
+	const hit = h.dialog.hitAt(row.x, row.y)!;
+	h.dialog.focusHit(hit);
+	h.dialog.activate(); // 双击 = Enter：编辑这一条
+	assert.deepEqual(h.edits, ["locale"]);
+
+	// 按钮：`q` 关闭；`d` 在没有基线时是禁用（变暗）的，但键盘 Enter 一样会调 onDefaults
+	// （真正的拒绝在流程里），鼠标和键盘保持同一条路径。
+	const buttons = screen(h.dialog);
+	const close = cellAt(buttons, `[ q ${t("hint.close")} ]`);
+	h.dialog.focusHit(h.dialog.hitAt(close.x, close.y)!);
+	h.dialog.activate();
+	assert.equal(h.closes(), 1);
+	assert.deepEqual(h.buttons, []);
+
+	h.dialog.open();
+	const again = screen(h.dialog);
+	const restore = cellAt(again, `[ d ${t("settings.restore")} ]`);
+	const restoreHit = h.dialog.hitAt(restore.x, restore.y);
+	assert.deepEqual(restoreHit, { region: "buttons", index: 1 }, "禁用不等于点不到");
+	h.dialog.focusHit(restoreHit!);
+	h.dialog.activate();
+	assert.deepEqual(h.buttons, ["defaults"], "和键盘 Enter 一样调 onDefaults");
+
+	// 正在落盘时鼠标整个不响应（和键盘一致）
+	const cursor = h.state.positions.general?.cursor;
+	h.state.saving = true;
+	assert.equal(h.dialog.hitAt(row.x, row.y), undefined);
+	h.dialog.wheel(30, row.y, 1);
+	assert.equal(h.state.positions.general?.cursor, cursor, "saving 时滚轮不动");
+});
+
+test("mouse: the wheel moves the cursor of the region under the pointer", () => {
+	const h = makeDialog();
+	h.dialog.open();
+	const lines = screen(h.dialog);
+	const layout = cellAt(lines, "Layout");
+	h.dialog.wheel(layout.x, layout.y, 1); // 侧栏：下滑一个分类
+	assert.equal(h.state.region, "categories");
+	assert.equal(h.state.category, "layout");
+	h.dialog.wheel(layout.x, layout.y, -1);
+	assert.equal(h.state.category, "general");
+
+	const rows = screen(h.dialog);
+	const sort = cellAt(rows, t("settings.defaultSort"));
+	h.dialog.wheel(sort.x, sort.y, 1); // 设置行：切到列表区域并移动光标
+	assert.equal(h.state.region, "list");
+	assert.ok((h.state.positions.general?.cursor ?? 0) > 0);
+	h.dialog.close();
+});
+
+test("mouse: narrow layouts stay clickable — the title row, two-line items and the single button", () => {
+	const h = makeDialog();
+	h.dialog.open();
+	// 46 列：contentWidth = 42 < 50，一条设置占两行；窄屏没有侧栏，标题行就是分类
+	const lines = screen(h.dialog, 46, 28);
+	const title = cellAt(lines, `1/4 ${t("settings.category.general")}`);
+	const titleHit = h.dialog.hitAt(title.x, title.y);
+	assert.deepEqual(titleHit, { region: "categories", index: 0 });
+
+	// 一条设置的两行都算命中同一条
+	const label = cellAt(lines, t("settings.defaultSort"));
+	const value = { x: label.x, y: label.y + 1 };
+	assert.equal(h.dialog.hitAt(value.x, value.y)?.index, h.dialog.hitAt(label.x, label.y)?.index, "值那一行也算这一条");
+	assert.equal(h.dialog.hitAt(label.x, label.y)?.region, "list");
+
+	// 窄屏按钮行只有一个按钮，整行都可点
+	const button = cellAt(lines, `[ q ${t("hint.close")} ]`);
+	assert.equal(h.dialog.hitAt(button.x, button.y)?.region, "buttons");
+	h.dialog.close();
 });

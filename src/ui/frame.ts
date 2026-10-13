@@ -115,6 +115,55 @@ function topBorder(o: FrameOptions, inner: number): string {
 }
 
 /**
+ * Where a centered dialog box sits in the viewport it is composited into, in
+ * cell coordinates (0-based, relative to the top-left of the panel body).
+ */
+export interface BoxRect {
+	top: number;
+	left: number;
+	width: number;
+	height: number;
+}
+
+/**
+ * Where a `width` × `height` box lands in a `termW` × `termH` viewport.
+ *
+ * 画和命中共用这一份几何：`overlayCentered` 用它算位置，弹窗鼠标命中也用它（`boxCell`），
+ * 所以改版式不会让点击和画面错位（和 `ui/mouse.ts` 的 panelGeometry 是同一条纪律）。
+ * `width` / `height` 原样保留 —— 调用方已经按终端夹取过，这里再做"帮忙"的夹取只会让两张图分叉。
+ *
+ * `termH` is how many lines the overlay is composited into: the panel BODY, one row
+ * shorter than the terminal (the footer is appended after the overlays), never
+ * `event.height` — getting that wrong shifts every box down by one row.
+ */
+export function centeredRect(termW: number, termH: number, width: number, height: number, fixedTop?: number): BoxRect {
+	return {
+		top: Math.max(0, Math.floor(fixedTop ?? (termH - height) / 2)),
+		left: Math.max(0, Math.floor((termW - width) / 2)),
+		width,
+		height,
+	};
+}
+
+/** Is the cell (x, y) anywhere on the box, border included? (Wheel is forgiving about the frame; clicks use `boxCell`.) */
+export function boxContains(r: BoxRect, x: number, y: number): boolean {
+	return x >= r.left && x < r.left + r.width && y >= r.top && y < r.top + r.height;
+}
+
+/**
+ * The cell's row / column inside a box's body (0 = the line under the top border,
+ * 0 = the column after the left border), or undefined on the border and outside
+ * the box. Clicks there do nothing — a stray click never closes a dialog.
+ */
+export function boxCell(r: BoxRect, x: number, y: number): { row: number; col: number } | undefined {
+	if (!boxContains(r, x, y)) return undefined;
+	const row = y - r.top - 1;
+	const col = x - r.left - 1;
+	if (row < 0 || row >= r.height - 2 || col < 0 || col >= r.width - 2) return undefined;
+	return { row, col };
+}
+
+/**
  * Composite `box` (lines of exactly `width` columns) centered over the
  * already-rendered `base` lines of a `termW`-column terminal. Shared by the
  * help overlay and the dialogs; box rows beyond `base` are dropped.
@@ -128,8 +177,8 @@ function topBorder(o: FrameOptions, inner: number): string {
  * 上层原样叠加，嵌套时不会越叠越暗，关闭后也不影响原来的面板状态。
  */
 export function overlayCentered(base: string[], box: string[], width: number, termW: number, backdrop?: Style, fixedTop?: number): string[] {
-	const top = Math.max(0, Math.floor(fixedTop ?? (base.length - box.length) / 2));
-	const left = Math.max(0, Math.floor((termW - width) / 2));
+	// 位置走 centeredRect：弹窗的鼠标命中用同一个函数，画到哪就点到哪。
+	const { top, left } = centeredRect(termW, base.length, width, box.length, fixedTop);
 	const out = backdrop ? base.map((line) => backdrop(stripTerminalSequences(line))) : [...base];
 	if (backdrop && box.length && width > 0 && termW > 0) {
 		const gutterLeft = Math.max(0, left - 1);

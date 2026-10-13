@@ -8,7 +8,7 @@ import { labelsFor, matchesKeyId } from "../../config/keys.ts";
 import { t } from "../../i18n/index.ts";
 import type { ActionId, KeyHint } from "../../types.ts";
 import { clamp } from "../../utils/indices.ts";
-import { fit, frame, FRAME_DIVIDER, overlayCentered } from "../frame.ts";
+import { boxCell, centeredRect, fit, frame, FRAME_DIVIDER, overlayCentered, type BoxRect } from "../frame.ts";
 import { keymapActionDirty, settingsDirtyCount, settingsDraft, settingsRetryKind, SETTINGS_CATEGORIES, type SettingsPosition, type SettingsRegion, type SettingsState } from "../settings-state.ts";
 import { dialogHeader } from "./dialog-header.ts";
 
@@ -54,8 +54,31 @@ interface SettingsButton {
 	run: () => void;
 }
 
+/** 鼠标在设置页里命中的格子：区域 + 该区域里的下标（分类序号 / 设置行号 / 按钮号）。 */
+export interface SettingsHit {
+	region: SettingsRegion;
+	index: number;
+}
+
+/**
+ * 主对话框正文里的一段可点区域（侧栏一个分类 / 一条设置 / 一个按钮）。
+ * 画每一行的时候顺手记下来（见 render），鼠标命中照着查，两边不会各算一套版式。
+ */
+interface SettingsClickable {
+	/** 正文行号（0 = 上边框下面第一行）。 */
+	row: number;
+	/** 正文列区间 [from, to)。 */
+	from: number;
+	to: number;
+	hit: SettingsHit;
+}
+
 export class SettingsDialog {
 	private disposed = false;
+	/** 上一次绘制里所有可点的格子（render 里清空重填）：鼠标点击照着画面查。 */
+	private clickables: SettingsClickable[] = [];
+	/** 上一次绘制时主对话框在屏幕上的位置（`overlay()` 里记）；鼠标命中只认这一份，没画过就点不到。 */
+	private boxRect: BoxRect | undefined;
 
 	constructor(private readonly o: SettingsDialogOptions) {}
 
@@ -151,9 +174,8 @@ export class SettingsDialog {
 		} else if (matchesKeyId(data, "r")) {
 			this.o.onReload?.();
 		} else if (matchesKeyId(data, "return")) {
-			if (state.region === "buttons") this.buttons()[this.buttonIndex()]?.run();
-			else if (state.region === "categories") state.region = "list";
-			else this.o.onEdit?.(this.items()[this.position().cursor]?.id ?? "");
+			this.activate();
+			return;
 		} else if (matchesKeyId(data, "j") || matchesKeyId(data, "down")) {
 			this.move(1);
 		} else if (matchesKeyId(data, "k") || matchesKeyId(data, "up")) {
@@ -165,7 +187,17 @@ export class SettingsDialog {
 		this.o.onChange();
 	}
 
-	private move(delta: number): void {
+	/** Enter（以及鼠标双击）：按当前区域执行 —— 分类进列表、设置行交给 onEdit、按钮直接运行。 */
+	activate(): void {
+		const state = this.o.state;
+		if (state.region === "buttons") this.buttons()[this.buttonIndex()]?.run();
+		else if (state.region === "categories") state.region = "list";
+		else this.o.onEdit?.(this.items()[this.position().cursor]?.id ?? "");
+		this.o.onChange();
+	}
+
+	/** j / k、方向键和滚轮：在当前区域里移动光标。 */
+	move(delta: number): void {
 		const state = this.o.state;
 		if (state.region === "categories") {
 			state.category = SETTINGS_CATEGORIES[clamp(SETTINGS_CATEGORIES.indexOf(state.category) + delta, 0, SETTINGS_CATEGORIES.length - 1)]!;
@@ -176,6 +208,50 @@ export class SettingsDialog {
 		} else {
 			state.button = clamp(state.button + delta, 0, this.buttons().length - 1);
 		}
+	}
+
+	/**
+	 * 屏幕上 (x, y) 命中的格子（照上一次绘制记下的可点区域）：边框、说明框、消息行、
+	 * 侧栏和设置行之间的分隔列上返回 undefined。
+	 */
+	hitAt(x: number, y: number): SettingsHit | undefined {
+		if (!this.mouseReady()) return undefined;
+		const cell = this.boxRect ? boxCell(this.boxRect, x, y) : undefined;
+		if (!cell) return undefined;
+		return this.clickables.find((c) => c.row === cell.row && cell.col >= c.from && cell.col < c.to)?.hit;
+	}
+
+	/** 鼠标单击：区域和光标一起移到点中的那一格（分类栏切分类 / 设置行放光标 / 按钮栏选按钮）。 */
+	focusHit(hit: SettingsHit): void {
+		if (!this.mouseReady()) return;
+		const state = this.o.state;
+		if (hit.region === "categories") {
+			const category = SETTINGS_CATEGORIES[hit.index];
+			if (category) state.category = category;
+		} else if (hit.region === "list") {
+			const position = this.position();
+			position.cursor = clamp(hit.index, 0, Math.max(0, this.items().length - 1));
+			position.detailScroll = 0;
+		} else {
+			state.button = clamp(hit.index, 0, Math.max(0, this.buttons().length - 1));
+		}
+		state.region = hit.region;
+		this.o.onChange();
+	}
+
+	/** 滚轮：作用于指针所在的区域（先切区域，不挪光标），指针不在可点格子上时不动。 */
+	wheel(x: number, y: number, delta: number): void {
+		if (delta === 0 || !this.mouseReady()) return;
+		const hit = this.hitAt(x, y);
+		if (!hit) return;
+		this.o.state.region = hit.region;
+		this.move(delta);
+		this.o.onChange();
+	}
+
+	/** 鼠标入口统一的前置检查：弹窗开着、没被释放、也没有正在落盘的改动（和 handleInput 一致）。 */
+	private mouseReady(): boolean {
+		return this.isOpen && !this.disposed && !this.o.state.saving;
 	}
 
 	/** `state.button` clamped into the button bar, which grows and shrinks with the failures. */
@@ -258,6 +334,8 @@ export class SettingsDialog {
 	/** Lay out the complete box immediately, including draft and persistence status. */
 	render(width: number, height: number): string[] {
 		const { state, theme } = this.o;
+		// 每次重绘都重记一遍可点的格子（下面边画边填），鼠标命中和这一刻的画面严格对齐。
+		this.clickables = [];
 		if (width < 16 || height < 7) {
 			return Array.from({ length: Math.max(0, height) }, (_, i) => fit(i === 0 ? `Esc ${t("hint.close")}` : i === 1 ? t("settings.title") : "", width));
 		}
@@ -271,21 +349,27 @@ export class SettingsDialog {
 		const wide = width >= 76;
 		const sidebarWidth = wide ? Math.max(16, ...SETTINGS_CATEGORIES.map((c) => visibleWidth(t(`settings.category.${c}`)) + 4)) : 0;
 		const contentWidth = wide ? inner - sidebarWidth - 3 : inner - 2;
+		// 宽屏：正文按 " 分类栏 │ 内容 " 分两格，内容从这一列开始；窄屏只有内容。
+		const contentCol = wide ? sidebarWidth + 3 : 0;
 		const category = t(`settings.category.${state.category}`);
 		let area: string[];
 		if (wide) {
-			const content = this.renderContent(contentWidth, areaHeight - 1);
+			const content = this.renderContent(contentWidth, areaHeight - 1, 1, { from: contentCol, to: inner });
 			const categoryStart = clamp(SETTINGS_CATEGORIES.indexOf(state.category) - (areaHeight - 2), 0, SETTINGS_CATEGORIES.length - 1);
 			area = Array.from({ length: areaHeight }, (_, i) => {
 				const cat = SETTINGS_CATEGORIES[i - 1 + categoryStart];
 				const left = i === 0 ? fit("", sidebarWidth) : cat ? this.selected(t(`settings.category.${cat}`), sidebarWidth, cat === state.category, state.region === "categories") : fit("", sidebarWidth);
 				const right = i === 0 ? theme.bold(theme.fg("accent", category)) : content[i - 1] ?? "";
+				// 侧栏这一格（含左边框和分隔线之间的空白）点的是这个分类；第 0 行是标题行，没有可点的东西。
+				if (i > 0 && cat) this.clickables.push({ row: i, from: 0, to: contentCol, hit: { region: "categories", index: SETTINGS_CATEGORIES.indexOf(cat) } });
 				return `${left} ${theme.fg("borderMuted", "│")} ${fit(right, contentWidth)}`;
 			});
 		} else {
+			// 窄屏没有侧栏：标题行本身代表"分类"（点它把光标放到分类区域，j / k 接着翻分类）。
 			const title = `${SETTINGS_CATEGORIES.indexOf(state.category) + 1}/4 ${category}`;
 			area = [this.selected(title, inner, true, state.region === "categories")];
-			area.push(...this.renderContent(contentWidth, areaHeight - area.length).map((line) => ` ${line}`));
+			this.clickables.push({ row: 0, from: 0, to: inner, hit: { region: "categories", index: SETTINGS_CATEGORIES.indexOf(state.category) } });
+			area.push(...this.renderContent(contentWidth, areaHeight - area.length, area.length, { from: 0, to: inner }).map((line) => ` ${line}`));
 		}
 		// 按钮标签就写着它的直连键（任意区域都能按），重试只在失败时出现在表里。
 		const buttons = this.buttons();
@@ -299,6 +383,18 @@ export class SettingsDialog {
 		};
 		const labels = buttons.map((button) => `${button.key} ${button.label}`);
 		const close = labels.map((label, i) => renderButton(i, `[ ${label} ]`, visibleWidth(label) + 6)).join(" ");
+		// 按钮行的可点区间（每个按钮 `[ q Close ]` 恰好是 label + 6 列，之间隔一格）：窄屏只画选中的那个。
+		const buttonRow = areaHeight + messageLines.length + 1;
+		if (width < 76) {
+			this.clickables.push({ row: buttonRow, from: 0, to: inner, hit: { region: "buttons", index: selectedButton } });
+		} else {
+			let col = 0;
+			labels.forEach((label, i) => {
+				const buttonWidth = visibleWidth(label) + 6;
+				this.clickables.push({ row: buttonRow, from: col, to: col + buttonWidth, hit: { region: "buttons", index: i } });
+				col += buttonWidth + 1;
+			});
+		}
 		const main = frame([
 			...area,
 			...messageLines.map((line) => theme.fg(state.error ? "error" : "muted", ` ${line}`)),
@@ -315,7 +411,12 @@ export class SettingsDialog {
 		return [...main, ...detailBox];
 	}
 
-	private renderContent(width: number, height: number): string[] {
+	/**
+	 * 设置行：光标 / 滚动 / 值列对齐都在这里。`rowOffset` 是这些行在主对话框正文里的行偏移，
+	 * `span` 是它们在正文里的列区间（宽屏只有右半格，窄屏整行）；画每一行的同时把它是哪一条设置
+	 * 记进 `clickables` —— 鼠标命中和画面共用这一份映射。
+	 */
+	private renderContent(width: number, height: number, rowOffset: number, span: { from: number; to: number }): string[] {
 		if (height <= 0) return [];
 		const { theme, state } = this.o;
 		const items = this.items().map((item) => ({ ...item, label: `${item.dirty ? "* " : ""}${item.label}` }));
@@ -333,6 +434,10 @@ export class SettingsDialog {
 		for (let i = pos.scroll; i < Math.min(items.length, pos.scroll + capacity); i++) {
 			const row = items[i]!;
 			const isSelected = i === pos.cursor;
+			// 一条设置占 rowHeight 行（窄屏时值是换行显示的），这几行都算命中这一条。
+			for (let line = 0; line < rowHeight; line++) {
+				this.clickables.push({ row: rowOffset + (i - pos.scroll) * rowHeight + line, from: span.from, to: span.to, hit: { region: "list", index: i } });
+			}
 			if (rowHeight === 2) {
 				lines.push(this.selected(row.label, width, isSelected, state.region === "list"));
 				lines.push(theme.fg("muted", fit(`  ${row.value}`, width)));
@@ -393,6 +498,8 @@ export class SettingsDialog {
 		const width = Math.max(0, Math.min(termW, termW - (termW >= 24 ? 4 : 0), 112));
 		const height = Math.max(0, Math.min(lines.length, lines.length - (lines.length >= 9 ? 2 : 0), 30));
 		const full = this.render(width, height);
-		return overlayCentered(lines, full, width, termW, (s) => this.o.theme.fg("dim", s));
+		// 记下这次画出来的位置：鼠标的点按（hitAt / wheel）只认它，画哪儿就点哪儿。
+		this.boxRect = centeredRect(termW, lines.length, width, full.length);
+		return overlayCentered(lines, full, width, termW, (s) => this.o.theme.fg("dim", s), this.boxRect.top);
 	}
 }

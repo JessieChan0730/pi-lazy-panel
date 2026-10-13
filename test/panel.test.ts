@@ -158,8 +158,10 @@ test("settings opens immediately in all panes, owns keys and mouse, and preserve
 		assert.equal(h.panel.state.settings.phase, "open");
 		const click = () => h.panel.handleMouse(mouseEvent("click", 2, 3, { height: 20 }));
 		const wheel = () => h.panel.handleMouse(mouseEvent("wheel", 2, 3, { height: 20, wheelDelta: 1 }));
+		// （2, 3）落在设置框的边框上：吞掉，什么都不做（盒内的点击/滚轮见后面的设置鼠标测试）
 		assert.deepEqual(click(), { handled: true });
 		assert.deepEqual(wheel(), { handled: true });
+		assert.equal(h.panel.state.settings.category, before.settings.category, "边框上的点击不动分类");
 		h.panel.handleInput("3");
 		h.panel.handleInput("d");
 		assert.match(h.text(120).join("\n"), /Settings/);
@@ -3851,6 +3853,17 @@ test("@ opens pi's changelog in a big box: j/k/arrows scroll, G / g jump, Esc / 
 // Mouse: wheel scrolls, click focuses + selects, double-click enters / folds
 // -------------------------------------------------------------------------
 
+/**
+ * 弹窗里某个目标的单元格（用画面本身定位）：含 `needle` 的那一行 + 它自己那一列。
+ * 底图的面板也有边框，所以不能数行里第一个 │；用目标的文字所在列最稳。
+ */
+function dialogCell(h: { text: (width?: number) => string[] }, needle: string, width = 100): { x: number; y: number } {
+	const lines = h.text(width);
+	const y = lines.findIndex((line) => line.includes(needle));
+	assert.ok(y >= 0, `"${needle}" is on screen`);
+	return { x: lines[y]!.indexOf(needle), y };
+}
+
 /** Synthetic normalized mouse event. The overlay is top-left, so x/y equal the screen cell. */
 function mouseEvent(type: TuiMouseEventType, x: number, y: number, extra: Partial<TuiMouseEvent> = {}): TuiMouseEvent {
 	return {
@@ -3982,18 +3995,38 @@ test("double-clicking a tree node toggles its fold", async () => {
 	h.panel.dispose();
 });
 
-test("mouse is swallowed (no-op) while an overlay is open", async () => {
-	const h = makeLoadedPanel();
+test("a click outside a dialog is swallowed with no effect; inside the help box it selects a command", async () => {
+	const h = makeLoadedPanel(); // height 20 → 帮助框 64 宽居中，left = 18
 	await h.panel.load();
 	await settle();
-	h.panel.handleInput("?"); // help overlay
+	h.panel.handleInput("?");
 	assert.equal(h.panel.state.helpOpen, true);
-	const click = h.panel.handleMouse(mouseEvent("click", 2, 5));
-	assert.deepEqual(click, { handled: true }, "click consumed but does nothing");
+
+	// 框外：（2, 5）落在左边的底图上，什么都不做，也不会关掉弹窗
+	assert.deepEqual(h.panel.handleMouse(mouseEvent("click", 2, 5)), { handled: true });
 	assert.equal(h.panel.state.helpOpen, true, "overlay stays open");
-	assert.equal(h.panel.state.cursor.sessions, 0, "list behind the overlay did not move");
-	// press still falls through so the terminal keeps its own handling
+	assert.equal(h.panel.state.helpCursor, 0, "cursor unchanged");
+	assert.equal(h.panel.state.cursor.sessions, 0, "the list behind it did not move");
+	// press 仍然交回终端做文本选择
 	assert.equal(h.panel.handleMouse(mouseEvent("press", 2, 5)), undefined);
+
+	// 框内某条命令行：单击只选中（不执行），双击才是 Enter
+	const entries = buildHelpLines(DEFAULT_KEYMAP, "sessions").filter((line) => line.kind === "binding");
+	const expected = entries.findIndex((line) => line.action === "session-sort");
+	assert.ok(expected > 0);
+	const cell = dialogCell(h, t("action.session-sort"));
+	const sort = h.panel.state.sort;
+
+	h.panel.handleMouse(mouseEvent("click", cell.x, cell.y, { clickCount: 1 }));
+	assert.equal(h.panel.state.helpCursor, expected, "single click selects the command");
+	assert.equal(h.panel.state.helpOpen, true, "and does not run it");
+	assert.equal(h.panel.state.sort, sort, "no action ran");
+	await settle();
+
+	h.panel.handleMouse(mouseEvent("click", cell.x, cell.y, { clickCount: 2 }));
+	assert.equal(h.panel.state.helpOpen, false, "double-click runs it (help closes)");
+	assert.notEqual(h.panel.state.sort, sort, "session-sort acted on the sessions pane");
+	await settle();
 	h.panel.dispose();
 });
 
@@ -4114,45 +4147,163 @@ test("the help footer shows only its own controls and restores the pane hints on
 	h.panel.dispose();
 });
 
-test("mouse clicks and wheel are swallowed while any dialog is open", async () => {
-	const h = makeSessionActionPanel({ data: { loadChangelog: async () => "## [1.0.0]\n\n- hello" } });
+test("dialogs with no list keep swallowing the mouse; no dialog leaks a click to the panes behind it", async () => {
+	const h = makeSessionActionPanel({ data: { loadChangelog: async () => "hello changelog" } });
 	await h.panel.load();
 	await settle();
-	const click = () => h.panel.handleMouse(mouseEvent("click", 2, 3, { height: 24 }));
-	const wheel = () => h.panel.handleMouse(mouseEvent("wheel", 2, 3, { height: 24, wheelDelta: 1 }));
-	const openers: Array<[string, () => Promise<void>]> = [
+	const click = (x = 2, y = 3) => h.panel.handleMouse(mouseEvent("click", x, y, { height: 24 }));
+	const wheel = (x = 2, y = 3, delta = 1) => h.panel.handleMouse(mouseEvent("wheel", x, y, { height: 24, wheelDelta: delta }));
+
+	// 只有输入框 / 只有字段的弹窗：点击和滚轮都被吞掉，什么都不做
+	const passive: Array<[string, () => Promise<void>]> = [
 		["rename prompt", async () => h.panel.handleInput("r")],
-		["delete confirmation", async () => h.panel.handleInput("d")],
 		["session info", async () => {
 			h.panel.handleInput("i");
 			await flush();
 		}],
-		["changelog", async () => {
-			h.panel.handleInput("@");
-			await flush();
-			await flush();
-		}],
-		["tree dialog", async () => {
-			h.panel.handleInput("2");
-			h.panel.handleInput("a");
-		}],
 	];
-	for (const [name, open] of openers) {
+	for (const [name, open] of passive) {
 		await open();
-		const focus = h.panel.state.focus;
 		assert.notEqual(h.panel.state.mode, "normal", `${name} is open`);
 		assert.deepEqual(click(), { handled: true }, name);
 		assert.deepEqual(wheel(), { handled: true }, name);
 		assert.equal(h.panel.state.cursor.sessions, 0, `${name}: the list behind it did not move`);
-		assert.equal(h.panel.state.listScroll.sessions, null, `${name}: nor scroll`);
-		assert.equal(h.panel.state.focus, focus, `${name}: focus unchanged`);
+		h.panel.handleInput("\x1b");
+		assert.equal(h.panel.state.mode, "normal", name);
+	}
+
+	// 有列表 / 多区域的弹窗：鼠标归它自己，但在框内框外都不会漏到下面的面板
+	const interactive: Array<[string, () => Promise<void>, string]> = [
+		["delete confirmation", async () => h.panel.handleInput("d"), t("confirm.yes")],
+		[
+			"changelog",
+			async () => {
+				h.panel.handleInput("@");
+				await flush();
+				await flush();
+			},
+			"hello",
+		],
+		[
+			"tree dialog",
+			async () => {
+				h.panel.handleInput("2");
+				h.panel.handleInput("a");
+			},
+			"msg 1",
+		],
+		["settings", async () => h.panel.handleInput(","), t("settings.defaultSort")],
+	];
+	for (const [name, open, needle] of interactive) {
+		await open();
+		const mode = h.panel.state.mode;
+		const focus = h.panel.state.focus;
+		assert.notEqual(mode, "normal", `${name} is open`);
+		const inside = dialogCell(h, needle);
+		for (const [where, x, y] of [["outside", 2, 3], ["inside", inside.x, inside.y]] as Array<[string, number, number]>) {
+			assert.deepEqual(click(x, y), { handled: true }, `${name} click ${where}`);
+			assert.deepEqual(wheel(x, y), { handled: true }, `${name} wheel ${where}`);
+			assert.equal(h.panel.state.mode, mode, `${name}: still open after a ${where} click`);
+			assert.equal(h.panel.state.cursor.sessions, 0, `${name}: the sessions cursor did not move (${where})`);
+			assert.equal(h.panel.state.listScroll.sessions, null, `${name}: nor scroll (${where})`);
+			assert.equal(h.panel.state.focus, focus, `${name}: focus unchanged (${where})`);
+		}
 		h.panel.handleInput("\x1b");
 		assert.equal(h.panel.state.mode, "normal", name);
 		h.panel.handleInput("1");
 	}
+
 	// with every dialog closed the same click selects the row
 	click();
 	assert.equal(h.panel.state.cursor.sessions, 1);
+	h.panel.dispose();
+});
+
+test("a confirmation menu: a single click selects the entry, a double-click is Enter", async () => {
+	const h = makeSessionActionPanel();
+	await h.panel.load();
+	await settle();
+	h.panel.handleInput("d"); // 删除确认框，默认停在 No
+	assert.equal(h.panel.state.mode, "confirm");
+
+	const yes = dialogCell(h, t("confirm.yes"));
+	h.panel.handleMouse(mouseEvent("click", yes.x, yes.y, { height: 24, clickCount: 1 }));
+	assert.equal(h.panel.state.mode, "confirm", "single click only selects");
+	assert.match(h.text(100)[yes.y]!, /› Yes/, "the cursor moved onto Yes");
+	assert.deepEqual(h.deletes, [], "nothing was deleted");
+
+	h.panel.handleMouse(mouseEvent("click", yes.x, yes.y, { height: 24, clickCount: 2 }));
+	await settle();
+	assert.deepEqual(h.deletes, ["/tmp/s1.jsonl"], "double-click confirmed (same as Enter)");
+	assert.notEqual(h.panel.state.mode, "confirm");
+	h.panel.dispose();
+});
+
+test("the tree dialog takes the mouse: clicking a row selects it and hands the keys back to the list", async () => {
+	const h = makeSessionActionPanel();
+	await h.panel.load();
+	await settle();
+	h.panel.handleInput("2");
+	h.panel.handleInput("a");
+	assert.equal(h.panel.state.mode, "tree");
+
+	// 先把按键交给搜索框：这时点列表行应该像 Esc 一样把按键交还给列表（关键字保留）
+	h.panel.handleInput("/");
+	const row = dialogCell(h, "msg 0");
+	const cursorRow = () => h.text(100).findIndex((line) => line.includes("›") && line.includes("msg "));
+	// 打开时光标落在活动叶子（msg 1）上，不在 msg 0
+	assert.notEqual(cursorRow(), row.y);
+	h.panel.handleMouse(mouseEvent("click", row.x, row.y, { height: 24 }));
+	assert.equal(cursorRow(), row.y, "点中的那一行拿到对话框光标");
+	assert.equal(h.panel.state.mode, "tree", "the dialog stays open");
+
+	// 按键已经回到列表：j 往下动的是列表光标（按键还在搜索框里的话，j 只会变成输入）
+	h.panel.handleInput("j");
+	assert.equal(cursorRow(), row.y + 1, "j moved the list cursor down");
+	h.panel.handleInput("\x1b");
+	assert.equal(h.panel.state.mode, "normal");
+	h.panel.dispose();
+});
+
+test("the changelog box scrolls with the wheel, and a click inside it does nothing", async () => {
+	const lines = Array.from({ length: 60 }, (_, i) => `line ${i}`).join("\n\n");
+	const h = makeSessionActionPanel({ data: { loadChangelog: async () => lines } });
+	await h.panel.load();
+	await settle();
+	h.panel.handleInput("@");
+	await flush();
+	await flush();
+	assert.equal(h.panel.state.mode, "changelog");
+
+	const inside = dialogCell(h, "line 0");
+	const top = h.text(100)[inside.y]!;
+	h.panel.handleMouse(mouseEvent("click", inside.x, inside.y, { height: 24 }));
+	assert.equal(h.text(100)[inside.y], top, "a click in a read-only box changes nothing");
+
+	h.panel.handleMouse(mouseEvent("wheel", inside.x, inside.y, { height: 24, wheelDelta: 3 }));
+	const down = h.text(100)[inside.y]!;
+	assert.notEqual(down, top, "the wheel scrolled the box");
+	h.panel.handleMouse(mouseEvent("wheel", inside.x, inside.y, { height: 24, wheelDelta: -3 }));
+	assert.equal(h.text(100)[inside.y], top, "and back up");
+	// 指针在框外：不滚（和面板一样，滚轮只作用于指针下的东西）
+	h.panel.handleMouse(mouseEvent("wheel", 1, inside.y, { height: 24, wheelDelta: 5 }));
+	assert.equal(h.text(100)[inside.y], top, "a wheel outside the box does nothing");
+	h.panel.dispose();
+});
+
+test("the settings page takes the mouse: clicking the sidebar switches category (the panes behind stay put)", async () => {
+	const h = makePanel();
+	await h.panel.load();
+	h.panel.handleInput(",");
+	assert.equal(h.panel.state.mode, "settings");
+	assert.equal(h.panel.state.settings.category, "general");
+
+	const layout = dialogCell(h, t("settings.category.layout"));
+	h.panel.handleMouse(mouseEvent("click", layout.x, layout.y));
+	assert.equal(h.panel.state.settings.category, "layout");
+	assert.equal(h.panel.state.settings.region, "categories");
+	assert.equal(h.panel.state.cursor.sessions, 0, "the panes behind it did not move");
+	assert.equal(h.panel.state.mode, "settings", "and the page stays open");
 	h.panel.dispose();
 });
 

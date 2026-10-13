@@ -24,7 +24,7 @@ import { truncateToWidth } from "@earendil-works/pi-tui";
 import { matchesKeyId } from "../../config/keys.ts";
 import type { KeyHint } from "../../types.ts";
 import { clamp } from "../../utils/indices.ts";
-import { dialogWidth, fit, frame, metaBudget, overlayCentered } from "../frame.ts";
+import { boxCell, boxContains, centeredRect, dialogWidth, fit, frame, metaBudget, overlayCentered, type BoxRect } from "../frame.ts";
 
 /** What one menu looks like; passed to `open`. */
 export interface SelectDialogSpec {
@@ -70,6 +70,8 @@ export class SelectDialog {
 	private index = 0;
 	/** Index of the first visible entry when the list scrolls (see `maxRows`). */
 	private scroll = 0;
+	/** 上一次绘制时这个菜单在屏幕上的位置（`overlay()` 里记）；鼠标命中只认这一份，没画过就点不到。 */
+	private boxRect: BoxRect | undefined;
 
 	constructor(private readonly o: SelectDialogOptions) {}
 
@@ -93,12 +95,14 @@ export class SelectDialog {
 		this.spec = spec;
 		this.index = clamp(spec.initialIndex ?? 0, 0, spec.items.length - 1);
 		this.scroll = 0;
+		this.boxRect = undefined;
 		this.ensureVisible();
 	}
 
 	/** Drop the current menu without firing a callback. */
 	close(): void {
 		this.spec = undefined;
+		this.boxRect = undefined;
 	}
 
 	handleInput(data: string): void {
@@ -109,7 +113,7 @@ export class SelectDialog {
 			return;
 		}
 		if (matchesKeyId(data, "return")) {
-			if (spec.items.length) spec.onSelect(this.index);
+			this.activate();
 			return;
 		}
 		if (matchesKeyId(data, "j") || matchesKeyId(data, "down")) {
@@ -131,13 +135,51 @@ export class SelectDialog {
 		// 其他按键一律吞掉，不能漏到下面的面板去。
 	}
 
-	private move(delta: number): void {
+	/** Enter（以及鼠标双击）：选中光标所在的项。 */
+	activate(): void {
+		const spec = this.spec;
+		if (spec?.items.length) spec.onSelect(this.index);
+	}
+
+	/**
+	 * Move the cursor by `delta` entries (j / k 和滚轮共用）。
+	 */
+	move(delta: number): void {
 		const items = this.spec?.items ?? [];
 		const next = clamp(this.index + delta, 0, items.length - 1);
 		if (next === this.index) return;
 		this.index = next;
 		this.ensureVisible();
 		this.o.onChange();
+	}
+
+	/** Put the cursor straight on `index` (clamped) — what a single click does. */
+	moveTo(index: number): void {
+		const items = this.spec?.items ?? [];
+		if (!items.length) return;
+		const next = clamp(index, 0, items.length - 1);
+		if (next === this.index) return;
+		this.index = next;
+		this.ensureVisible();
+		this.o.onChange();
+	}
+
+	/**
+	 * Entry under the cell (x, y), using the box position of the last draw: undefined
+	 * on the border, outside the menu, or past the last entry.
+	 *
+	 * 正文不补白行（画几项就是几行），所以第 row 行就是可见项里的第 row 项。
+	 */
+	indexAt(x: number, y: number): number | undefined {
+		const cell = this.boxRect ? boxCell(this.boxRect, x, y) : undefined;
+		if (!cell) return undefined;
+		const index = this.scroll + cell.row;
+		return index < (this.spec?.items.length ?? 0) ? index : undefined;
+	}
+
+	/** Wheel: move the cursor, but only while the pointer is over the menu (like the panes). */
+	wheel(x: number, y: number, delta: number): void {
+		if (delta !== 0 && this.boxRect && boxContains(this.boxRect, x, y)) this.move(delta);
 	}
 
 	/** How many entries are drawn at once (all of them, unless `maxRows` caps it). */
@@ -193,6 +235,9 @@ export class SelectDialog {
 	/** Composite the box centered over the already-rendered panel `lines`. */
 	overlay(lines: string[], termW: number): string[] {
 		const width = dialogWidth(termW);
-		return overlayCentered(lines, this.render(width), width, termW, (s) => this.o.theme.fg("dim", s));
+		const box = this.render(width);
+		// 记下这次画出来的位置：鼠标的点按（indexAt / wheel）只认它，画哪儿就点哪儿。
+		this.boxRect = centeredRect(termW, lines.length, width, box.length);
+		return overlayCentered(lines, box, width, termW, (s) => this.o.theme.fg("dim", s), this.boxRect.top);
 	}
 }

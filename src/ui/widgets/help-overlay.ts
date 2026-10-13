@@ -215,3 +215,18 @@ export function overlayHelp(lines: string[], p: HelpOverlayProps, termW: number)
 export function helpLineCount(keymap: Keymap, focus: KeyScope, termW: number): number {
 	return helpLayout(keymap, focus, helpBoxWidth(termW) - 2).rows.length;
 }
+
+/**
+ * 帮助弹窗正文第 `row` 行上那条命令的序号（只数可执行的命令，和 Enter 用的是同一个序号空间），
+ * 分区标题 / 提示 / 空白行返回 undefined。位置无关（行号相对方框正文），
+ * 所以 app 先把屏幕单元格换算成正文行号再调它 —— 和 `renderHelpBox` 用同一份 `helpLayout` 与同一份夹取。
+ */
+export function helpEntryAtRow(p: HelpOverlayProps, width: number, height: number, row: number): number | undefined {
+	const visible = Math.max(1, height - 2);
+	if (row < 0 || row >= visible) return undefined; // 方框以外（点击的正文行号本来就不会越界，这里是防守）
+	const { rows } = helpLayout(p.keymap, p.focus, width - 2);
+	const start = clamp(p.scroll, 0, Math.max(0, rows.length - visible));
+	// 折行的续行和首行属于同一条命令，所以返回的是同一个序号。
+	const line = rows[start + row];
+	return line?.kind === "binding" ? line.index : undefined;
+}
