@@ -59,7 +59,7 @@ Close, Restore defaults and Reload are available as buttons, and Retry joins the
 
 **Esc and Backspace can never be bound**, in any scope: the recorder refuses both, and a value written into `lazy-panel.json` is dropped with a warning in the footer. Esc is hard-coded by the panel (clear the search, clear the multi-select, leave the panel) before the keymap is consulted, so a binding on it could never fire; Backspace is the recorder's own "drop the last key" and what every text field needs while editing. A **modifier alone** (Ctrl / Shift / Alt / Fn) cannot be bound either — it is not a key any terminal reports, so a chord always needs a base key (`ctrl+d`). **Fn is worse than the others: it can never be part of a chord either.** It is handled below the terminal (keyboard firmware / OS driver), so what arrives is the *result* — on most laptops `Fn`+`F1` is volume-down, not `F1`, and the kitty keyboard protocol has no `fn` modifier bit at all. Turn Fn-lock on (or use another modifier) if a key seems unreachable. Everything else works, including the function keys and Delete / Home / End / PageUp / PageDown in a kitty-protocol terminal such as herdr. With a modifier they are different keys: `ctrl+backspace` is bindable.
 
-Settings opens and closes immediately, without animation. These management keys are fixed, independent of custom keymaps, and retain their logical focus meanings on narrow terminals. Background mouse actions are blocked while settings is open. Keybinding rows show **only the selected scope's own bindings**; “No local binding” does not mean other scopes cannot bind that action. Inheritance, priority and disabled actions still determine execution.
+Settings opens and closes immediately, without animation. These management keys are fixed, independent of custom keymaps, and retain their logical focus meanings on narrow terminals. The background stays blocked while settings is open, and settings itself now takes the mouse (click a category, a setting or a button). Keybinding rows show **only the selected scope's own bindings**; “No local binding” does not mean other scopes cannot bind that action. Inheritance, priority and disabled actions still determine execution.
 
 Saving patches only edited fields in `lazy-panel.json` (including per-scope / per-action changes under `keymap`), preserving other settings and unknown fields. Invalid files are not overwritten; reload after correcting the file. Concurrent unrelated changes are merged; a conflict on the same field or the same binding stops the write — the change stays on screen with an error and the Retry button (`s`), so fix or reload and retry. Merely opening or closing settings does not write the file — each edit is written at once, as it is made.
 
@@ -223,10 +223,11 @@ The core is still the keyboard; the mouse is only lightly supported. Both regula
 
 | Action | Behavior |
 | --- | --- |
-| Wheel / three-finger up-down | Scroll the view of the pane under the pointer (a list only scrolls, it does not move the selection; CONTENT scrolls by line), without changing focus |
-| Single click | Focus moves to the pane under the pointer; clicking a list item also moves the cursor to it |
-| Double-click SESSIONS | Enter that session (equivalent to `Enter` / resume) |
-| Double-click TREE | Fold / unfold the branch under the cursor (equivalent to `z`) |
+| Wheel / three-finger up-down | Over a pane: scroll its view (a list only scrolls, it does not move the selection; CONTENT scrolls by line), without changing focus. Over a dialog: move the selection (`SelectDialog`, help, the tree dialog, settings, context usage) or scroll the text (changelog, the prompt preview) |
+| Single click | Over a pane: focus moves to the pane under the pointer; clicking a list item also moves the cursor to it. In a dialog: select the row / region under the pointer (sidebar category, setting, button, tree / list row, usage category) |
+| Double-click | Same as `Enter` for the row under the pointer: enter a session, fold a TREE branch, pick a menu entry, run a help command, restore a tree node, edit a setting, run a settings button, preview a usage category |
+| Click outside a dialog / on its border | Nothing — a dialog never closes on a stray click |
+| `press` / `move` / `drag` | Always left to the terminal, so its own text selection keeps working |
 
 
 
