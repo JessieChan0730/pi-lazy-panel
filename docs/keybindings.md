@@ -38,7 +38,9 @@ Press **`,`** in any main pane, select **Open plugin settings** from `?`, or run
 
 **General** edits the language and configured default scope/sort (not temporary browsing choices). Enter opens a choice menu; selections update a draft until you explicitly save. Language changes apply immediately after saving; default scope/sort apply the next time the panel opens, without moving or reordering the current session list. Follow system removes the language override.
 
-**Keybindings** are editable: the top **Scope** row chooses which scope to edit (global / sessions / tree / content / tree dialog), and each action row below shows its current binding. Press Enter on an action row to open its management menu: `Add key…` (a recorder — **press the key you want**, it appears as you press it, then `Enter` adds it; `Backspace` drops the last key so that multi-key sequences are recorded by pressing `g` `g` and so on; `Esc` cancels), `Remove: <key>` (drop one bound key), `Unbind (no key)` and `Reset to default`. Edits only touch the draft and apply immediately after saving (bindings are rebuilt; an unfinished multi-key sequence is dropped). `d` (Restore defaults) on the keybindings page resets every action of the current scope to its built-in binding. Layout width is editable; theme selection remains read-only for now.
+**Keybindings** are editable: the top **Scope** row chooses which scope to edit (global / sessions / tree / content / tree dialog), and each action row below shows its current binding. Press Enter on an action row to open its management menu: `Add key…` (a recorder — **press the key you want**, it appears as you press it, then `Enter` adds it; `Backspace` drops the last key so that multi-key sequences are recorded by pressing `g` `g` and so on; `Esc` cancels), `Remove: <key>` (drop one bound key), `Unbind (no key)` and `Reset to default`. Edits only touch the draft and apply immediately after saving (bindings are rebuilt; an unfinished multi-key sequence is dropped). `d` (Restore defaults) on the keybindings page resets every action of the current scope to its built-in binding. Layout width is editable too.
+
+**Theme** is one row showing pi's current theme; Enter opens a menu of every theme pi can load. Picking one only **previews** it — the panel and pi's interface repaint, while pi's saved theme stays as it is. Press `s` to apply it for real (pi writes its own settings); `d`, `r` (reload) or leaving settings discards the preview.
 
 | Fixed key inside settings | Action |
 | --- | --- |
@@ -46,9 +48,9 @@ Press **`,`** in any main pane, select **Open plugin settings** from `?`, or run
 | `l` / `→` | Focus the item list (right); no effect if already focused |
 | `Tab` / `Shift+Tab` | Cycle categories, item list and action buttons |
 | `j/k/↑/↓` | Select a category, item or button; keep selection visible |
-| `Enter` | Enter the list, edit a General item, choose a keybinding scope, edit an action's binding, or activate a button |
+| `Enter` | Enter the list, edit a General item, choose a keybinding scope, edit an action's binding, open the theme menu, or activate a button |
 | `s` | Save the draft from any region of the settings main view; no Tab needed |
-| `d` | Confirm restoring defaults in the draft (General / Layout / current keybinding scope); no Tab needed |
+| `d` | Confirm restoring defaults in the draft (General / Layout / current keybinding scope), or discard the theme preview; no Tab needed |
 | `r` | Reload the configuration; confirm before discarding a dirty draft |
 | `PageUp` / `PageDown` in the item list | Scroll a long item description / binding value |
 | `Esc` / `q` | Exit settings; unsaved changes offer continue editing, save and exit, or discard with confirmation |
@@ -100,7 +102,7 @@ Help uses a fixed 28-row popup (including borders), shrinking on smaller termina
 | `C` | `scope-current` | List scope: current folder |
 | `A` | `scope-all` | List scope: all |
 | `?` | `help` | Commands for the current pane: `j` / `k` / `↑` / `↓` select, `Enter` closes help and runs the selected command; `?` / `Esc` / `q` closes without running |
-| `,` | `settings-open` | Open plugin settings immediately; edit and save General, Layout and Keybindings (see Plugin settings above) |
+| `,` | `settings-open` | Open plugin settings immediately; edit and save General, Layout, Keybindings and Theme (see Plugin settings above) |
 | `q` / `Ctrl+c` | `quit` | Quit the panel |
 | `@` | `changelog` | pi's changelog (`/changelog`) as a large popup: `j` `k` `↑` `↓` scroll, `Ctrl+d` / `Ctrl+u` half-page, `g` / `G` top / bottom, `Esc` / `q` / `@` close. The whole file renders slowly, so the popup first shows a spinning square `◰ Loading changelog…` in the center, then the content (cached, so a second `@` opens instantly). The newest version is on top (pi's own `/changelog` puts it last). Not available inside the tree dialog |
 | `Esc` | — (built-in, not configurable) | In order: discard an unfinished keystroke → clear the current pane's search → clear the SESSIONS multi-selection → return from archive to normal sessions → quit |
