@@ -55,13 +55,14 @@ test("settings values and local readonly notes replace global preview notice", (
 	assert.doesNotMatch(h.text(60), /Layout · Read-only/);
 	h.state.category = "theme";
 	// 主题页和其他设置一样只有一行：右边是 pi 已保存的主题（值来自 pi 的主题列表），
-	// 说明框给出它的文件路径；可编辑（不再只读），回车是弹菜单选主题。
+	// 可编辑（不再只读），回车是弹菜单选主题。主题页平时没有任何说明，
+	// 所以底部说明框整个不画（连主题文件路径也不再出现）。
 	assert.doesNotMatch(h.text(60), /Read-only/);
 	assert.match(h.text(60), /4\/4 Theme/);
 	assert.match(h.text(), /Theme {2,}nord/);
 	h.state.region = "list";
-	assert.match(h.text(), /\/home\/user\/\.pi\/agent\/themes\/nord\.json/);
-	// 切换失败留下的主题：行上换成 pi 没切过去的那一个并带 * 标记，说明文字也跟着换。
+	assert.doesNotMatch(h.text(), /nord\.json/);
+	// 切换失败留下的主题：行上换成 pi 没切过去的那一个并带 * 标记，这时才补一句说明。
 	h.state.themeDraft = "light";
 	assert.match(h.text(), /\* Theme {2,}light/);
 	assert.match(h.text(), /Switching to light failed/);
@@ -101,6 +102,23 @@ test("layout category shows the ratio value and the width description in the det
 	assert.match(a, /SESSIONS and TREE share this width/);
 	// 不同比例下显示的数值不同，整幅渲染必然不一样。
 	assert.notEqual(a, wide.text());
+});
+test("the detail box only appears for items that carry a description", () => {
+	// 布局和快捷键本来就容易看错，底部说明框（第二个 ┌ 开头的方框）留着；
+	// 常规 / 主题行自己说得清，没有说明就不画框，把高度还给列表。
+	const boxes = (text: string): number => text.split("\n").filter((line) => line.includes("┌")).length;
+	const h = makeDialog();
+	assert.equal(boxes(h.text()), 1, "general rows have no detail box");
+	h.state.category = "layout";
+	assert.equal(boxes(h.text()), 2, "the layout row keeps its explanation");
+	h.state.category = "keybindings";
+	assert.equal(boxes(h.text()), 2, "keybinding rows keep theirs");
+	h.state.category = "theme";
+	assert.equal(boxes(h.text()), 1, "the theme row has none either");
+	// 说明框在就在、不在就完全不给 PgUp/PgDn 提示（footer 用的是同一个 hints）。
+	assert.ok(!h.dialog.hints.some(([, label]) => /scroll/i.test(label)), "no scroll hint without a box");
+	h.state.category = "layout";
+	assert.ok(h.dialog.hints.some(([, label]) => /scroll/i.test(label)), "the scroll hint comes back with the box");
 });
 test("action shortcuts work from categories and list without focusing buttons", () => {
 	for (const region of ["categories", "list"] as const) {

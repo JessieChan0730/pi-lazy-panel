@@ -4359,7 +4359,8 @@ test("the theme page switches pi the moment a theme is picked", async () => {
 	assert.equal(h.panel.state.settings.themeDraft, undefined);
 	assert.equal(settingsDirtyCount(h.panel.state.settings), 0);
 	assert.doesNotMatch(h.text(120).join("\n"), /\* Theme/);
-	assert.match(h.text(120).join("\n"), /Theme: nord/);
+	// 主题页平时只有一行值，没有说明；底部说明框也不出现（只有切换失败时才有）。
+	assert.match(h.text(120).join("\n"), /Theme\s+nord/);
 	h.panel.dispose();
 });
 

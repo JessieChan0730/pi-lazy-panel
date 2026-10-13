@@ -20,7 +20,11 @@ interface SettingsItem {
 	id: string;
 	label: string;
 	value: string;
-	description: string;
+	/**
+	 * 只有容易被误会的设置才写说明（布局宽度、快捷键的层级语义、主题切换失败……）。
+	 * 说明是底部说明框存在的唯一理由：没有说明就不画那个框，其余设置靠行本身自解释。
+	 */
+	description?: string;
 	/** True when the draft changes this item (shows the `*` marker). */
 	dirty?: boolean;
 }
@@ -62,7 +66,9 @@ export class SettingsDialog {
 	get hints(): KeyHint[] {
 		// 正常路径上每一次改动都已经落盘，所以只有失败时才有"重试"这一项。
 		const retry: KeyHint[] = this.retryable() ? [["s", t("settings.retry")]] : [];
-		return [["Esc/q", t("hint.close")], ["h/←", t("settings.categories")], ["l/→", t("settings.list")], ["Tab", t("settings.switchRegion")], ["j/k/↑↓", t("hint.move")], ["Enter", t("hint.choose")], ...retry, ["d", t("settings.restore")], ["r", t("settings.reload")], ["PgUp/PgDn", t("settings.scrollDetails")]];
+		// 说明框按需出现（只在光标项有说明时），滚动提示也跟着只在它出现时提示。
+		const scroll: KeyHint[] = this.detailItem()?.description ? [["PgUp/PgDn", t("settings.scrollDetails")]] : [];
+		return [["Esc/q", t("hint.close")], ["h/←", t("settings.categories")], ["l/→", t("settings.list")], ["Tab", t("settings.switchRegion")], ["j/k/↑↓", t("hint.move")], ["Enter", t("hint.choose")], ...retry, ["d", t("settings.restore")], ["r", t("settings.reload")], ...scroll];
 	}
 
 	/** Is there a failed write / read for `s` to redo? */
@@ -185,24 +191,33 @@ export class SettingsDialog {
 		return state.positions[page] ??= { cursor: 0, scroll: 0, detailScroll: 0 };
 	}
 
+	/** The item under the cursor — the one the detail box (and its PgUp/PgDn hint) belongs to. */
+	private detailItem(): SettingsItem | undefined {
+		const items = this.items();
+		return items[clamp(this.position().cursor, 0, Math.max(0, items.length - 1))];
+	}
+
 	private items(): SettingsItem[] {
 		const { state } = this.o;
 		const config = settingsDraft(state) ?? this.o.config;
 		const dirty = (id: string): boolean => Object.hasOwn(state.patch, id);
 		switch (state.category) {
 			case "general":
+				// 常规三项都自己说得清（语言 / 默认范围 / 默认排序），不写说明。
 				return [
-					{ id: "locale", label: t("settings.locale"), value: config.locale ? t(`settings.language.${config.locale}`) : t("settings.system"), description: t("settings.localeDescription"), dirty: dirty("locale") },
-					{ id: "defaultScope", label: t("settings.defaultScope"), value: t(`settings.scope.${config.defaultScope}`), description: t("settings.defaultDescription"), dirty: dirty("defaultScope") },
-					{ id: "defaultSort", label: t("settings.defaultSort"), value: t(`settings.sort.${config.defaultSort}`), description: t("settings.defaultDescription"), dirty: dirty("defaultSort") },
+					{ id: "locale", label: t("settings.locale"), value: config.locale ? t(`settings.language.${config.locale}`) : t("settings.system"), dirty: dirty("locale") },
+					{ id: "defaultScope", label: t("settings.defaultScope"), value: t(`settings.scope.${config.defaultScope}`), dirty: dirty("defaultScope") },
+					{ id: "defaultSort", label: t("settings.defaultSort"), value: t(`settings.sort.${config.defaultSort}`), dirty: dirty("defaultSort") },
 				];
 			case "layout":
+				// 宽度是容易误会的一项（三个面板怎么分、范围是多少），保留说明。
 				return [{ id: "leftColumnRatio", label: t("settings.leftWidth"), value: `${Number((config.leftColumnRatio * 100).toFixed(2))}%`, description: t("settings.widthDescription"), dirty: dirty("leftColumnRatio") }];
 			case "theme":
 				return this.themeItems();
 			case "keybindings": {
 				// 本层合并结果，不使用会展开继承的 help/labelsForFocus；默认表只用于保留已解绑的动作行。
 				const actions = new Set([...Object.keys(DEFAULT_KEYMAP[state.keyScope]), ...Object.keys(config.keymap[state.keyScope])]);
+				// 快捷键保留说明：这里"只显示本层"和"实际还受继承 / 优先级 / 禁用影响"最容易看错。
 				return [{ id: "keyScope", label: t("settings.keyScope"), value: scopeTitle(state.keyScope), description: t("settings.scopeDescription") }, ...[...actions].map((id) => ({
 					id,
 					label: actionDescription(id as ActionId),
@@ -217,22 +232,19 @@ export class SettingsDialog {
 	/**
 	 * The theme page is one row like every other setting: the value is the theme
 	 * pi has active — or the one pi refused to switch to — and Enter opens the
-	 * picker, which switches pi right away. The description names the theme's file
-	 * (so the list column needs no 内置 / 自定义 tag); a failed switch marks the row
-	 * as an unsaved change to retry with `s`.
+	 * picker, which switches pi right away. 平时行上只有主题名，没有说明；只有 pi
+	 * 拒了这次切换（`*` 标记 + 让用户按 `s`）或一个主题都没有时才给一句提示。
 	 */
 	private themeItems(): SettingsItem[] {
 		const { themes, activeTheme: active, themeDraft: failed } = this.o.state;
 		if (!themes.length)
 			return [{ id: "theme", label: t("settings.category.theme"), value: "", description: t("settings.themeEmpty") }];
 		const selected = failed ?? active;
-		const path = themes.find((ref) => ref.name === selected)?.path ?? t("settings.themeBuiltInPath");
 		return [{
 			id: "theme",
 			label: t("settings.category.theme"),
 			value: selected ?? "",
-			description: failed === undefined ? t("settings.themeDescription", { path }) : t("settings.themePendingDescription", { name: failed }),
-			...(failed === undefined ? {} : { dirty: true }),
+			...(failed === undefined ? {} : { description: t("settings.themePendingDescription", { name: failed }), dirty: true }),
 		}];
 	}
 
@@ -336,8 +348,10 @@ export class SettingsDialog {
 	}
 
 	/**
-	 * 底部独立说明框（lazygit 风格）：当前项的 id / 名称:值 / 描述，可用 PgUp/PgDn 滚动。
+	 * 底部独立说明框（lazygit 风格）：当前项的 id / 名称:值 / 说明，可用 PgUp/PgDn 滚动。
 	 * 画成一个单独的 muted 边框方框，和主对话框竖直堆叠，高度不够（height < 11）时不画。
+	 * **只有带说明的项才画这个框**（布局宽度、快捷键、以及出问题的主题行）：其余设置在行上
+	 * 就看得懂，框里只剩重复的行名和值，白占高度。
 	 */
 	private detailBox(width: number, height: number): string[] {
 		if (width < 16 || height < 11) return [];
@@ -346,7 +360,7 @@ export class SettingsDialog {
 		const pos = this.position();
 		const cursor = clamp(pos.cursor, 0, Math.max(0, items.length - 1));
 		const item = items[cursor];
-		if (!item) return [];
+		if (!item?.description) return [];
 		const inner = width - 2;
 		/** The theme row's id is its category name; showing it there would be noise. */
 		const idNoise = state.category;
