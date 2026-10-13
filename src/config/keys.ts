@@ -174,7 +174,6 @@ export function matchesKeyId(data: string, keyId: string): boolean {
  * kitty keyboard protocol codepoints of the functional keys. pi-tui only maps
  * the *keypad* variants (57421–57426) and the legacy escape sequences, so in a
  * kitty terminal every one of these arrives as CSI-u and would never match.
- * See docs/issues.md (自定义功能键在 kitty 键盘协议下不生效).
  */
 const KITTY_FUNCTIONAL_KEYS: Readonly<Record<number, string>> = {
 	57344: "escape",

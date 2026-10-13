@@ -217,7 +217,7 @@ Scrolling, search, plus centering and copying the selected message (the one the 
 
 ## Mouse
 
-The core is still the keyboard; the mouse is only lightly supported. Both regular (default) and fullscreen TUI modes are supported: in fullscreen pi dispatches events to the panel, while in regular mode the plugin turns on SGR mouse reporting itself (needs a terminal that supports SGR, which virtually all modern terminals do; while the panel is open the terminal's own selection / scrolling is taken over, and restored on close). See `docs/issues.md`.
+The core is still the keyboard; the mouse is only lightly supported. Both regular (default) and fullscreen TUI modes are supported: in fullscreen pi dispatches events to the panel, while in regular mode the plugin turns on SGR mouse reporting itself (needs a terminal that supports SGR, which virtually all modern terminals do; while the panel is open the terminal's own selection / scrolling is taken over, and restored on close).
 
 | Action | Behavior |
 | --- | --- |

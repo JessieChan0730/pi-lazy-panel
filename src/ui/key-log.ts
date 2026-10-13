@@ -7,7 +7,7 @@
  * line (`<time>\t<json escaped chunk>\t<chord or ->`), and the panel still gets
  * the key as usual. It answers the questions static reading cannot — what herdr
  * sends for F1, whether Delete arrives as `\x1b[57349u` or legacy `\x1b[3~`,
- * whether a lone Ctrl reaches the app at all. See docs/issues.md.
+ * whether a lone Ctrl reaches the app at all.
  *
  * 原始按键 dump：排查“某个键在某终端里到底发了什么”的临时工具。
  * 设 `LAZY_PANEL_KEY_LOG=<文件路径>` 启动 pi，面板打开期间每个原始输入块都追加一行
