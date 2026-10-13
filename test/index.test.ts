@@ -15,6 +15,21 @@ const theme = {
 	bold: (s: string) => s,
 } as unknown as Theme;
 
+/**
+ * The panel reads its colors from `ctx.ui.theme` (a live getter in pi, so the
+ * panel follows pi's theme switches) and lists / switches themes through the
+ * same UI context, so every fake context that opens a panel needs these.
+ */
+function fakeUi(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+	return {
+		theme,
+		getAllThemes: () => [{ name: "test", path: "/themes/test.json" }],
+		getTheme: (name: string) => name === "test" ? theme : undefined,
+		setTheme: () => ({ success: true }),
+		...overrides,
+	};
+}
+
 type Command = Parameters<ExtensionAPI["registerCommand"]>[1];
 type PanelFactory = (tui: unknown, theme: Theme, keybindings: unknown, done: () => void) => LazyPanel;
 
@@ -58,7 +73,7 @@ test("registered settings argument bypasses unbound keys and opens before sessio
 			cwd: dir,
 			isProjectTrusted: () => false,
 			sessionManager: { getSessionFile: () => undefined },
-			ui: {
+			ui: fakeUi({
 				custom: async (factory: PanelFactory) => {
 					customCalls++;
 					const panel = factory({ mode: "fullscreen", terminal: { rows: 28, columns: 120 }, requestRender: () => {} }, theme, {}, () => {});
@@ -81,7 +96,7 @@ test("registered settings argument bypasses unbound keys and opens before sessio
 						panel.dispose();
 					}
 				},
-			},
+			}),
 		} as unknown as ExtensionCommandContext;
 		await command.handler(args, context);
 		assert.equal(customCalls, 1);
@@ -116,7 +131,7 @@ test("settings saves General fields, applies language now and scope/sort only on
 	const context = {
 		mode: "tui", cwd: dir, isProjectTrusted: () => false,
 		sessionManager: { getSessionFile: () => undefined },
-		ui: {
+		ui: fakeUi({
 			custom: async (factory: PanelFactory) => {
 				const panel = factory({ mode: "fullscreen", terminal: { rows: 28, columns: 120 }, requestRender: () => {} }, theme, {}, () => {});
 				try {
@@ -153,7 +168,7 @@ test("settings saves General fields, applies language now and scope/sort only on
 					panel.dispose();
 				}
 			},
-		},
+		}),
 	} as unknown as ExtensionCommandContext;
 	await command.handler("settings", context);
 	await command.handler("settings", context);

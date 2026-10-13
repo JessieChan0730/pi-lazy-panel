@@ -8,7 +8,16 @@ import { createSettingsState, SETTINGS_CATEGORIES, setSettingsDraft } from "../s
 import { SettingsDialog } from "../src/ui/widgets/settings-dialog.ts";
 initI18n("en");
 const theme = { fg: (_c: string, s: string) => s, bg: (_c: string, s: string) => s, bold: (s: string) => s } as unknown as Theme;
-function makeDialog(config = DEFAULT_CONFIG) {
+/** pi's themes as the entry point passes them to the theme page (see docs/theme.md). */
+const themes = {
+	themes: [
+		{ name: "dark", path: "/pi/theme/dark.json" },
+		{ name: "light", path: "/pi/theme/light.json" },
+		{ name: "nord", path: "/home/user/.pi/agent/themes/nord.json" },
+	],
+	active: "nord",
+};
+function makeDialog(config = DEFAULT_CONFIG, themeSnapshot: typeof themes | undefined = themes) {
 	const state = createSettingsState();
 	let changes = 0;
 	let closes = 0;
@@ -16,6 +25,7 @@ function makeDialog(config = DEFAULT_CONFIG) {
 	const buttons: string[] = [];
 	const dialog = new SettingsDialog({
 		state, config, theme,
+		...(themeSnapshot ? { themes: () => themeSnapshot } : {}),
 		onChange: () => { changes++; },
 		onClose: () => {
 			assert.equal(state.phase, "closed");
@@ -44,8 +54,15 @@ test("settings values and local readonly notes replace global preview notice", (
 	assert.match(h.text(60), /2\/4 Layout/);
 	assert.doesNotMatch(h.text(60), /Layout · Read-only/);
 	h.state.category = "theme";
-	assert.match(h.text(60), /Theme · Read-only/);
-	assert.match(h.text(), /Follow pi/);
+	// 主题页可编辑（不再只读）：列出 pi 的主题、标记当前那个、给出它的文件路径。
+	assert.doesNotMatch(h.text(60), /Read-only/);
+	assert.match(h.text(60), /4\/4 Theme/);
+	assert.match(h.text(), /• nord/);
+	assert.match(h.text(), /dark/);
+	// 当前主题的说明框给出路径（改那个文件 pi 会即时重载）。
+	h.state.region = "list";
+	h.state.positions.theme = { cursor: 2, scroll: 0, detailScroll: 0 };
+	assert.match(h.text(), /\/home\/user\/\.pi\/agent\/themes\/nord\.json/);
 	assert.deepEqual(config, before);
 	assert.match(makeDialog().text(), /Follow system/);
 });

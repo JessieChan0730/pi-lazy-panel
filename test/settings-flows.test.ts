@@ -3,6 +3,7 @@ import { test } from "node:test";
 import type { ConfigSaveResult, ConfigSnapshot, SettingsPatch } from "../src/config/config-store.ts";
 import { applyKeymapPatch } from "../src/config/config-store.ts";
 import { initI18n } from "../src/i18n/index.ts";
+import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { SettingsFlowHost } from "../src/ui/flows/host.ts";
 import { editSetting, exitSettings, openBindingEditor, readSettings, reloadSettings, restoreSettingsDefaults, saveSettings } from "../src/ui/flows/settings-flows.ts";
 import type { SettingsSource } from "../src/ui/ports.ts";
@@ -11,6 +12,30 @@ import { createInitialState } from "../src/ui/state.ts";
 import type { InputDialogSpec } from "../src/ui/widgets/input-dialog.ts";
 import type { SelectDialogSpec } from "../src/ui/widgets/select-dialog.ts";
 initI18n("en");
+/**
+ * A fake pi theme port: `themes()` is the list `readSettings` scans, `active`
+ * is what the panel would be painted with, and `set` records switches (or
+ * fails, to cover the notice path).
+ */
+function themeFixture(list = [{ name: "dark", path: "/pi/theme/dark.json" }, { name: "nord", path: "/home/u/.pi/agent/themes/nord.json" }], fail = false) {
+	let active = "dark";
+	const sets: string[] = [];
+	return {
+		source: {
+			list: () => list,
+			theme: { name: active } as unknown as Theme,
+			set: (name: string) => {
+				if (fail) return { success: false, error: "invalid theme" };
+				sets.push(name);
+				active = name;
+				return { success: true };
+			},
+		},
+		list,
+		sets: () => sets,
+		active: () => active,
+	};
+}
 function deferred<T>() {
 	let resolve!: (value: T) => void;
 	let reject!: (reason: Error) => void;
@@ -31,6 +56,8 @@ function fixture(raw: Record<string, unknown> = {}, overrides: Partial<SettingsS
 	let applies = 0;
 	let refreshes = 0;
 	let localeRefreshes = 0;
+	// pi's themes: a live snapshot the fake can mutate to simulate a switch.
+	const themes = themeFixture();
 	const source: SettingsSource = {
 		read: async () => snapshot,
 		save: async (_baseline, patch) => {
@@ -54,7 +81,7 @@ function fixture(raw: Record<string, unknown> = {}, overrides: Partial<SettingsS
 	};
 	// Only the settings extension and inherited menu/lifecycle capabilities are used.
 	const host = {
-		state, settingsSource: source,
+		state, settingsSource: source, themeSource: themes.source,
 		isDisposed: () => disposed,
 		openMenu: (_mode: string, spec: SelectDialogSpec) => {
 			menu = spec;
@@ -75,7 +102,7 @@ function fixture(raw: Record<string, unknown> = {}, overrides: Partial<SettingsS
 		refreshSettings: () => { refreshes++; },
 		refreshConfig: () => { localeRefreshes++; },
 	} as unknown as SettingsFlowHost;
-	return { host, state: state.settings, source, menu: () => menu, prompt: () => prompt, dispose: () => {
+	return { host, state: state.settings, source, themes, menu: () => menu, prompt: () => prompt, dispose: () => {
 		disposed = true;
 	}, writes: () => writes, applies: () => applies, refreshes: () => refreshes, localeRefreshes: () => localeRefreshes };
 }
@@ -364,4 +391,62 @@ test("openBindingEditor Esc on the add prompt returns to the action menu", async
 	assert.equal(h.prompt(), undefined);
 	assert.ok(h.menu()); // back on the action menu
 	assert.equal(settingsDirtyCount(h.state), 0);
+});
+test("theme picker lists pi's themes, marks the active one and switches immediately", async () => {
+	const h = fixture();
+	await readSettings(h.host);
+	h.state.category = "theme";
+	editSetting(h.host, "theme");
+	// 当前主题带标记、且光标一开始就落在它上面（Enter 再按一次是空操作）。
+	assert.deepEqual(h.menu()?.items, ["dark (active)", "nord"]);
+	assert.equal(h.menu()?.initialIndex, 0);
+	// 选当前主题：什么都不做（不写、不报）。
+	h.menu()!.onSelect(0);
+	assert.deepEqual(h.themes.sets(), []);
+	assert.equal(h.state.notice, undefined);
+	// 换主题：立刻应用（pi 负责持久化），面板记下新的活动主题并提示。
+	editSetting(h.host, "theme");
+	h.menu()!.onSelect(1);
+	assert.deepEqual(h.themes.sets(), ["nord"]);
+	assert.equal(h.themes.active(), "nord");
+	assert.equal(h.state.activeTheme, "nord");
+	assert.equal(h.state.notice, "Theme: nord");
+	assert.equal((h.state.patch as Record<string, unknown>).theme, undefined, "主题不写进面板草稿");
+	assert.equal(h.writes(), 0);
+	// 再打开：列表里的标记跟着走。
+	editSetting(h.host, "theme");
+	assert.deepEqual(h.menu()?.items, ["dark", "nord (active)"]);
+	h.menu()!.onCancel();
+	assert.equal(h.state.notice, "Theme: nord");
+});
+test("theme picker reports a missing port and an empty theme list without opening a menu", async () => {
+	// 入口没注入 themeSource（例如别处复用面板）时只提示，不崩。
+	const noPort = fixture();
+	(noPort.host as { themeSource?: unknown }).themeSource = undefined;
+	await readSettings(noPort.host);
+	assert.deepEqual(noPort.state.themes, []);
+	noPort.state.category = "theme";
+	editSetting(noPort.host, "theme");
+	assert.match(noPort.state.error ?? "", /theme/i);
+	assert.equal(noPort.menu(), undefined);
+	// pi 一个主题都没有（--no-themes 之类）时同样只提示。
+	const empty = fixture();
+	(empty.host as unknown as { themeSource: unknown }).themeSource = themeFixture([]).source;
+	await readSettings(empty.host);
+	empty.state.category = "theme";
+	editSetting(empty.host, "theme");
+	assert.equal(empty.state.themes.length, 0);
+	assert.match(empty.state.error ?? "", /theme/i);
+	assert.equal(empty.menu(), undefined);
+});
+test("a failed theme switch keeps the previous active theme", async () => {
+	const h = fixture();
+	(h.host as unknown as { themeSource: unknown }).themeSource = themeFixture(undefined, true).source;
+	await readSettings(h.host);
+	h.state.category = "theme";
+	editSetting(h.host, "theme");
+	h.menu()!.onSelect(1);
+	assert.equal(h.state.activeTheme, "dark");
+	assert.equal(h.state.notice, undefined);
+	assert.match(h.state.error ?? "", /invalid theme/);
 });

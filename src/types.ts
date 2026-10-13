@@ -432,4 +432,6 @@ export interface UserConfig {
 	defaultScope?: ListScope;
 	defaultSort?: SessionSortMode;
 	leftColumnRatio?: number;
+	/** Not a real setting: accepted only so writing it produces a warning (the panel follows pi's theme). */
+	theme?: unknown;
 }

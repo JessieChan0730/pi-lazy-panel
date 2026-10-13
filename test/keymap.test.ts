@@ -274,6 +274,10 @@ test("resolveConfig: invalid values fall back to defaults with warnings", () => 
 	assert.equal(ok.defaultSort, "threaded");
 	assert.equal(ok.leftColumnRatio, 0.3);
 	assert.deepEqual(ok.warnings, []);
+	// 主题不是面板设置：写了只提示，颜色一律跟着 pi（见 docs/theme.md）。
+	const themed = resolveConfig({ theme: "nord" });
+	assert.equal(themed.warnings.length, 1);
+	assert.match(themed.warnings[0]!, /theme/);
 	assert.equal(resolveConfig("nope").warnings.length, 1);
 });
 

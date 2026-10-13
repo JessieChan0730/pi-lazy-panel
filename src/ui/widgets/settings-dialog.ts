@@ -9,6 +9,7 @@ import { t } from "../../i18n/index.ts";
 import type { ActionId, KeyHint } from "../../types.ts";
 import { clamp } from "../../utils/indices.ts";
 import { fit, frame, FRAME_DIVIDER, overlayCentered } from "../frame.ts";
+import type { ThemeRef } from "../ports.ts";
 import { keymapActionDirty, settingsDirtyCount, settingsDraft, SETTINGS_CATEGORIES, type SettingsPosition, type SettingsRegion, type SettingsState } from "../settings-state.ts";
 import { dialogHeader } from "./dialog-header.ts";
 
@@ -25,9 +26,24 @@ interface SettingsItem {
 	dirty?: boolean;
 }
 
+/**
+ * The theme page reads pi's themes instead of the panel's config: the panel
+ * owns no theme of its own (see docs/theme.md), it just switches pi's.
+ */
+interface ThemeSnapshot {
+	themes: readonly ThemeRef[];
+	active: string | undefined;
+}
+
 export interface SettingsDialogOptions {
 	state: SettingsState;
 	config: SettingsSnapshot;
+	/**
+	 * pi's themes, for the theme page. A callback because the list is read when
+	 * the page opens (and again on reload), not when the dialog is constructed.
+	 * Absent = the panel was built without the theme port.
+	 */
+	themes?: () => ThemeSnapshot;
 	theme: Theme;
 	onChange: () => void;
 	onClose: () => void;
@@ -155,7 +171,7 @@ export class SettingsDialog {
 			case "layout":
 				return [{ id: "leftColumnRatio", label: t("settings.leftWidth"), value: `${Number((config.leftColumnRatio * 100).toFixed(2))}%`, description: t("settings.widthDescription"), dirty: dirty("leftColumnRatio") }];
 			case "theme":
-				return [{ id: "", label: t("settings.category.theme"), value: t("settings.followPi"), description: t("settings.themeDescription") }];
+				return this.themeItems();
 			case "keybindings": {
 				// 本层合并结果，不使用会展开继承的 help/labelsForFocus；默认表只用于保留已解绑的动作行。
 				const actions = new Set([...Object.keys(DEFAULT_KEYMAP[state.keyScope]), ...Object.keys(config.keymap[state.keyScope])]);
@@ -168,6 +184,29 @@ export class SettingsDialog {
 				}))];
 			}
 		}
+	}
+
+	/**
+	 * One row per theme pi can load; the active one is marked in a gutter so the
+	 * theme name can be shown as-is. The row id is the settings key the flow
+	 * dispatches on (`editSetting` opens the picker for "theme"), so every row
+	 * carries it — the picker, not the row, decides which theme that is.
+	 * `value` stays empty: the list column already shows the name, and the
+	 * detail box's `name: value` line would repeat it. A custom theme's file
+	 * path goes in the description — that is also why 内置 / 自定义 needs no
+	 * tag: 内置主题没有路径。
+	 */
+	private themeItems(): SettingsItem[] {
+		const snapshot = this.o.themes?.();
+		if (!snapshot?.themes.length) {
+			return [{ id: "theme", label: t("settings.category.theme"), value: "", description: t("settings.themeEmpty") }];
+		}
+		return snapshot.themes.map((ref) => ({
+			id: "theme",
+			label: `${ref.name === snapshot.active ? "•" : " "} ${ref.name}`,
+			value: "",
+			description: t(ref.name === snapshot.active ? "settings.themeActiveDescription" : "settings.themeDescription", { path: ref.path ?? t("settings.themeBuiltInPath") }),
+		}));
 	}
 
 	private selected(text: string, width: number, selected: boolean, focused: boolean): string {
@@ -194,7 +233,6 @@ export class SettingsDialog {
 		const sidebarWidth = wide ? Math.max(16, ...SETTINGS_CATEGORIES.map((c) => visibleWidth(t(`settings.category.${c}`)) + 4)) : 0;
 		const contentWidth = wide ? inner - sidebarWidth - 3 : inner - 2;
 		const category = t(`settings.category.${state.category}`);
-		const heading = state.category === "theme" ? `${category} · ${t("settings.readOnly")}` : category;
 		let area: string[];
 		if (wide) {
 			const content = this.renderContent(contentWidth, areaHeight - 1);
@@ -202,11 +240,11 @@ export class SettingsDialog {
 			area = Array.from({ length: areaHeight }, (_, i) => {
 				const cat = SETTINGS_CATEGORIES[i - 1 + categoryStart];
 				const left = i === 0 ? fit("", sidebarWidth) : cat ? this.selected(t(`settings.category.${cat}`), sidebarWidth, cat === state.category, state.region === "categories") : fit("", sidebarWidth);
-				const right = i === 0 ? theme.bold(theme.fg("accent", heading)) : content[i - 1] ?? "";
+				const right = i === 0 ? theme.bold(theme.fg("accent", category)) : content[i - 1] ?? "";
 				return `${left} ${theme.fg("borderMuted", "│")} ${fit(right, contentWidth)}`;
 			});
 		} else {
-			const title = `${SETTINGS_CATEGORIES.indexOf(state.category) + 1}/4 ${heading}`;
+			const title = `${SETTINGS_CATEGORIES.indexOf(state.category) + 1}/4 ${category}`;
 			area = [this.selected(title, inner, true, state.region === "categories")];
 			area.push(...this.renderContent(contentWidth, areaHeight - area.length).map((line) => ` ${line}`));
 		}
@@ -257,6 +295,9 @@ export class SettingsDialog {
 			if (rowHeight === 2) {
 				lines.push(this.selected(row.label, width, isSelected, state.region === "list"));
 				lines.push(theme.fg("muted", fit(`  ${row.value}`, width)));
+			} else if (!visibleWidth(row.value)) {
+				// 没有值的行（主题列表）：名字占满整行，不给 value 留空位。
+				lines.push(this.selected(row.label, width, isSelected, state.region === "list"));
 			} else {
 				const valueWidth = Math.min(Math.max(12, visibleWidth(row.value)), Math.floor(width / 2));
 				lines.push(this.selected(`${fit(row.label, Math.max(0, width - valueWidth - 4))}  ${fit(row.value, valueWidth)}`, width, isSelected, state.region === "list"));
@@ -272,15 +313,22 @@ export class SettingsDialog {
 	 */
 	private detailBox(width: number, height: number): string[] {
 		if (width < 16 || height < 11) return [];
-		const { theme } = this.o;
+		const { theme, state } = this.o;
 		const items = this.items();
 		const pos = this.position();
 		const cursor = clamp(pos.cursor, 0, Math.max(0, items.length - 1));
 		const item = items[cursor];
 		if (!item) return [];
 		const inner = width - 2;
-		const detail = [item.id, `${item.label}: ${item.value}`, item.description]
-			.filter(Boolean)
+		/** Every theme row shares one settings key; showing it per row would be noise. */
+		const idNoise = t(`settings.category.${state.category}`);
+		const detail = [
+			item.id === idNoise ? "" : item.id,
+			// 没有 value 的行（主题）不画 `名字: ` 这半行。
+			item.value ? `${item.label}: ${item.value}` : "",
+			item.description,
+		]
+			.filter((text) => text.length > 0)
 			.flatMap((text) => wrapTextWithAnsi(text, Math.max(1, inner - 2)));
 		if (!detail.length) return [];
 		// 方框最多占半屏、至多 6 行正文，剩余高度留给主对话框。

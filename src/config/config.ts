@@ -117,6 +117,11 @@ export function resolveConfig(user: unknown): ResolvedConfig {
 	}
 
 	const keymap = mergeKeymap(DEFAULT_KEYMAP, u.keymap, warnings);
+	// 主题不在这里配置：面板没有自己的主题，颜色一律取自 pi，主题选择写进 pi 的
+	// settings.json（见 docs/theme.md）。写了这一项的人多半是以为面板能单独设主题。
+	if (u.theme !== undefined) {
+		warnings.push("config: \"theme\" is not a plugin setting; the panel follows pi's theme (set it with pi's /settings)");
+	}
 	// locale 未指定时不写入该键（exactOptionalPropertyTypes），运行时按系统语言。
 	return { keymap, defaultScope, defaultSort, leftColumnRatio, warnings, ...(locale !== undefined ? { locale } : {}) };
 }

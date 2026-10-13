@@ -29,7 +29,8 @@ import type {
 	TreeRow,
 } from "../src/types.ts";
 import { LazyPanel } from "../src/ui/app.ts";
-import type { ActionSource, DataSource } from "../src/ui/ports.ts";
+import type { ActionSource, DataSource, SettingsSource, ThemeSource } from "../src/ui/ports.ts";
+import { settingsDirtyCount } from "../src/ui/settings-state.ts";
 import { cannotDeleteActiveTitle } from "../src/ui/widgets/alert-dialog.ts";
 import { compactDialogTitle } from "../src/ui/widgets/compact-dialog.ts";
 import {
@@ -112,7 +113,7 @@ interface Harness {
 	text: (width?: number) => string[];
 }
 
-function makePanel(opts: { keymap?: typeof DEFAULT_KEYMAP; height?: number } = {}): Harness {
+function makePanel(opts: { keymap?: typeof DEFAULT_KEYMAP; height?: number; themeSource?: ThemeSource; settingsSource?: SettingsSource } = {}): Harness {
 	const calls: Array<{ scope: string; sort: string }> = [];
 	let closed = false;
 	const data: DataSource = {
@@ -132,6 +133,8 @@ function makePanel(opts: { keymap?: typeof DEFAULT_KEYMAP; height?: number } = {
 			closed = true;
 		},
 		...(opts.keymap ? { keymap: opts.keymap } : {}),
+		...(opts.themeSource ? { themeSource: opts.themeSource } : {}),
+		...(opts.settingsSource ? { settingsSource: opts.settingsSource } : {}),
 	});
 	return {
 		panel,
@@ -4227,5 +4230,112 @@ test("an action bound where it does nothing, or misspelled in the config, only s
 	assert.ok(footer().includes(t("status.notImplemented", { action: "tree-filter-everything" })), footer());
 	assert.equal(h.closed(), false);
 	assert.equal(h.panel.state.mode, "normal");
+	h.panel.dispose();
+});
+
+/**
+ * 回归：面板必须从 live theme 取值（入口传 `ctx.ui.theme` 那个 proxy），而不是构造时的快照。
+ * pi 换主题时是整体替换 Theme 实例的，快照会让面板一直用旧颜色。
+ */
+test("the panel reads colors through the live theme, not a snapshot", () => {
+	let accent = "RED";
+	// 模拟 pi 的导出 `theme` proxy：每次取属性都现查当前实例。
+	const live = new Proxy({} as Theme, {
+		get: (_target, prop) => {
+			const current = {
+				fg: (color: string, s: string) => color === "accent" ? `<${accent}>${s}</${accent}>` : s,
+				bg: (_color: string, s: string) => s,
+				bold: (s: string) => s,
+				italic: (s: string) => s,
+				underline: (s: string) => s,
+				inverse: (s: string) => s,
+				strikethrough: (s: string) => s,
+			} as unknown as Record<string | symbol, unknown>;
+			return current[prop];
+		},
+	});
+	const panel = new LazyPanel({ theme: live, data: { listSessions: async () => [row(1, "/a")], loadTree: async () => [], loadContent: async () => [] }, getHeight: () => 20, requestRender: () => {}, onClose: () => {} });
+	const render = () => panel.render(80).join("\n");
+	assert.ok(render().includes("<RED>"), "constructed with the first theme");
+	accent = "BLUE"; // 用户在 pi 里换了主题
+	assert.ok(render().includes("<BLUE>"), "a later render picks up the new theme");
+	assert.ok(!render().includes("<RED>"), "the old snapshot is gone");
+	panel.dispose();
+});
+
+/**
+ * 回归：CONTENT 的排版（正文颜色）和 changelog 的渲染结果都带主题颜色，缓存的 key（宽度 / 高亮 /
+ * markdown）在换主题时不动，所以 pi 调 `invalidate()` 时必须把它们丢掉，否则面板边框变了、
+ * 正文还留在旧颜色。
+ */
+test("invalidate drops the theme-colored caches so a repaint uses the new theme", async () => {
+	let accent = "RED";
+	const live = new Proxy({} as Theme, {
+		get: (_target, prop) => ({
+			fg: (color: string, s: string) => color === "accent" ? `<${accent}>${s}</${accent}>` : s,
+			bg: (_color: string, s: string) => s,
+			bold: (s: string) => s,
+			italic: (s: string) => s,
+			underline: (s: string) => s,
+			inverse: (s: string) => s,
+			strikethrough: (s: string) => s,
+		} as unknown as Record<string | symbol, unknown>)[prop],
+	});
+	const panel = new LazyPanel({
+		theme: live,
+		data: { listSessions: async () => [row(1, "/a")], loadTree: async () => [treeRow(0)], loadContent: async () => [{ entryId: "e0", role: "user", timestamp: 0, markdown: "hello" } as ContentBlock] },
+		getHeight: () => 20,
+		requestRender: () => {},
+		onClose: () => {},
+	});
+	await panel.load();
+	assert.ok(panel.render(100).join("\n").includes("<RED>"));
+	accent = "BLUE";
+	panel.invalidate();
+	assert.ok(panel.render(100).join("\n").includes("<BLUE>"), "the content layout is re-rendered in the new theme");
+	assert.ok(!panel.render(100).join("\n").includes("<RED>"), "no stale colors survive the invalidate");
+	panel.dispose();
+});
+
+/**
+ * 回归：设置页的主题选择走的是真实按键路径（分类 → 列表 → Enter → 菜单 → Enter），
+ * 这条链上踩过两次坑：主题列表在构造时被快照成空、主题行的 id 是空串导致 Enter 什么都不做。
+ */
+test("the theme page lists pi's themes and switches on Enter, through the real keys", async () => {
+	const sets: string[] = [];
+	const themeSource: ThemeSource = {
+		list: () => [{ name: "dark", path: "/pi/dark.json" }, { name: "nord", path: "/home/u/.pi/agent/themes/nord.json" }],
+		theme: { name: "dark" } as unknown as Theme,
+		set: (name) => {
+			sets.push(name);
+			return { success: true };
+		},
+	};
+	const settingsSource: SettingsSource = {
+		read: async () => ({ raw: {}, fingerprint: "x" }),
+		save: async () => ({ snapshot: { raw: {}, fingerprint: "y" }, warnings: [] }),
+		apply: () => {},
+	};
+	const h = makePanel({ themeSource, settingsSource });
+	h.panel.openSettings();
+	for (let i = 0; i < 100 && h.panel.state.settings.loading; i++) await new Promise((resolve) => setTimeout(resolve, 2));
+	assert.deepEqual(h.panel.state.settings.themes.map((ref) => ref.name), ["dark", "nord"]);
+	assert.equal(h.panel.state.settings.activeTheme, "dark");
+	// 分类光标走到 Theme，再进列表（l），这时列表画的是 pi 的主题，当前那个带 • 标记。
+	for (const key of ["j", "j", "j", "l"]) h.panel.handleInput(key);
+	assert.equal(h.panel.state.settings.category, "theme");
+	assert.match(h.text(120).join("\n"), /• dark/);
+	// Enter 打开主题菜单（不是"什么都不做"），再 Enter 选中 —— 当前主题是第一项，先往下走到 nord。
+	h.panel.handleInput("\r");
+	const menu = h.text(120).join("\n");
+	assert.match(menu, /Theme/);
+	h.panel.handleInput("j");
+	h.panel.handleInput("\r");
+	assert.deepEqual(sets, ["nord"]);
+	assert.equal(h.panel.state.settings.activeTheme, "nord");
+	assert.equal(h.panel.state.settings.notice, t("settings.themeApplied", { name: "nord" }));
+	// 标记跟着走，且主题没有写进面板草稿。
+	assert.match(h.text(120).join("\n"), /• nord/);
+	assert.equal(settingsDirtyCount(h.panel.state.settings), 0);
 	h.panel.dispose();
 });

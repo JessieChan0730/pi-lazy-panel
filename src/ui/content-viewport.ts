@@ -66,6 +66,16 @@ export class ContentViewport {
 		this.cache = undefined;
 	}
 
+	/**
+	 * Drop the caches that bake theme colors into their output (the layout and
+	 * the line matches). Called by the panel on a pi theme change, where the
+	 * width / highlight keys of the caches do not move but every color does.
+	 */
+	invalidate(): void {
+		this.cache = undefined;
+		this.searchCache = undefined;
+	}
+
 	/** Cached layout of the blocks for the last rendered width. */
 	layout(): ContentLayout {
 		const { inner } = this.view;

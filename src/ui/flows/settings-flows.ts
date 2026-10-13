@@ -25,6 +25,10 @@ export async function readSettings(h: SettingsFlowHost): Promise<void> {
 	s.patch = {};
 	s.error = undefined;
 	s.notice = undefined;
+	// 主题是 pi 的状态、不走草稿：这里只把 pi 当前的主题列表和活动主题读进来，
+	// 每次打开设置页都重新扫描一遍（新丢进 ~/.pi/agent/themes 的文件立刻可见）。
+	s.themes = h.themeSource?.list() ?? [];
+	s.activeTheme = h.themeSource?.theme.name;
 	h.refreshSettings();
 	try {
 		if (!h.settingsSource)
@@ -66,6 +70,10 @@ export function editSetting(h: SettingsFlowHost, key: string): void {
 	if (s.loading || s.saving)
 		return;
 	const generation = s.generation;
+	if (key === "theme") {
+		openThemePicker(h, generation);
+		return;
+	}
 	if (key === "keyScope") {
 		h.openMenu("settings", {
 			title: t("settings.keyScope"), items: KEY_SCOPES.map(scopeTitle), initialIndex: KEY_SCOPES.indexOf(s.keyScope), hints: hints(),
@@ -127,6 +135,60 @@ export function editSetting(h: SettingsFlowHost, key: string): void {
 		onCancel: () => h.closeDialogs(),
 	});
 }
+
+/**
+ * Theme picker. Unlike every other page this one does not draft: the panel has
+ * no theme of its own (see docs/theme.md), so picking a theme means switching
+ * pi's theme, which pi persists in its own settings.json and applies at once
+ * (the panel repaints on pi's theme change, and `applyTheme` requests one too).
+ * Only listed themes are offered, so `set` failing is a real error worth a notice.
+ */
+function openThemePicker(h: SettingsFlowHost, generation: number): void {
+	const s = h.state.settings;
+	if (!h.themeSource) {
+		s.error = t("settings.themeUnavailable");
+		h.refreshSettings();
+		return;
+	}
+	if (!s.themes.length) {
+		s.error = t("settings.themeEmpty");
+		h.refreshSettings();
+		return;
+	}
+	const active = s.activeTheme;
+	h.openMenu("settings", {
+		title: t("settings.category.theme"),
+		items: s.themes.map((ref) => ref.name === active ? t("settings.themeActive", { name: ref.name }) : ref.name),
+		initialIndex: Math.max(0, s.themes.findIndex((ref) => ref.name === active)),
+		hints: hints(),
+		onSelect: (index) => {
+			h.closeDialogs();
+			if (!current(h, generation)) return;
+			const name = s.themes[index]?.name;
+			if (name === undefined || name === active) {
+				h.refreshSettings();
+				return;
+			}
+			applyTheme(h, generation, name);
+		},
+		onCancel: () => h.closeDialogs(),
+	});
+}
+
+function applyTheme(h: SettingsFlowHost, generation: number, name: string): void {
+	const s = h.state.settings;
+	const result = h.themeSource?.set(name);
+	if (!current(h, generation)) return;
+	if (!result?.success) {
+		s.error = t("settings.themeApplyFailed", { error: result?.error ?? name });
+		h.refreshSettings();
+		return;
+	}
+	s.activeTheme = name;
+	s.notice = t("settings.themeApplied", { name });
+	h.refreshSettings();
+}
+
 /**
  * Edit the key bindings of one action in the current scope: a menu to add a
  * chord (recorded by pressing the keys), remove an existing one, unbind the

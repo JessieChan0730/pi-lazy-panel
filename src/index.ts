@@ -137,7 +137,10 @@ export default function (pi: ExtensionAPI) {
 					// 因此显示边界的错位另由 mountPanelOverlay 强刷处理。旧版本保留存在性判断。
 					if (typeof tui.setClearOnShrink === "function") tui.setClearOnShrink(true);
 					const panel = new LazyPanel({
-						theme,
+						// 回调参数 `theme` 是构造时的快照（pi 换主题时整体替换掉），面板要用 `ctx.ui.theme`
+						// 这个 live proxy，否则用户在 pi 的 /settings 里换了主题，面板会一直是旧颜色。
+						// 面板不拥有主题：颜色一律取自 pi 的主题，见 docs/theme.md。
+						theme: ctx.ui.theme as unknown as typeof theme,
 						data,
 						actions,
 						getHeight: () => tui.terminal.rows,
@@ -152,6 +155,13 @@ export default function (pi: ExtensionAPI) {
 							read: () => readConfigSnapshot(getAgentDir()),
 							save: (baseline, patch) => saveConfigPatch(getAgentDir(), baseline, patch),
 							apply: (saved) => { initI18n(saved.locale); },
+						},
+						// 主题只有一个来源：pi。设置页列出 pi 能加载的主题并切换；持久化（写 pi 自己的
+						// settings.json）和热重载都由 pi 负责，面板不保存任何 theme 设置。
+						themeSource: {
+							list: () => ctx.ui.getAllThemes(),
+							theme: ctx.ui.theme,
+							set: (name) => ctx.ui.setTheme(name),
 						},
 						skipSummaryPrompt: piSettings.skipBranchSummaryPrompt,
 						// 打开时 SESSIONS 光标落到 pi 当前打开的会话上；新会话没有文件 / 还没列出时留在第一行。

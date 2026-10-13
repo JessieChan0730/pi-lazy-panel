@@ -7,6 +7,7 @@
  * 面板对外的两个端口：只读数据（DataSource）和副作用（ActionSource），由入口注入。
  */
 
+import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { ResolvedConfig } from "../config/config.ts";
 import type { ConfigSaveResult, ConfigSnapshot, SettingsPatch } from "../config/config-store.ts";
 
@@ -15,6 +16,30 @@ export interface SettingsSource {
 	read(): Promise<ConfigSnapshot>;
 	save(baseline: ConfigSnapshot, patch: SettingsPatch): Promise<ConfigSaveResult>;
 	apply(config: ResolvedConfig): void | Promise<void>;
+}
+
+/**
+ * pi's themes. The panel owns no theme vocabulary of its own: it uses pi's
+ * theme for every color and this port only lets the settings page list and
+ * switch pi's active theme (which pi persists in its own settings.json).
+ *
+ * `theme` is the live instance, so a switch made in pi's own /settings is
+ * picked up on the next render too. `path` is undefined for themes pi knows
+ * without a file (e.g. an in-memory instance).
+ */
+export interface ThemeSource {
+	/** Every theme pi can load right now, re-scanned on each call. */
+	list(): readonly ThemeRef[];
+	/** The current theme, kept live so the panel follows pi's switches. */
+	readonly theme: Theme;
+	/** Switch pi's active theme (persisted by pi). `error` is a plain message for the footer. */
+	set(name: string): { success: boolean; error?: string };
+}
+
+export interface ThemeRef {
+	name: string;
+	/** Undefined for themes pi knows without a file (an in-memory instance). */
+	path: string | undefined;
 }
 
 import type {

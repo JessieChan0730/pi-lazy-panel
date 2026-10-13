@@ -86,7 +86,7 @@ import { hitTest, listVisibleRows, type MouseTarget, panelGeometry } from "./mou
 import { renderContentPane } from "./panes/content-pane.ts";
 import { clampFirst, renderSessionsPane, scrollOffset, sessionAtLine, sessionFirstLine, sessionLineCount } from "./panes/sessions-pane.ts";
 import { renderTreePane } from "./panes/tree-pane.ts";
-import type { ActionSource, DataSource, SettingsSource } from "./ports.ts";
+import type { ActionSource, DataSource, SettingsSource, ThemeSource } from "./ports.ts";
 import { applySessionFileState, createInitialState, type PanelState } from "./state.ts";
 import { TreeView } from "./tree-view.ts";
 import { ChangelogDialog } from "./widgets/changelog-dialog.ts";
@@ -124,6 +124,8 @@ export interface LazyPanelOptions {
 	configDefaults?: Pick<ResolvedConfig, "locale" | "defaultScope" | "defaultSort">;
 	/** Raw configuration persistence and save-time language application. */
 	settingsSource?: SettingsSource;
+	/** pi's themes: the settings page lists and switches them (the panel has no theme of its own). */
+	themeSource?: ThemeSource;
 	/** Initial footer status, e.g. config warnings. */
 	status?: string;
 	/** Extension version, shown muted at the far right of the footer. */
@@ -280,6 +282,9 @@ export class LazyPanel implements Component, Focusable {
 				keymap: this.keymap,
 			},
 			theme: o.theme,
+			// 主题页读的是 pi 的主题列表（readSettings 每次打开时重新扫描），不是面板配置。
+			// 必须延迟求值：列表是设置页打开之后才读进来的，构造时的快照永远是空的。
+			themes: () => ({ themes: this.state.settings.themes, active: this.state.settings.activeTheme }),
 			onChange: () => this.o.requestRender(),
 			onClose: () => {
 				if (this.state.mode === "settings") this.state.mode = this.baseMode();
@@ -351,6 +356,7 @@ export class LazyPanel implements Component, Focusable {
 			setTreeFilter: (filter) => this.setTreeFilter(filter),
 			refreshSession: (file) => this.refreshSession(file),
 			settingsSource: o.settingsSource,
+			themeSource: o.themeSource,
 			closeSettings: () => this.settingsDialog.close(),
 			refreshSettings: () => this.o.requestRender(),
 			refreshConfig: (config) => {
@@ -1924,8 +1930,16 @@ export class LazyPanel implements Component, Focusable {
 		this.sessionLoadPromise = undefined;
 	}
 
+	/**
+	 * pi calls this on invalidations, including every theme change. The panel
+	 * itself paints from live state, but two things cache rendered output with
+	 * theme colors baked in — the CONTENT layout and the changelog markdown —
+	 * and their cache keys (width, highlight, markdown) do not move when the
+	 * theme does, so they must be dropped here or those stay in the old colors.
+	 */
 	invalidate(): void {
-		// Nothing cached across renders yet.
+		this.contentViewport.invalidate();
+		this.changelogDialog.invalidate();
 	}
 
 	// -----------------------------------------------------------------------

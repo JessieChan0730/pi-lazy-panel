@@ -12,13 +12,15 @@
 
 import type { ResolvedConfig } from "../../config/config.ts";
 import type { ContextUsageInfo, EnterOutcome, PanelMode, SessionInfo, SessionRow, TreeFilter } from "../../types.ts";
-import type { ActionSource, DataSource, SettingsSource } from "../ports.ts";
+import type { ActionSource, DataSource, SettingsSource, ThemeSource } from "../ports.ts";
 import type { PanelState } from "../state.ts";
 import type { InputDialogSpec } from "../widgets/input-dialog.ts";
 import type { SelectDialogSpec } from "../widgets/select-dialog.ts";
 
 export interface SettingsFlowHost extends FlowHost {
 	readonly settingsSource: SettingsSource | undefined;
+	/** pi's themes; undefined = the port was not wired (the picker reports it). */
+	readonly themeSource: ThemeSource | undefined;
 	closeSettings(): void;
 	refreshSettings(): void;
 	refreshConfig(config: ResolvedConfig): void;

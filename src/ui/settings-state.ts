@@ -3,6 +3,7 @@
 import { resolveConfig, type ResolvedConfig } from "../config/config.ts";
 import { applyKeymapPatch, type ConfigSnapshot, type KeymapPatchValue, type SettingsPatch } from "../config/config-store.ts";
 import type { ActionId, KeyChord, KeyScope } from "../types.ts";
+import type { ThemeRef } from "./ports.ts";
 
 export const SETTINGS_CATEGORIES = ["general", "layout", "keybindings", "theme"] as const;
 export type SettingsCategory = (typeof SETTINGS_CATEGORIES)[number];
@@ -26,6 +27,13 @@ export interface SettingsState {
 	generation: number;
 	baseline: ConfigSnapshot | undefined;
 	config: ResolvedConfig | undefined;
+	/**
+	 * Theme page: pi's themes as of the last read, and the name of the active
+	 * one. Read-only data (the picker applies immediately through the port), so
+	 * it lives outside the patch/draft machinery.
+	 */
+	themes: readonly ThemeRef[];
+	activeTheme: string | undefined;
 	patch: SettingsPatch;
 	loading: boolean;
 	saving: boolean;
@@ -36,7 +44,7 @@ export interface SettingsState {
 export function createSettingsState(): SettingsState {
 	return {
 		phase: "closed", category: "general", region: "categories", keyScope: "global", positions: {},
-		button: 0, generation: 0, baseline: undefined, config: undefined, patch: {},
+		button: 0, generation: 0, baseline: undefined, config: undefined, themes: [], activeTheme: undefined, patch: {},
 		loading: false, saving: false, error: undefined, notice: undefined,
 	};
 }

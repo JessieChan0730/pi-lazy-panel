@@ -111,6 +111,11 @@ export class ChangelogDialog {
 		// 保留 cache：同一宽度、同一份 changelog 下次打开直接复用渲染结果。
 	}
 
+	/** Drop the render cache: it holds pi's markdown colors, which a theme change replaces. */
+	invalidate(): void {
+		this.cache = undefined;
+	}
+
 	handleInput(data: string): void {
 		if (!this.isOpen) return;
 		// 加载中只允许取消（Esc / q），滚动等按键先吞掉。
