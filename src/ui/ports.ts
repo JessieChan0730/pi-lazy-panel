@@ -19,19 +19,29 @@ export interface SettingsSource {
 }
 
 /**
- * pi's themes. The panel owns no theme vocabulary of its own: it uses pi's
- * theme for every color and this port only lets the settings page list and
- * switch pi's active theme (which pi persists in its own settings.json).
+ * pi's themes. The panel owns no theme vocabulary of its own: every color comes
+ * from pi's active theme, and this port only lets the settings page list pi's
+ * themes, preview one without saving it, and switch for real (pi then persists
+ * the switch in its own settings.json).
  *
- * `theme` is the live instance, so a switch made in pi's own /settings is
- * picked up on the next render too. `path` is undefined for themes pi knows
- * without a file (e.g. an in-memory instance).
+ * `theme` is the live instance, so a switch made in pi's own /settings — or a
+ * preview — is picked up on the next render too: a preview repaints pi's whole
+ * interface, not just the panel, which is how pi's own settings page previews a
+ * theme. `path` is undefined for themes pi knows without a file (e.g. an
+ * in-memory instance).
  */
 export interface ThemeSource {
 	/** Every theme pi can load right now, re-scanned on each call. */
 	list(): readonly ThemeRef[];
 	/** The current theme, kept live so the panel follows pi's switches. */
 	readonly theme: Theme;
+	/** Name of the theme pi has saved — what `preview(undefined)` goes back to. */
+	savedName(): string | undefined;
+	/**
+	 * Paint pi in `name` without saving it; `undefined` goes back to the saved
+	 * theme. The caller repaints (the port invalidates and requests a render).
+	 */
+	preview(name: string | undefined): void;
 	/** Switch pi's active theme (persisted by pi). `error` is a plain message for the footer. */
 	set(name: string): { success: boolean; error?: string };
 }

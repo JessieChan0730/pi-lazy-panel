@@ -4298,44 +4298,101 @@ test("invalidate drops the theme-colored caches so a repaint uses the new theme"
 });
 
 /**
- * 回归：设置页的主题选择走的是真实按键路径（分类 → 列表 → Enter → 菜单 → Enter），
- * 这条链上踩过两次坑：主题列表在构造时被快照成空、主题行的 id 是空串导致 Enter 什么都不做。
+ * 假的主题端口：`previews` 记下面板要求的预览（含还原时的 undefined），`sets` 记下
+ * 真正的切换。pi 自己保存的主题是 "dark"。
  */
-test("the theme page lists pi's themes and switches on Enter, through the real keys", async () => {
+function fakeThemeSource(): { source: ThemeSource; previews: (string | undefined)[]; sets: string[] } {
+	const previews: (string | undefined)[] = [];
 	const sets: string[] = [];
-	const themeSource: ThemeSource = {
-		list: () => [{ name: "dark", path: "/pi/dark.json" }, { name: "nord", path: "/home/u/.pi/agent/themes/nord.json" }],
-		theme: { name: "dark" } as unknown as Theme,
-		set: (name) => {
-			sets.push(name);
-			return { success: true };
+	return {
+		source: {
+			list: () => [{ name: "dark", path: "/pi/dark.json" }, { name: "nord", path: "/home/u/.pi/agent/themes/nord.json" }],
+			theme: { name: "dark" } as unknown as Theme,
+			savedName: () => sets.at(-1) ?? "dark",
+			preview: (name) => {
+				previews.push(name);
+			},
+			set: (name) => {
+				sets.push(name);
+				return { success: true };
+			},
 		},
+		previews,
+		sets,
 	};
-	const settingsSource: SettingsSource = {
+}
+
+function fakeSettingsSource(): SettingsSource {
+	return {
 		read: async () => ({ raw: {}, fingerprint: "x" }),
 		save: async () => ({ snapshot: { raw: {}, fingerprint: "y" }, warnings: [] }),
 		apply: () => {},
 	};
-	const h = makePanel({ themeSource, settingsSource });
+}
+
+/** Wait until the settings read / save settled. */
+async function settingsSettled(panel: LazyPanel): Promise<void> {
+	for (let i = 0; i < 100 && (panel.state.settings.loading || panel.state.settings.saving); i++) await new Promise((resolve) => setTimeout(resolve, 2));
+	assert.equal(panel.state.settings.loading, false);
+	assert.equal(panel.state.settings.saving, false);
+}
+
+/**
+ * 回归：设置页的主题选择走的是真实按键路径（分类 → 列表 → Enter → 菜单 → Enter），
+ * 这条链上踩过两次坑：主题列表在构造时被快照成空、主题行的 id 是空串导致 Enter 什么都不做。
+ * 主题页只有一行（右边是当前主题），回车弹菜单；选中只"预览"，按 s 保存才真的切 pi。
+ */
+test("the theme page previews on Enter and switches pi only on save", async () => {
+	const themes = fakeThemeSource();
+	const h = makePanel({ themeSource: themes.source, settingsSource: fakeSettingsSource() });
 	h.panel.openSettings();
-	for (let i = 0; i < 100 && h.panel.state.settings.loading; i++) await new Promise((resolve) => setTimeout(resolve, 2));
-	assert.deepEqual(h.panel.state.settings.themes.map((ref) => ref.name), ["dark", "nord"]);
+	await settingsSettled(h.panel);
 	assert.equal(h.panel.state.settings.activeTheme, "dark");
-	// 分类光标走到 Theme，再进列表（l），这时列表画的是 pi 的主题，当前那个带 • 标记。
+	// 分类光标走到 Theme，再进列表（l）：一行设置，右边是 pi 保存的主题。
 	for (const key of ["j", "j", "j", "l"]) h.panel.handleInput(key);
 	assert.equal(h.panel.state.settings.category, "theme");
-	assert.match(h.text(120).join("\n"), /• dark/);
-	// Enter 打开主题菜单（不是"什么都不做"），再 Enter 选中 —— 当前主题是第一项，先往下走到 nord。
+	assert.match(h.text(120).join("\n"), /Theme/);
+	assert.match(h.text(120).join("\n"), /dark/);
+	// Enter 打开主题菜单（不是"什么都不做"），选中 nord —— 只预览，pi 那边一点没动。
 	h.panel.handleInput("\r");
-	const menu = h.text(120).join("\n");
-	assert.match(menu, /Theme/);
+	assert.match(h.text(120).join("\n"), /Theme/);
 	h.panel.handleInput("j");
 	h.panel.handleInput("\r");
-	assert.deepEqual(sets, ["nord"]);
+	assert.deepEqual(themes.previews, ["nord"]);
+	assert.deepEqual(themes.sets, [], "预览不切 pi");
+	assert.equal(h.panel.state.settings.themeDraft, "nord");
+	assert.equal(settingsDirtyCount(h.panel.state.settings), 1);
+	// 行上是预览中的那个，带未保存标记，整页也提示有 1 处未保存。
+	assert.match(h.text(120).join("\n"), /\* Theme/);
+	assert.match(h.text(120).join("\n"), /nord/);
+	assert.match(h.text(120).join("\n"), /1 unsaved/);
+	// s 保存：这一下才真的切 pi，草稿清空、标记消失。
+	h.panel.handleInput("s");
+	await settingsSettled(h.panel);
+	assert.deepEqual(themes.sets, ["nord"]);
+	assert.equal(h.panel.state.settings.themeDraft, undefined);
 	assert.equal(h.panel.state.settings.activeTheme, "nord");
-	assert.equal(h.panel.state.settings.notice, t("settings.themeApplied", { name: "nord" }));
-	// 标记跟着走，且主题没有写进面板草稿。
-	assert.match(h.text(120).join("\n"), /• nord/);
 	assert.equal(settingsDirtyCount(h.panel.state.settings), 0);
+	assert.doesNotMatch(h.text(120).join("\n"), /\* Theme/);
+	h.panel.dispose();
+});
+
+test("leaving the settings page drops an unsaved theme preview", async () => {
+	const themes = fakeThemeSource();
+	const h = makePanel({ themeSource: themes.source, settingsSource: fakeSettingsSource() });
+	h.panel.openSettings();
+	await settingsSettled(h.panel);
+	for (const key of ["j", "j", "j", "l", "\r", "j", "\r"]) h.panel.handleInput(key);
+	assert.equal(h.panel.state.settings.themeDraft, "nord");
+	// q：有未保存的改动 → 选"放弃修改并退出" → 确认。
+	h.panel.handleInput("q");
+	h.panel.handleInput("j");
+	h.panel.handleInput("j");
+	h.panel.handleInput("\r");
+	h.panel.handleInput("y");
+	assert.equal(h.panel.state.settings.phase, "closed");
+	assert.equal(h.panel.state.settings.themeDraft, undefined);
+	assert.deepEqual(themes.previews, ["nord", undefined], "关掉设置页 = 把 pi 的主题还原回去");
+	assert.deepEqual(themes.sets, [], "没按 s，pi 保存的主题没变");
 	h.panel.dispose();
 });

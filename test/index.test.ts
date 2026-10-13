@@ -17,14 +17,16 @@ const theme = {
 
 /**
  * The panel reads its colors from `ctx.ui.theme` (a live getter in pi, so the
- * panel follows pi's theme switches) and lists / switches themes through the
- * same UI context, so every fake context that opens a panel needs these.
+ * panel follows pi's theme switches), remembers that name as the theme pi has
+ * saved, and lists pi's themes through the same UI context — so every fake
+ * context that opens a panel needs these. Switching themes goes through
+ * `ctx.ui.setTheme` and previewing through pi's `initTheme`, so a test that
+ * picks a theme needs a real pi theme to load.
  */
 function fakeUi(overrides: Record<string, unknown> = {}): Record<string, unknown> {
 	return {
 		theme,
 		getAllThemes: () => [{ name: "test", path: "/themes/test.json" }],
-		getTheme: (name: string) => name === "test" ? theme : undefined,
 		setTheme: () => ({ success: true }),
 		...overrides,
 	};

@@ -25,10 +25,13 @@ export async function readSettings(h: SettingsFlowHost): Promise<void> {
 	s.patch = {};
 	s.error = undefined;
 	s.notice = undefined;
-	// 主题是 pi 的状态、不走草稿：这里只把 pi 当前的主题列表和活动主题读进来，
-	// 每次打开设置页都重新扫描一遍（新丢进 ~/.pi/agent/themes 的文件立刻可见）。
+	// 主题是 pi 的状态、不走配置草稿：读它当前的主题列表和已保存的主题，并撤掉上一次
+	// 留下的预览（`r` 重新加载要回到 pi 真正保存的那个主题）。每次打开都重新扫描列表，
+	// 新丢进 pi 主题目录的文件立刻可见。
+	if (s.themeDraft !== undefined) h.themeSource?.preview(undefined);
+	s.themeDraft = undefined;
 	s.themes = h.themeSource?.list() ?? [];
-	s.activeTheme = h.themeSource?.theme.name;
+	s.activeTheme = h.themeSource?.savedName();
 	h.refreshSettings();
 	try {
 		if (!h.settingsSource)
@@ -137,11 +140,10 @@ export function editSetting(h: SettingsFlowHost, key: string): void {
 }
 
 /**
- * Theme picker. Unlike every other page this one does not draft: the panel has
- * no theme of its own (see docs/theme.md), so picking a theme means switching
- * pi's theme, which pi persists in its own settings.json and applies at once
- * (the panel repaints on pi's theme change, and `applyTheme` requests one too).
- * Only listed themes are offered, so `set` failing is a real error worth a notice.
+ * Theme picker. Unlike every other picker this one shows pi's themes rather than
+ * a fixed list, and it previews: picking one repaints pi (and the panel) in it at
+ * once, but pi's saved theme only moves when the user saves (see docs/theme.md).
+ * Picking pi's current theme again clears the draft instead of pinning it.
  */
 function openThemePicker(h: SettingsFlowHost, generation: number): void {
 	const s = h.state.settings;
@@ -159,33 +161,35 @@ function openThemePicker(h: SettingsFlowHost, generation: number): void {
 	h.openMenu("settings", {
 		title: t("settings.category.theme"),
 		items: s.themes.map((ref) => ref.name === active ? t("settings.themeActive", { name: ref.name }) : ref.name),
-		initialIndex: Math.max(0, s.themes.findIndex((ref) => ref.name === active)),
+		initialIndex: Math.max(0, s.themes.findIndex((ref) => ref.name === (s.themeDraft ?? active))),
 		hints: hints(),
 		onSelect: (index) => {
 			h.closeDialogs();
 			if (!current(h, generation)) return;
 			const name = s.themes[index]?.name;
-			if (name === undefined || name === active) {
-				h.refreshSettings();
-				return;
-			}
-			applyTheme(h, generation, name);
+			if (name !== undefined) setThemeDraft(h, name);
 		},
 		onCancel: () => h.closeDialogs(),
 	});
 }
 
-function applyTheme(h: SettingsFlowHost, generation: number, name: string): void {
+/**
+ * Draft a theme choice: the panel (and pi's whole interface) repaint in it right
+ * away, while pi's saved theme only moves in `saveSettings`. `undefined` drops
+ * the preview and goes back to the saved theme. Choosing what is already there
+ * (pi's own theme with no preview up) leaves pi alone.
+ */
+function setThemeDraft(h: SettingsFlowHost, name: string | undefined): void {
 	const s = h.state.settings;
-	const result = h.themeSource?.set(name);
-	if (!current(h, generation)) return;
-	if (!result?.success) {
-		s.error = t("settings.themeApplyFailed", { error: result?.error ?? name });
+	const draft = name === s.activeTheme ? undefined : name;
+	if (draft === s.themeDraft) {
 		h.refreshSettings();
 		return;
 	}
-	s.activeTheme = name;
-	s.notice = t("settings.themeApplied", { name });
+	s.themeDraft = draft;
+	s.error = undefined;
+	s.notice = undefined;
+	h.themeSource?.preview(draft);
 	h.refreshSettings();
 }
 
@@ -255,6 +259,22 @@ function openAddBinding(h: SettingsFlowHost, action: ActionId, chords: string[])
 
 export function restoreSettingsDefaults(h: SettingsFlowHost): void {
 	const s = h.state.settings;
+	if (s.loading || s.saving)
+		return;
+	// 主题页的 d 撤掉预览：回到 pi 已保存的那个主题（它没有"默认值"可还原）。
+	if (s.category === "theme") {
+		if (s.themeDraft === undefined) return;
+		const generation = s.generation;
+		h.openMenu("settings", confirmDialogSpec({
+			title: t("settings.restoreThemeConfirm"),
+			onConfirm: () => {
+				h.closeDialogs();
+				if (current(h, generation)) setThemeDraft(h, undefined);
+			},
+			onCancel: () => h.closeDialogs(),
+		}));
+		return;
+	}
 	if (s.category === "keybindings") {
 		restoreScopeBindings(h);
 		return;
@@ -362,7 +382,21 @@ export async function saveSettings(h: SettingsFlowHost, exit = false): Promise<v
 				return;
 			s.error = t("settings.applyFailed", { error: String(error) });
 		}
-		s.notice = result.warnings.length ? t("settings.savedWarning", { warning: result.warnings.join("; ") }) : t("settings.saved");
+		// 主题不在面板的配置文件里：草稿单独交给 pi（它写自己的 settings.json）。放在 apply
+		// 之后，失败也不盖掉上面的错误；失败时保留草稿，预览和"未保存"标记都还在。
+		let themeNotice: string | undefined;
+		if (s.themeDraft !== undefined) {
+			const name = s.themeDraft;
+			const switched = h.themeSource?.set(name);
+			if (switched?.success) {
+				s.activeTheme = name;
+				s.themeDraft = undefined;
+				themeNotice = t("settings.themeApplied", { name });
+			} else if (!s.error) {
+				s.error = t("settings.themeApplyFailed", { error: switched?.error ?? name });
+			}
+		}
+		s.notice = [result.warnings.length ? t("settings.savedWarning", { warning: result.warnings.join("; ") }) : t("settings.saved"), themeNotice].filter((text): text is string => !!text).join(" · ");
 		// Keep errors/warnings visible rather than losing them on save-and-exit.
 		if (exit && !s.error && !result.warnings.length)
 			h.closeSettings();

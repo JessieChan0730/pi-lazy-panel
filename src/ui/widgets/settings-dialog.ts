@@ -9,7 +9,6 @@ import { t } from "../../i18n/index.ts";
 import type { ActionId, KeyHint } from "../../types.ts";
 import { clamp } from "../../utils/indices.ts";
 import { fit, frame, FRAME_DIVIDER, overlayCentered } from "../frame.ts";
-import type { ThemeRef } from "../ports.ts";
 import { keymapActionDirty, settingsDirtyCount, settingsDraft, SETTINGS_CATEGORIES, type SettingsPosition, type SettingsRegion, type SettingsState } from "../settings-state.ts";
 import { dialogHeader } from "./dialog-header.ts";
 
@@ -26,24 +25,9 @@ interface SettingsItem {
 	dirty?: boolean;
 }
 
-/**
- * The theme page reads pi's themes instead of the panel's config: the panel
- * owns no theme of its own (see docs/theme.md), it just switches pi's.
- */
-interface ThemeSnapshot {
-	themes: readonly ThemeRef[];
-	active: string | undefined;
-}
-
 export interface SettingsDialogOptions {
 	state: SettingsState;
 	config: SettingsSnapshot;
-	/**
-	 * pi's themes, for the theme page. A callback because the list is read when
-	 * the page opens (and again on reload), not when the dialog is constructed.
-	 * Absent = the panel was built without the theme port.
-	 */
-	themes?: () => ThemeSnapshot;
 	theme: Theme;
 	onChange: () => void;
 	onClose: () => void;
@@ -187,26 +171,25 @@ export class SettingsDialog {
 	}
 
 	/**
-	 * One row per theme pi can load; the active one is marked in a gutter so the
-	 * theme name can be shown as-is. The row id is the settings key the flow
-	 * dispatches on (`editSetting` opens the picker for "theme"), so every row
-	 * carries it — the picker, not the row, decides which theme that is.
-	 * `value` stays empty: the list column already shows the name, and the
-	 * detail box's `name: value` line would repeat it. A custom theme's file
-	 * path goes in the description — that is also why 内置 / 自定义 needs no
-	 * tag: 内置主题没有路径。
+	 * The theme page is one row like every other setting: the value is the theme
+	 * the panel currently paints with — pi's saved one, or the preview picked in
+	 * the menu — and Enter opens the picker. The description names the theme's
+	 * file (so the list column needs no 内置 / 自定义 tag) and says how the choice
+	 * takes effect; a preview marks the row as an unsaved draft.
 	 */
 	private themeItems(): SettingsItem[] {
-		const snapshot = this.o.themes?.();
-		if (!snapshot?.themes.length) {
+		const { themes, activeTheme: saved, themeDraft: draft } = this.o.state;
+		if (!themes.length)
 			return [{ id: "theme", label: t("settings.category.theme"), value: "", description: t("settings.themeEmpty") }];
-		}
-		return snapshot.themes.map((ref) => ({
+		const selected = draft ?? saved;
+		const path = themes.find((ref) => ref.name === selected)?.path ?? t("settings.themeBuiltInPath");
+		return [{
 			id: "theme",
-			label: `${ref.name === snapshot.active ? "•" : " "} ${ref.name}`,
-			value: "",
-			description: t(ref.name === snapshot.active ? "settings.themeActiveDescription" : "settings.themeDescription", { path: ref.path ?? t("settings.themeBuiltInPath") }),
-		}));
+			label: t("settings.category.theme"),
+			value: selected ?? "",
+			description: draft === undefined ? t("settings.themeDescription", { path }) : t("settings.themePreviewDescription", { name: draft }),
+			...(draft === undefined ? {} : { dirty: true }),
+		}];
 	}
 
 	private selected(text: string, width: number, selected: boolean, focused: boolean): string {
@@ -254,7 +237,8 @@ export class SettingsDialog {
 			const disabled = state.saving || (i === 0
 				? !state.baseline || !settingsDirtyCount(state) || state.loading
 				: i === 2
-					? state.category === "theme" || !state.baseline || state.loading
+					// 主题页的 d 撤的是预览草稿；没有预览就没什么可还原的。
+					? state.loading || (state.category === "theme" ? state.themeDraft === undefined : !state.baseline)
 					: i === 3 && state.loading);
 			return disabled
 				? theme.fg("dim", fit(`${selected ? "›" : " "} ${text}`, width))
@@ -296,7 +280,7 @@ export class SettingsDialog {
 				lines.push(this.selected(row.label, width, isSelected, state.region === "list"));
 				lines.push(theme.fg("muted", fit(`  ${row.value}`, width)));
 			} else if (!visibleWidth(row.value)) {
-				// 没有值的行（主题列表）：名字占满整行，不给 value 留空位。
+				// 没有值的行（主题页一个主题都没有时）：文字占满整行，不给 value 留空位。
 				lines.push(this.selected(row.label, width, isSelected, state.region === "list"));
 			} else {
 				const valueWidth = Math.min(Math.max(12, visibleWidth(row.value)), Math.floor(width / 2));
@@ -320,11 +304,10 @@ export class SettingsDialog {
 		const item = items[cursor];
 		if (!item) return [];
 		const inner = width - 2;
-		/** Every theme row shares one settings key; showing it per row would be noise. */
-		const idNoise = t(`settings.category.${state.category}`);
+		/** The theme row's id is its category name; showing it there would be noise. */
+		const idNoise = state.category;
 		const detail = [
 			item.id === idNoise ? "" : item.id,
-			// 没有 value 的行（主题）不画 `名字: ` 这半行。
 			item.value ? `${item.label}: ${item.value}` : "",
 			item.description,
 		]

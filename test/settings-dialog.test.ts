@@ -8,24 +8,24 @@ import { createSettingsState, SETTINGS_CATEGORIES, setSettingsDraft } from "../s
 import { SettingsDialog } from "../src/ui/widgets/settings-dialog.ts";
 initI18n("en");
 const theme = { fg: (_c: string, s: string) => s, bg: (_c: string, s: string) => s, bold: (s: string) => s } as unknown as Theme;
-/** pi's themes as the entry point passes them to the theme page (see docs/theme.md). */
-const themes = {
-	themes: [
-		{ name: "dark", path: "/pi/theme/dark.json" },
-		{ name: "light", path: "/pi/theme/light.json" },
-		{ name: "nord", path: "/home/user/.pi/agent/themes/nord.json" },
-	],
-	active: "nord",
-};
-function makeDialog(config = DEFAULT_CONFIG, themeSnapshot: typeof themes | undefined = themes) {
+/** pi's themes and its saved one, as the panel's state holds them after a read (see docs/theme.md). */
+const themes = [
+	{ name: "dark", path: "/pi/theme/dark.json" },
+	{ name: "light", path: "/pi/theme/light.json" },
+	{ name: "nord", path: "/home/user/.pi/agent/themes/nord.json" },
+];
+function makeDialog(config = DEFAULT_CONFIG, withThemes = true) {
 	const state = createSettingsState();
+	if (withThemes) {
+		state.themes = themes;
+		state.activeTheme = "nord";
+	}
 	let changes = 0;
 	let closes = 0;
 	const edits: string[] = [];
 	const buttons: string[] = [];
 	const dialog = new SettingsDialog({
 		state, config, theme,
-		...(themeSnapshot ? { themes: () => themeSnapshot } : {}),
 		onChange: () => { changes++; },
 		onClose: () => {
 			assert.equal(state.phase, "closed");
@@ -54,15 +54,17 @@ test("settings values and local readonly notes replace global preview notice", (
 	assert.match(h.text(60), /2\/4 Layout/);
 	assert.doesNotMatch(h.text(60), /Layout · Read-only/);
 	h.state.category = "theme";
-	// 主题页可编辑（不再只读）：列出 pi 的主题、标记当前那个、给出它的文件路径。
+	// 主题页和其他设置一样只有一行：右边是 pi 已保存的主题（值来自 pi 的主题列表），
+	// 说明框给出它的文件路径；可编辑（不再只读），回车是弹菜单选主题。
 	assert.doesNotMatch(h.text(60), /Read-only/);
 	assert.match(h.text(60), /4\/4 Theme/);
-	assert.match(h.text(), /• nord/);
-	assert.match(h.text(), /dark/);
-	// 当前主题的说明框给出路径（改那个文件 pi 会即时重载）。
+	assert.match(h.text(), /Theme {2,}nord/);
 	h.state.region = "list";
-	h.state.positions.theme = { cursor: 2, scroll: 0, detailScroll: 0 };
 	assert.match(h.text(), /\/home\/user\/\.pi\/agent\/themes\/nord\.json/);
+	// 预览中的草稿：行上换成预览的主题并带 * 标记，说明文字也跟着换。
+	h.state.themeDraft = "light";
+	assert.match(h.text(), /\* Theme {2,}light/);
+	assert.match(h.text(), /Previewing light/);
 	assert.deepEqual(config, before);
 	assert.match(makeDialog().text(), /Follow system/);
 });
@@ -107,11 +109,17 @@ test("unavailable buttons are dimmed without an appended dash", () => {
 	});
 	state.baseline = { raw: {}, fingerprint: null };
 	const buttonLine = (): string => dialog.render(108, 28).find((l) => l.includes("[ s Save ]"))!;
+	const restoreLine = (): string => dialog.render(108, 28).find((l) => l.includes("[ d Restore defaults ]"))!;
 	const disabled = buttonLine();
 	assert.match(disabled, /\x1b\[2m +\[ s Save \]/);
 	assert.doesNotMatch(disabled, /—/);
 	setSettingsDraft(state, "locale", "zh");
 	assert.doesNotMatch(buttonLine(), /\x1b\[2m +\[ s Save \]/);
+	// 主题页的 d 撤的是预览草稿：没有预览就是灰的，有了才能按。
+	state.category = "theme";
+	assert.match(restoreLine(), /\x1b\[2m +\[ d Restore defaults \]/);
+	state.themeDraft = "nord";
+	assert.doesNotMatch(restoreLine(), /\x1b\[2m +\[ d/);
 });
 
 test("instant open/close marks closed before callback, is idempotent and has no timers", (ctx) => {
@@ -227,18 +235,24 @@ test("long values have scrollable detail without changing selected action", () =
 	assert.equal(h.state.positions.global?.detailScroll, 0);
 });
 test("complete instant overlay and all locales stay within wide/narrow viewport", () => {
+	// 主题页带上一个预览草稿（`*` 标记 + 预览说明），和没有主题（空行）两种情况都要画得下。
 	const h = makeDialog();
 	h.dialog.open();
+	h.state.themeDraft = "light";
+	const bare = makeDialog(DEFAULT_CONFIG, false);
+	bare.dialog.open();
 	try {
 		for (const language of ["en", "zh"] as const) {
 			initI18n(language);
-			for (const category of SETTINGS_CATEGORIES) {
-				h.state.category = category;
-				for (const width of [0, 1, 3, 12, 20, 40, 75, 76, 100, 140]) {
-					for (const height of [0, 1, 3, 6, 8, 15, 28, 45]) {
-						const out = h.dialog.overlay(Array.from({ length: height }, () => "x".repeat(width)), width);
-						assert.equal(out.length, height);
-						assert.ok(out.every((line) => visibleWidth(line) === width), `${language}/${category} ${width}x${height}`);
+			for (const view of [h, bare]) {
+				for (const category of SETTINGS_CATEGORIES) {
+					view.state.category = category;
+					for (const width of [0, 1, 3, 12, 20, 40, 75, 76, 100, 140]) {
+						for (const height of [0, 1, 3, 6, 8, 15, 28, 45]) {
+							const out = view.dialog.overlay(Array.from({ length: height }, () => "x".repeat(width)), width);
+							assert.equal(out.length, height);
+							assert.ok(out.every((line) => visibleWidth(line) === width), `${language}/${category} ${width}x${height}`);
+						}
 					}
 				}
 			}

@@ -25,6 +25,7 @@
     "restoreConfirm": "Restore General defaults in the draft?",
     "restoreLayoutConfirm": "Restore Layout defaults in the draft?",
     "restoreScopeConfirm": "Restore default key bindings for {{scope}} in the draft?",
+    "restoreThemeConfirm": "Discard the theme preview?",
     "reloadConfirm": "Discard the draft and reload settings?",
     "categories": "Categories",
     "category": {
@@ -62,8 +63,8 @@
     "noBindings": "No bindings in this scope",
     "themeUnavailable": "Cannot read pi's themes",
     "themeEmpty": "No themes found. Add a JSON theme to pi's themes directory and reload.",
-    "themeDescription": "The panel uses pi's active theme. Selecting a theme switches pi to it at once and saves it in pi's settings, so pi's own interface changes too.",
-    "themeActiveDescription": "Currently active. Defined by {{path}} — editing that file updates the panel live.",
+    "themeDescription": "The panel paints with pi's active theme, from {{path}}. Enter picks another one; it is applied to pi only after you save with s.",
+    "themePreviewDescription": "Previewing {{name}}. Press s to make it pi's theme, Esc to keep the current one.",
     "themeBuiltInPath": "pi's built-in themes",
     "themeActive": "{{name}} (active)",
     "themeApplied": "Theme: {{name}}",

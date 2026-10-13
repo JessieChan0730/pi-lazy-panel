@@ -124,7 +124,7 @@ export interface LazyPanelOptions {
 	configDefaults?: Pick<ResolvedConfig, "locale" | "defaultScope" | "defaultSort">;
 	/** Raw configuration persistence and save-time language application. */
 	settingsSource?: SettingsSource;
-	/** pi's themes: the settings page lists and switches them (the panel has no theme of its own). */
+	/** pi's themes: the settings page lists them, previews a pick and saves it (the panel has no theme of its own). */
 	themeSource?: ThemeSource;
 	/** Initial footer status, e.g. config warnings. */
 	status?: string;
@@ -282,9 +282,6 @@ export class LazyPanel implements Component, Focusable {
 				keymap: this.keymap,
 			},
 			theme: o.theme,
-			// 主题页读的是 pi 的主题列表（readSettings 每次打开时重新扫描），不是面板配置。
-			// 必须延迟求值：列表是设置页打开之后才读进来的，构造时的快照永远是空的。
-			themes: () => ({ themes: this.state.settings.themes, active: this.state.settings.activeTheme }),
 			onChange: () => this.o.requestRender(),
 			onClose: () => {
 				if (this.state.mode === "settings") this.state.mode = this.baseMode();
@@ -357,7 +354,11 @@ export class LazyPanel implements Component, Focusable {
 			refreshSession: (file) => this.refreshSession(file),
 			settingsSource: o.settingsSource,
 			themeSource: o.themeSource,
-			closeSettings: () => this.settingsDialog.close(),
+			// 关掉设置页 = 放弃未保存的主题预览：让 pi 回到它自己保存的那个主题上。
+			closeSettings: () => {
+				this.dropThemePreview();
+				this.settingsDialog.close();
+			},
 			refreshSettings: () => this.o.requestRender(),
 			refreshConfig: (config) => {
 				// 重建键位让编辑过的快捷键立即生效（未完成的多键序列被丢弃）。
@@ -1908,6 +1909,7 @@ export class LazyPanel implements Component, Focusable {
 	private close(): void {
 		if (this.disposed) return;
 		this.disposed = true;
+		this.dropThemePreview();
 		this.settingsDialog.dispose();
 		this.keys.clear();
 		this.clearSessionLoad();
@@ -1916,10 +1918,21 @@ export class LazyPanel implements Component, Focusable {
 
 	dispose(): void {
 		this.disposed = true;
+		this.dropThemePreview();
 		this.settingsDialog.dispose();
 		this.stopChangelogSpinner();
 		this.keys.clear();
 		this.clearSessionLoad();
+	}
+
+	/**
+	 * 面板带着一个没保存的主题预览被关掉（设置页退出、面板销毁）时，把 pi 的主题还原
+	 * 回它保存的那个 —— 预览只是看看，没按 s 就不该留下痕迹。
+	 */
+	private dropThemePreview(): void {
+		if (this.state.settings.themeDraft === undefined) return;
+		this.state.settings.themeDraft = undefined;
+		this.o.themeSource?.preview(undefined);
 	}
 
 	private clearSessionLoad(): void {

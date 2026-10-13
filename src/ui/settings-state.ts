@@ -28,12 +28,14 @@ export interface SettingsState {
 	baseline: ConfigSnapshot | undefined;
 	config: ResolvedConfig | undefined;
 	/**
-	 * Theme page: pi's themes as of the last read, and the name of the active
-	 * one. Read-only data (the picker applies immediately through the port), so
-	 * it lives outside the patch/draft machinery.
+	 * Theme page: pi's themes as of the last read, the name of the theme pi has
+	 * saved, and the preview picked in the picker but not saved yet. None of it
+	 * goes into the config patch — pi owns the theme (see docs/theme.md) — but the
+	 * preview counts as one unsaved change and is dropped when the page closes.
 	 */
 	themes: readonly ThemeRef[];
 	activeTheme: string | undefined;
+	themeDraft: string | undefined;
 	patch: SettingsPatch;
 	loading: boolean;
 	saving: boolean;
@@ -44,13 +46,14 @@ export interface SettingsState {
 export function createSettingsState(): SettingsState {
 	return {
 		phase: "closed", category: "general", region: "categories", keyScope: "global", positions: {},
-		button: 0, generation: 0, baseline: undefined, config: undefined, themes: [], activeTheme: undefined, patch: {},
+		button: 0, generation: 0, baseline: undefined, config: undefined, themes: [], activeTheme: undefined, themeDraft: undefined, patch: {},
 		loading: false, saving: false, error: undefined, notice: undefined,
 	};
 }
 
 export function settingsDirtyCount(state: SettingsState): number {
-	let count = 0;
+	// 主题预览也是一处未保存的改动（保存时才写进 pi），所以计入数量、退出时要挽留。
+	let count = state.themeDraft === undefined ? 0 : 1;
 	for (const [key, value] of Object.entries(state.patch)) {
 		if (key === "keymap") for (const actions of Object.values(value as NonNullable<SettingsPatch["keymap"]>)) count += Object.keys(actions!).length;
 		else count++;

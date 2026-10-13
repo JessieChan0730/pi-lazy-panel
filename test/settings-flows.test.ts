@@ -13,17 +13,22 @@ import type { InputDialogSpec } from "../src/ui/widgets/input-dialog.ts";
 import type { SelectDialogSpec } from "../src/ui/widgets/select-dialog.ts";
 initI18n("en");
 /**
- * A fake pi theme port: `themes()` is the list `readSettings` scans, `active`
- * is what the panel would be painted with, and `set` records switches (or
- * fails, to cover the notice path).
+ * A fake pi theme port: `list` is the list `readSettings` scans, `active` is the
+ * theme pi has saved, `preview` records the (non-persisting) previews and `set`
+ * records the real switches (or fails, to cover the error path).
  */
 function themeFixture(list = [{ name: "dark", path: "/pi/theme/dark.json" }, { name: "nord", path: "/home/u/.pi/agent/themes/nord.json" }], fail = false) {
 	let active = "dark";
 	const sets: string[] = [];
+	const previews: (string | undefined)[] = [];
 	return {
 		source: {
 			list: () => list,
 			theme: { name: active } as unknown as Theme,
+			savedName: () => active,
+			preview: (name: string | undefined) => {
+				previews.push(name);
+			},
 			set: (name: string) => {
 				if (fail) return { success: false, error: "invalid theme" };
 				sets.push(name);
@@ -33,6 +38,7 @@ function themeFixture(list = [{ name: "dark", path: "/pi/theme/dark.json" }, { n
 		},
 		list,
 		sets: () => sets,
+		previews: () => previews,
 		active: () => active,
 	};
 }
@@ -392,32 +398,62 @@ test("openBindingEditor Esc on the add prompt returns to the action menu", async
 	assert.ok(h.menu()); // back on the action menu
 	assert.equal(settingsDirtyCount(h.state), 0);
 });
-test("theme picker lists pi's themes, marks the active one and switches immediately", async () => {
+test("theme picker lists pi's themes, previews the pick and only saves on s", async () => {
+	const h = fixture();
+	await readSettings(h.host);
+	assert.equal(h.state.activeTheme, "dark");
+	h.state.category = "theme";
+	editSetting(h.host, "theme");
+	// pi 已保存的那个带标记、光标一开始就落在它上面。
+	assert.deepEqual(h.menu()?.items, ["dark (active)", "nord"]);
+	assert.equal(h.menu()?.initialIndex, 0);
+	// 选当前主题：什么都不做（不预览、不写、不报）。
+	h.menu()!.onSelect(0);
+	assert.deepEqual(h.themes.previews(), []);
+	assert.equal(h.state.themeDraft, undefined);
+	// 换主题：先预览（pi 那边一点没动），算一处未保存的改动。
+	editSetting(h.host, "theme");
+	h.menu()!.onSelect(1);
+	assert.deepEqual(h.themes.previews(), ["nord"]);
+	assert.deepEqual(h.themes.sets(), []);
+	assert.equal(h.state.themeDraft, "nord");
+	assert.equal(h.state.activeTheme, "dark");
+	assert.equal(h.state.notice, undefined);
+	assert.equal(settingsDirtyCount(h.state), 1);
+	// 再打开：光标落在预览中的那个上面（pi 已保存的仍然是 dark）。
+	editSetting(h.host, "theme");
+	assert.equal(h.menu()?.initialIndex, 1);
+	assert.deepEqual(h.menu()?.items, ["dark (active)", "nord"]);
+	h.menu()!.onCancel();
+	assert.equal(h.state.themeDraft, "nord");
+	assert.equal((h.state.patch as Record<string, unknown>).theme, undefined, "主题不写进面板草稿");
+	// 保存：这一下才真的切 pi（pi 负责持久化），草稿清空。
+	await saveSettings(h.host);
+	assert.deepEqual(h.themes.sets(), ["nord"]);
+	assert.equal(h.themes.active(), "nord");
+	assert.equal(h.state.activeTheme, "nord");
+	assert.equal(h.state.themeDraft, undefined);
+	assert.equal(settingsDirtyCount(h.state), 0);
+	assert.equal(h.state.notice, "Settings saved · Theme: nord");
+});
+test("d on the theme page confirms and drops the preview", async () => {
 	const h = fixture();
 	await readSettings(h.host);
 	h.state.category = "theme";
 	editSetting(h.host, "theme");
-	// 当前主题带标记、且光标一开始就落在它上面（Enter 再按一次是空操作）。
-	assert.deepEqual(h.menu()?.items, ["dark (active)", "nord"]);
-	assert.equal(h.menu()?.initialIndex, 0);
-	// 选当前主题：什么都不做（不写、不报）。
-	h.menu()!.onSelect(0);
-	assert.deepEqual(h.themes.sets(), []);
-	assert.equal(h.state.notice, undefined);
-	// 换主题：立刻应用（pi 负责持久化），面板记下新的活动主题并提示。
-	editSetting(h.host, "theme");
 	h.menu()!.onSelect(1);
-	assert.deepEqual(h.themes.sets(), ["nord"]);
-	assert.equal(h.themes.active(), "nord");
-	assert.equal(h.state.activeTheme, "nord");
-	assert.equal(h.state.notice, "Theme: nord");
-	assert.equal((h.state.patch as Record<string, unknown>).theme, undefined, "主题不写进面板草稿");
-	assert.equal(h.writes(), 0);
-	// 再打开：列表里的标记跟着走。
-	editSetting(h.host, "theme");
-	assert.deepEqual(h.menu()?.items, ["dark", "nord (active)"]);
+	assert.equal(h.state.themeDraft, "nord");
+	restoreSettingsDefaults(h.host);
 	h.menu()!.onCancel();
-	assert.equal(h.state.notice, "Theme: nord");
+	assert.equal(h.state.themeDraft, "nord");
+	restoreSettingsDefaults(h.host);
+	h.menu()!.onSelect(0);
+	assert.equal(h.state.themeDraft, undefined);
+	assert.deepEqual(h.themes.previews(), ["nord", undefined]);
+	assert.equal(settingsDirtyCount(h.state), 0);
+	// 没有预览时 d 什么都不做（按钮本身也是灰的）。
+	restoreSettingsDefaults(h.host);
+	assert.equal(h.menu(), undefined);
 });
 test("theme picker reports a missing port and an empty theme list without opening a menu", async () => {
 	// 入口没注入 themeSource（例如别处复用面板）时只提示，不崩。
@@ -439,14 +475,30 @@ test("theme picker reports a missing port and an empty theme list without openin
 	assert.match(empty.state.error ?? "", /theme/i);
 	assert.equal(empty.menu(), undefined);
 });
-test("a failed theme switch keeps the previous active theme", async () => {
+test("a failed theme switch keeps the preview as an unsaved draft", async () => {
 	const h = fixture();
 	(h.host as unknown as { themeSource: unknown }).themeSource = themeFixture(undefined, true).source;
 	await readSettings(h.host);
 	h.state.category = "theme";
 	editSetting(h.host, "theme");
 	h.menu()!.onSelect(1);
+	assert.equal(h.state.themeDraft, "nord");
+	await saveSettings(h.host, true);
 	assert.equal(h.state.activeTheme, "dark");
-	assert.equal(h.state.notice, undefined);
+	assert.equal(h.state.themeDraft, "nord", "失败保留草稿，可以重试");
 	assert.match(h.state.error ?? "", /invalid theme/);
+	assert.equal(h.state.phase, "open", "有错误就不退出");
+});
+test("reloading settings drops the preview back to pi's saved theme", async () => {
+	const h = fixture();
+	await readSettings(h.host);
+	h.state.category = "theme";
+	editSetting(h.host, "theme");
+	h.menu()!.onSelect(1);
+	reloadSettings(h.host);
+	h.menu()!.onSelect(0);
+	await Promise.resolve();
+	assert.deepEqual(h.themes.previews(), ["nord", undefined]);
+	assert.equal(h.state.themeDraft, undefined);
+	assert.equal(h.state.activeTheme, "dark");
 });

@@ -25,6 +25,7 @@
     "restoreConfirm": "在草稿中恢复常规默认设置？",
     "restoreLayoutConfirm": "在草稿中恢复布局默认设置？",
     "restoreScopeConfirm": "在草稿中恢复 {{scope}} 的默认快捷键？",
+    "restoreThemeConfirm": "放弃主题预览？",
     "reloadConfirm": "放弃草稿并重新读取设置？",
     "categories": "分类",
     "category": {
@@ -62,8 +63,8 @@
     "noBindings": "此作用域没有绑定",
     "themeUnavailable": "读不到 pi 的主题",
     "themeEmpty": "没有找到主题。把主题 JSON 放进 pi 的主题目录后重新加载。",
-    "themeDescription": "面板用的一直是 pi 的活动主题。选中一个主题会立刻把 pi 切过去并写进 pi 的设置，pi 自己的界面也会一起变。",
-    "themeActiveDescription": "当前生效。来自 {{path}}，改这个文件面板会即时更新。",
+    "themeDescription": "面板用的一直是 pi 的活动主题，来自 {{path}}。回车挑一个别的：只有按 s 保存后才会真的切到 pi。",
+    "themePreviewDescription": "正在预览 {{name}}。按 s 才真的切到 pi，Esc 保留当前主题。",
     "themeBuiltInPath": "pi 内置主题",
     "themeActive": "{{name}}（当前）",
     "themeApplied": "主题：{{name}}",
