@@ -314,6 +314,9 @@ export class SettingsDialog {
 		const capacity = Math.max(1, Math.floor(height / rowHeight));
 		pos.scroll = clamp(pos.scroll, Math.max(0, pos.cursor - capacity + 1), pos.cursor);
 		pos.scroll = Math.min(pos.scroll, Math.max(0, items.length - capacity));
+		// 值列整页共用一列宽度，值在列里左对齐：逐行按自己的值取宽会让每行的值起点都不一样
+		// （英文的值普遍比中文长，看起来就左右飘），共用一列后所有值对齐成一列，中文那边宽度不变。
+		const valueWidth = Math.min(Math.max(12, ...items.map((item) => visibleWidth(item.value))), Math.floor(width / 2));
 		const lines: string[] = [];
 		for (let i = pos.scroll; i < Math.min(items.length, pos.scroll + capacity); i++) {
 			const row = items[i]!;
@@ -325,7 +328,6 @@ export class SettingsDialog {
 				// 没有值的行（主题页一个主题都没有时）：文字占满整行，不给 value 留空位。
 				lines.push(this.selected(row.label, width, isSelected, state.region === "list"));
 			} else {
-				const valueWidth = Math.min(Math.max(12, visibleWidth(row.value)), Math.floor(width / 2));
 				lines.push(this.selected(`${fit(row.label, Math.max(0, width - valueWidth - 4))}  ${fit(row.value, valueWidth)}`, width, isSelected, state.region === "list"));
 			}
 		}

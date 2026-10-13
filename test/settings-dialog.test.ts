@@ -3,7 +3,7 @@ import { test } from "node:test";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { DEFAULT_CONFIG, resolveConfig } from "../src/config/config.ts";
-import { initI18n } from "../src/i18n/index.ts";
+import { initI18n, t } from "../src/i18n/index.ts";
 import { createSettingsState, SETTINGS_CATEGORIES, setSettingsDraft } from "../src/ui/settings-state.ts";
 import { SettingsDialog } from "../src/ui/widgets/settings-dialog.ts";
 initI18n("en");
@@ -67,6 +67,27 @@ test("settings values and local readonly notes replace global preview notice", (
 	assert.match(h.text(), /Switching to light failed/);
 	assert.deepEqual(config, before);
 	assert.match(makeDialog().text(), /Follow system/);
+});
+test("every row's value starts at the same column so values read as one left-aligned column", () => {
+	// 逐行按自己的值取宽时，英文的值都比 12 列下限长，起点各不相同（看起来像在右边飘）；
+	// 整页共用一列宽度后，中英两种语言的值都左对齐在同一列上。
+	try {
+		for (const language of ["en", "zh"] as const) {
+			initI18n(language);
+			const lines = makeDialog().text().split("\n");
+			const start = (label: string): number => {
+				const line = lines.find((l) => l.includes(label))!;
+				const at = line.indexOf(label) + label.length;
+				const after = line.slice(at);
+				const value = after.trim();
+				return visibleWidth(line.slice(0, at)) + visibleWidth(after.slice(0, after.indexOf(value)));
+			};
+			const columns = ["locale", "defaultScope", "defaultSort"].map((id) => start(t(`settings.${id}`)));
+			assert.equal(new Set(columns).size, 1, `${language} value columns: ${columns.join(" / ")}`);
+		}
+	} finally {
+		initI18n("en");
+	}
 });
 test("layout category shows the ratio value and the width description in the detail box", () => {
 	const narrow = makeDialog(resolveConfig({ leftColumnRatio: 0.2 }));
