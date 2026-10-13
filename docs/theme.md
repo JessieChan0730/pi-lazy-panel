@@ -23,12 +23,12 @@ ctx.ui.theme（live proxy，每次取属性都现查当前主题实例）
   `docs/themes.md` 写一个 JSON（全部 53 个必填 token + 可选 `vars`）丢进
   `~/.pi/agent/themes/`，设置页每次打开都重新扫描，新主题立刻出现在菜单里。
   改当前主题的文件，pi 会热重载，面板即时变色。
-- **切换**：设置页 THEME 分类只有一行（右边是当前主题），Enter 弹出主题菜单。选中先**预览**：
-  `initTheme(name)` 换掉 pi 的全局主题但不写设置——pi 自己的设置页预览主题用的是同一个套路
-  ——所以面板和 pi 的界面一起变色，pi 保存的主题没动。
-- **保存**：预览只记在设置页的草稿里（`SettingsState.themeDraft`，算一处未保存改动）。
-  按 `s` 保存才走 `ctx.ui.setTheme(name)`，由 pi 写它自己的 `settings.json` 并广播变化；
-  按 `d`、`r` 重新加载、关掉设置页则用 `preview(undefined)` 回到 pi 保存的那个主题。
+- **切换**：设置页 THEME 分类只有一行（右边是当前主题），Enter 弹出主题菜单。选中即切：
+  直接走 `ctx.ui.setTheme(name)`，pi 立刻换主题（面板和 pi 的界面一起变色），并由 pi 写它自己的
+  `settings.json`——设置页对主题没有草稿，也不需要再按 `s` 保存（其余三个分类同样是选中即落盘）。
+- **失败**：pi 拒绝这个主题时，失败的名字留在设置页（`SettingsState.themeDraft`，行上带 `*`
+  标记，算一处没生效的改动，退出时照样会被挽留），错误显示在设置框里，按 `s` 重试；
+  按 `d` 或 `r` 重新加载则放弃这次切换。
   面板的 `~/.pi/agent/lazy-panel.json` **不保存 theme**（写了会在 footer 得到一条警告）。
 - 主题名后的路径来自 `ctx.ui.getAllThemes()`：内置主题是 pi 安装目录里的文件，自定义主题
   是用户目录里的文件，设置页把它显示在说明框里。
