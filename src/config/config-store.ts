@@ -38,7 +38,7 @@ export interface ConfigSaveResult {
 
 /** File-operation seam for deterministic failure tests; normal callers omit it. */
 export interface ConfigStoreOptions {
-	io?: Partial<Pick<typeof fs, "open" | "rename" | "unlink" | "rmdir" | "mkdir">>;
+	io?: Partial<Pick<typeof fs, "open" | "realpath" | "readlink" | "rename" | "stat" | "unlink" | "rmdir" | "mkdir">>;
 	lockTimeoutMs?: number;
 }
 
@@ -48,6 +48,9 @@ const FIELD_VALUES = {
 	defaultSort: ["recent", "created", "title", "threaded"],
 } satisfies Record<Exclude<keyof SettingsPatch, "leftColumnRatio" | "keymap">, string[]>;
 
+/** How far `resolveTarget` follows a chain of links, mirroring the kernel's ELOOP cap. */
+const MAX_LINK_DEPTH = 32;
+
 /** Unlike loadConfig, this never converts a broken file to writable defaults. */
 export async function readSnapshot(file: string): Promise<ConfigSnapshot> {
 	let bytes: Buffer;
@@ -56,7 +59,10 @@ export async function readSnapshot(file: string): Promise<ConfigSnapshot> {
 	} catch (error) {
 		if (hasCode(error, "ENOENT")) {
 			try {
-				await fs.lstat(file);
+				// 悬空链接（目标还没建）和"没有配置文件"是同一种状态：返回空快照，
+				// 面板就能照常编辑，保存时再写到链接指向的位置（见 resolveTarget）。
+				const stats = await fs.lstat(file);
+				if (stats.isSymbolicLink()) return { raw: {}, fingerprint: null };
 			} catch (statError) {
 				if (hasCode(statError, "ENOENT")) return { raw: {}, fingerprint: null };
 				throw new Error(`Cannot inspect config ${file}`, { cause: statError });
@@ -81,8 +87,11 @@ export async function savePatch(file: string, baseline: ConfigSnapshot, patch: S
 	const base = structuredClone(baseline);
 	const changes = { ...patch };
 	validatePatch(changes);
-	file = resolve(file);
 	const io = { ...fs, ...options.io };
+	// 写的是链接指向的真身（dotfiles 里那份），不是链接本身；锁也跟着真身走，
+	// 两个指向同一个文件的链接才会共用同一把锁。
+	file = await resolveTarget(io, resolve(file));
+	const mode = await existingMode(io, file);
 	const lock = `${file}.lock`;
 	await io.mkdir(dirname(file), { recursive: true });
 	const deadline = performance.now() + (options.lockTimeoutMs ?? 5000);
@@ -138,6 +147,10 @@ export async function savePatch(file: string, baseline: ConfigSnapshot, patch: S
 			const handle = await io.open(temp, "wx", 0o600);
 			try {
 				try {
+					// 沿用原文件的权限位：dotfiles 仓库里那份不该因为面板保存就从 644 变成 600
+					// （临时文件一律 0o600 建，否则降级不了权限）；文件不存在时保持 0o600。
+					// 这一步只动元数据，失败（不支持的文件系统等）不该让整次保存失败。
+					if (mode !== undefined) await handle.chmod(mode).catch(() => undefined);
 					await handle.writeFile(text, "utf8");
 					await handle.sync();
 				} finally {
@@ -175,6 +188,48 @@ export async function savePatch(file: string, baseline: ConfigSnapshot, patch: S
 		return { snapshot, warnings: [`Cannot release config lock ${lock}; close all pi processes before removing this lock directory`] };
 	}
 	return { snapshot, warnings: [] };
+}
+
+/**
+ * The path to actually write.
+ *
+ * A dotfiles setup links `~/.pi/agent/lazy-panel.json` into a repository, and
+ * `rename` swaps the *link* for a plain file — the repository's copy would then
+ * silently stop being the one pi reads (reading follows the link, so nothing
+ * looks wrong, and the repo shows no change). Follow the link and replace its
+ * target instead: the repository's file is updated and the link keeps working.
+ *
+ * A link whose target does not exist yet cannot be resolved by `realpath`, so the
+ * chain is walked by hand — the first save then creates the file the link points
+ * at (its directory too) instead of replacing the link. Anything else (a plain
+ * missing path, an unreadable directory, a link cycle) is written as given.
+ *
+ * `MAX_LINK_DEPTH` mirrors the kernel's own ELOOP cap, so a cycle stops here
+ * rather than spinning.
+ */
+async function resolveTarget(io: typeof fs, file: string): Promise<string> {
+	let target = file;
+	for (let depth = 0; depth < MAX_LINK_DEPTH; depth++) {
+		try {
+			return await io.realpath(target);
+		} catch {
+			try {
+				target = resolve(dirname(target), await io.readlink(target));
+			} catch {
+				return target;
+			}
+		}
+	}
+	return target;
+}
+
+/** Permission bits of the file already on disk, or undefined when there is none (first save). */
+async function existingMode(io: typeof fs, file: string): Promise<number | undefined> {
+	try {
+		return (await io.stat(file)).mode & 0o777;
+	} catch {
+		return undefined;
+	}
 }
 
 function validatePatch(patch: SettingsPatch): void {

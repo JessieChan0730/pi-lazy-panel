@@ -40,6 +40,71 @@ test("no-op preserves exact bytes and missing file stays missing", async (t) => 
 	assert.equal(await fs.readFile(file, "utf8"), text);
 });
 
+test("a symlinked config is written through the link: the target changes, the link stays", async (t) => {
+	const root = await fs.mkdtemp(join(tmpdir(), "config-store-link-"));
+	t.after(() => fs.rm(root, { recursive: true, force: true }));
+	// dotfiles 布局：~/.pi/agent/lazy-panel.json 链到仓库里那份。
+	const target = join(root, "dotfiles", "lazy-panel.json");
+	const link = join(root, "agent", "lazy-panel.json");
+	await fs.mkdir(join(root, "dotfiles"));
+	await fs.mkdir(join(root, "agent"));
+	await fs.writeFile(target, '{ "defaultSort": "recent" }\n');
+	await fs.chmod(target, 0o640);
+	await fs.symlink(target, link);
+	await savePatch(link, await readSnapshot(link), { defaultSort: "title" });
+	// 链接没被换掉：仓库里那份仍然是 pi 读的那个文件。
+	assert.equal((await fs.lstat(link)).isSymbolicLink(), true);
+	assert.equal(await fs.readlink(link), target);
+	assert.deepEqual(JSON.parse(await fs.readFile(target, "utf8")), { defaultSort: "title" });
+	// 权限位沿用原文件，仓库里不该因为面板保存多出一条 mode 变更。
+	assert.equal((await fs.stat(target)).mode & 0o777, 0o640);
+	// 临时文件和锁都落在真身这一侧，两边都不留残留。
+	assert.deepEqual(await fs.readdir(join(root, "agent")), ["lazy-panel.json"]);
+	assert.deepEqual(await fs.readdir(join(root, "dotfiles")), ["lazy-panel.json"]);
+});
+
+test("a chain of links is followed to its end", async (t) => {
+	const root = await fs.mkdtemp(join(tmpdir(), "config-store-chain-"));
+	t.after(() => fs.rm(root, { recursive: true, force: true }));
+	const target = join(root, "real.json");
+	const mid = join(root, "mid.json");
+	const link = join(root, "lazy-panel.json");
+	await fs.writeFile(target, "{}");
+	await fs.symlink(target, mid);
+	await fs.symlink(mid, link);
+	await savePatch(link, await readSnapshot(link), { locale: "zh" });
+	assert.equal((await fs.lstat(link)).isSymbolicLink(), true);
+	assert.equal((await fs.lstat(mid)).isSymbolicLink(), true);
+	assert.deepEqual(JSON.parse(await fs.readFile(target, "utf8")), { locale: "zh" });
+});
+
+test("a dangling link reads as a missing config and saving creates the file it points at", async (t) => {
+	const root = await fs.mkdtemp(join(tmpdir(), "config-store-dangling-"));
+	t.after(() => fs.rm(root, { recursive: true, force: true }));
+	const link = join(root, "agent", "lazy-panel.json");
+	const target = join(root, "dotfiles", "lazy-panel.json");
+	await fs.mkdir(join(root, "agent"));
+	await fs.symlink(target, link);
+	assert.deepEqual(await readSnapshot(link), { raw: {}, fingerprint: null });
+	const saved = await savePatch(link, { raw: {}, fingerprint: null }, { locale: "zh" });
+	assert.deepEqual(saved.snapshot.raw, { locale: "zh" });
+	// 链接留着，目标（连同目录）被建出来，链接从此可用。
+	assert.equal((await fs.lstat(link)).isSymbolicLink(), true);
+	assert.deepEqual(JSON.parse(await fs.readFile(target, "utf8")), { locale: "zh" });
+	assert.deepEqual(await fs.readdir(join(root, "agent")), ["lazy-panel.json"]);
+});
+
+test("a path that is not a link is written as given", async (t) => {
+	const file = await fixture(t);
+	await fs.writeFile(file, '{ "locale": "zh" }');
+	const notALink = {
+		realpath: async () => { throw new Error("cannot resolve"); },
+		readlink: async () => { throw new Error("not a link"); },
+	};
+	await savePatch(file, await readSnapshot(file), { locale: "en" }, { io: notALink });
+	assert.deepEqual(JSON.parse(await fs.readFile(file, "utf8")), { locale: "en" });
+});
+
 test("malformed, non-object and unreadable config cannot be saved", async (t) => {
 	const file = await fixture(t);
 	for (const text of ["{", "null", "[]", "42"]) {
