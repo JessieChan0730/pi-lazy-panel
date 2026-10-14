@@ -13,6 +13,29 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }): Promise
 	return join(dir, "lazy-panel.json");
 }
 
+/** 系统不允许建链接时的 errno（Windows 未开开发者模式 / 非管理员是 EPERM，不支持链接的文件系统是 UNKNOWN）。 */
+const SYMLINK_UNAVAILABLE = ["EPERM", "EACCES", "ENOSYS", "UNKNOWN"];
+
+function isSymlinkUnavailable(error: unknown): error is Error & { code: string } {
+	return error instanceof Error && "code" in error && SYMLINK_UNAVAILABLE.includes(String(error.code));
+}
+
+/**
+ * 建一个真链接；这台机器不允许时把调用方这条测试标成跳过（CI 是 ubuntu，真链接照旧全覆盖）。
+ * 返回 false 时调用方必须立刻 `return` —— `t.skip()` 只打标记，不中断执行。
+ * 显式传 "file"：不给类型时 Windows 得自己判断目标是文件还是目录，悬空链接那条就可能报 UNKNOWN。
+ */
+async function symlinkOrSkip(t: { skip: (message?: string) => void }, target: string, link: string): Promise<boolean> {
+	try {
+		await fs.symlink(target, link, "file");
+		return true;
+	} catch (error) {
+		if (!isSymlinkUnavailable(error)) throw error;
+		t.skip(`symlinks are not available on this system (${error.code})`);
+		return false;
+	}
+}
+
 test("snapshot missing, first save, wrappers and reset preserve unrelated raw fields", async (t) => {
 	const file = await fixture(t);
 	const dir = join(file, "..");
@@ -50,14 +73,17 @@ test("a symlinked config is written through the link: the target changes, the li
 	await fs.mkdir(join(root, "agent"));
 	await fs.writeFile(target, '{ "defaultSort": "recent" }\n');
 	await fs.chmod(target, 0o640);
-	await fs.symlink(target, link);
+	// 记录改前的权限位再比：Windows 上 chmod 只动只读位（0o640 读回来是 0o666），
+	// 断言"保存没改动权限"才是跨平台的，POSIX 上照样抓得到把 0640 写成 0600 的回归。
+	const modeBefore = (await fs.stat(target)).mode & 0o777;
+	if (!await symlinkOrSkip(t, target, link)) return;
 	await savePatch(link, await readSnapshot(link), { defaultSort: "title" });
 	// 链接没被换掉：仓库里那份仍然是 pi 读的那个文件。
 	assert.equal((await fs.lstat(link)).isSymbolicLink(), true);
 	assert.equal(await fs.readlink(link), target);
 	assert.deepEqual(JSON.parse(await fs.readFile(target, "utf8")), { defaultSort: "title" });
 	// 权限位沿用原文件，仓库里不该因为面板保存多出一条 mode 变更。
-	assert.equal((await fs.stat(target)).mode & 0o777, 0o640);
+	assert.equal((await fs.stat(target)).mode & 0o777, modeBefore);
 	// 临时文件和锁都落在真身这一侧，两边都不留残留。
 	assert.deepEqual(await fs.readdir(join(root, "agent")), ["lazy-panel.json"]);
 	assert.deepEqual(await fs.readdir(join(root, "dotfiles")), ["lazy-panel.json"]);
@@ -70,8 +96,8 @@ test("a chain of links is followed to its end", async (t) => {
 	const mid = join(root, "mid.json");
 	const link = join(root, "lazy-panel.json");
 	await fs.writeFile(target, "{}");
-	await fs.symlink(target, mid);
-	await fs.symlink(mid, link);
+	if (!await symlinkOrSkip(t, target, mid)) return;
+	if (!await symlinkOrSkip(t, mid, link)) return;
 	await savePatch(link, await readSnapshot(link), { locale: "zh" });
 	assert.equal((await fs.lstat(link)).isSymbolicLink(), true);
 	assert.equal((await fs.lstat(mid)).isSymbolicLink(), true);
@@ -84,7 +110,7 @@ test("a dangling link reads as a missing config and saving creates the file it p
 	const link = join(root, "agent", "lazy-panel.json");
 	const target = join(root, "dotfiles", "lazy-panel.json");
 	await fs.mkdir(join(root, "agent"));
-	await fs.symlink(target, link);
+	if (!await symlinkOrSkip(t, target, link)) return;
 	assert.deepEqual(await readSnapshot(link), { raw: {}, fingerprint: null });
 	const saved = await savePatch(link, { raw: {}, fingerprint: null }, { locale: "zh" });
 	assert.deepEqual(saved.snapshot.raw, { locale: "zh" });
