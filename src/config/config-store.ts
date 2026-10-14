@@ -141,7 +141,9 @@ export async function savePatch(file: string, baseline: ConfigSnapshot, patch: S
 		}
 		snapshot = latest;
 		if (!isDeepStrictEqual(raw, latest.raw)) {
-			const text = `${JSON.stringify(raw, null, 2)}\n`;
+			// 沿用原文件的缩进和行尾：面板只改一个键，不该把手工维护（dotfiles 仓库里那份）
+			// 的配置整体重排——那会变成整文件 diff，Windows 上还会顺手把 CRLF 换成 LF。
+			const text = formatConfig(raw, await existingStyle(io, file));
 			const temp = `${file}.${randomUUID()}.tmp`;
 			// Only clean up a temporary file this operation successfully created.
 			const handle = await io.open(temp, "wx", 0o600);
@@ -230,6 +232,53 @@ async function existingMode(io: typeof fs, file: string): Promise<number | undef
 	} catch {
 		return undefined;
 	}
+}
+
+/** How a config file is laid out; see `detectStyle`. */
+interface ConfigStyle {
+	indent: string;
+	eol: string;
+	trailingNewline: boolean;
+}
+
+/** What a file we create ourselves looks like: two spaces, LF, trailing newline. */
+const DEFAULT_CONFIG_STYLE: ConfigStyle = { indent: "  ", eol: "\n", trailingNewline: true };
+
+/**
+ * The layout of the config text already on disk, or the default when there is
+ * none (first save). Only the path that really writes asks for it: a save that
+ * changes nothing stays byte-exact and never reads this.
+ *
+ * 手工维护的配置文件（或 dotfiles 仓库里那份）有自己的排版，保存时照抄：
+ * 缩进单位取第一条带缩进的行（`JSON.stringify` 的第三参数收字符串，tab 就能原样沿回去），
+ * 行尾看有没有 CRLF，末尾换行也照它原来的样子。本来就写成一行的文件仍然保持一行
+ * （缩进为空串 = 紧凑输出），不会被"帮忙"展开成多行。
+ */
+async function existingStyle(io: typeof fs, file: string): Promise<ConfigStyle> {
+	try {
+		return detectStyle(await io.readFile(file, "utf8"));
+	} catch {
+		return DEFAULT_CONFIG_STYLE;
+	}
+}
+
+/** The layout of `text` (see `existingStyle`). */
+function detectStyle(text: string): ConfigStyle {
+	const indent = /^([ \t]+)"/m.exec(text)?.[1];
+	return {
+		// 没有带缩进的行：多行的按默认两空格，单行的保持紧凑。
+		indent: indent ?? (text.includes("\n") ? DEFAULT_CONFIG_STYLE.indent : ""),
+		eol: text.includes("\r\n") ? "\r\n" : "\n",
+		trailingNewline: text.endsWith("\n"),
+	};
+}
+
+/** `raw` as JSON text in `style` (see `existingStyle`). */
+function formatConfig(raw: Record<string, unknown>, style: ConfigStyle): string {
+	// JSON.stringify 只认 \n，CRLF 文件得把分隔符自己换回去。字符串值里的换行在 JSON 里是转义的
+	// `\n` 两个字符，不会被这条替换误伤。
+	const body = JSON.stringify(raw, null, style.indent).replaceAll("\n", style.eol);
+	return style.trailingNewline ? `${body}${style.eol}` : body;
 }
 
 function validatePatch(patch: SettingsPatch): void {

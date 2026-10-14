@@ -63,6 +63,35 @@ test("no-op preserves exact bytes and missing file stays missing", async (t) => 
 	assert.equal(await fs.readFile(file, "utf8"), text);
 });
 
+test("a save keeps the file's own indentation and line endings", async (t) => {
+	const file = await fixture(t);
+	// 手工维护的 dotfiles 配置：四空格缩进 + CRLF 行尾。改一个键不该把整份文件重排。
+	const original = '{\r\n    "defaultSort": "recent",\r\n    "leftColumnRatio": 0.3\r\n}\r\n';
+	await fs.writeFile(file, original);
+	await savePatch(file, await readSnapshot(file), { defaultSort: "title" });
+	assert.equal(await fs.readFile(file, "utf8"), original.replace('"recent"', '"title"'));
+});
+
+test("a tab-indented config keeps its tabs", async (t) => {
+	const file = await fixture(t);
+	await fs.writeFile(file, '{\n\t"locale": "en"\n}\n');
+	await savePatch(file, await readSnapshot(file), { locale: "zh" });
+	assert.equal(await fs.readFile(file, "utf8"), '{\n\t"locale": "zh"\n}\n');
+});
+
+test("a one-line config stays on one line and gains no trailing newline", async (t) => {
+	const file = await fixture(t);
+	await fs.writeFile(file, '{"locale":"en","unknown":1}');
+	await savePatch(file, await readSnapshot(file), { locale: "zh" });
+	assert.equal(await fs.readFile(file, "utf8"), '{"locale":"zh","unknown":1}');
+});
+
+test("a config created from scratch gets the default layout", async (t) => {
+	const file = await fixture(t);
+	await savePatch(file, await readSnapshot(file), { locale: "zh", defaultScope: "all" });
+	assert.equal(await fs.readFile(file, "utf8"), '{\n  "locale": "zh",\n  "defaultScope": "all"\n}\n');
+});
+
 test("a symlinked config is written through the link: the target changes, the link stays", async (t) => {
 	const root = await fs.mkdtemp(join(tmpdir(), "config-store-link-"));
 	t.after(() => fs.rm(root, { recursive: true, force: true }));
