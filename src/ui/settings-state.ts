@@ -138,6 +138,24 @@ export function setKeymapDraft(state: SettingsState, scope: KeyScope, action: Ac
 	if (normalized === "reset") entry = base.has ? { reset: true } : undefined;
 	else if (normalized === "unbind") entry = base.value === null ? undefined : { unbind: true };
 	else entry = sameChords(base, normalized) ? undefined : { set: normalized };
+	writeKeymapDraft(state, scope, action, entry);
+	state.error = undefined;
+	state.notice = undefined;
+}
+
+/**
+ * Put back the draft entry an edit replaced (`undefined` = no draft, the on-disk
+ * value stands) — how a refused edit is undone without leaving a dirty marker
+ * behind. Deliberately does not touch error / notice: the refused edit itself
+ * already reset them, and a rollback is not a new edit.
+ */
+export function restoreKeymapDraft(state: SettingsState, scope: KeyScope, action: ActionId, entry: KeymapPatchValue | undefined): void {
+	if (!state.baseline || state.loading || state.saving) return;
+	writeKeymapDraft(state, scope, action, entry);
+}
+
+/** Write one (scope, action) draft entry, dropping empty scopes so the patch stays minimal. */
+function writeKeymapDraft(state: SettingsState, scope: KeyScope, action: ActionId, entry: KeymapPatchValue | undefined): void {
 	const keymap = { ...(state.patch.keymap ?? {}) };
 	const scopeMap = { ...(keymap[scope] ?? {}) };
 	if (entry === undefined) delete scopeMap[action];
@@ -146,8 +164,6 @@ export function setKeymapDraft(state: SettingsState, scope: KeyScope, action: Ac
 	else delete keymap[scope];
 	if (Object.keys(keymap).length) state.patch.keymap = keymap;
 	else delete state.patch.keymap;
-	state.error = undefined;
-	state.notice = undefined;
 }
 
 /** The on-disk user binding for one (scope, action), used to decide if a draft edit is a real change. */

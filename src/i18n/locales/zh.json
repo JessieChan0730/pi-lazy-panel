@@ -57,6 +57,12 @@
       "unbind": "解绑（无按键）",
       "reset": "恢复默认"
     },
+    "keyConflict": {
+      "title": "「{{key}}」按不出来：{{action}} 先接住了",
+      "take": "从 {{action}} 手里抢过来",
+      "cancel": "取消这次改动",
+      "stolen": "「{{key}}」现在归 {{action}}，「{{other}}」不再触发"
+    },
     "layerDescription": "仅显示本层，不展开继承；本层无绑定不代表其他作用域无绑定。实际响应还受焦点、优先级及禁用规则影响。",
     "noBindings": "此作用域没有绑定",
     "themeUnavailable": "读不到 pi 的主题",

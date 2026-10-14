@@ -1,11 +1,12 @@
 /** Settings menus and persistence orchestration. Widgets never read or write files. */
 import { resolveConfig } from "../../config/config.ts";
-import { chordLabel, parseChord } from "../../config/keys.ts";
+import type { KeymapPatchValue } from "../../config/config-store.ts";
+import { chordLabel, conflictKey, keymapConflicts, parseChord, type KeyConflict } from "../../config/keys.ts";
 import { actionDescription, DEFAULT_KEYMAP, scopeTitle } from "../../config/keymap.ts";
 import { KEY_SCOPES, LEFT_COLUMN_RATIO_MAX, LEFT_COLUMN_RATIO_MIN } from "../../constants.ts";
 import { t } from "../../i18n/index.ts";
-import type { ActionId, KeyHint } from "../../types.ts";
-import { keymapDraftChords, setKeymapDraft, setSettingsDraft, settingsDirtyCount, settingsDraft, settingsRetryKind, type EditableSetting } from "../settings-state.ts";
+import type { ActionId, KeyChord, KeyHint, KeyScope } from "../../types.ts";
+import { keymapDraftChords, restoreKeymapDraft, setKeymapDraft, setSettingsDraft, settingsDirtyCount, settingsDraft, settingsRetryKind, type EditableSetting, type SettingsState } from "../settings-state.ts";
 import { confirmDialogSpec } from "../widgets/confirm-dialog.ts";
 import { numericInputValue } from "../widgets/input-dialog.ts";
 import type { SettingsFlowHost } from "./host.ts";
@@ -264,14 +265,13 @@ export function openBindingEditor(h: SettingsFlowHost, action: ActionId): void {
 				openAddBinding(h, action, chords);
 				return;
 			}
+			// 只有这次改动新引进来的冲突才拦人：编辑前先记一份（文件里本来就有的冲突不算）。
+			const previous = draftEntry(s, scope, action);
+			const before = conflictKeys(s, scope, action);
 			if (index === unbindIndex) setKeymapDraft(s, scope, action, "unbind");
 			else if (index === resetIndex) setKeymapDraft(s, scope, action, "reset");
 			else setKeymapDraft(s, scope, action, chords.filter((_, i) => i !== index - removeOffset));
-			// 立即落盘，落完再把菜单打开（可以接着编下一条绑定）；失败就留在主视图，
-			// 让错误行和重试按钮露出来（openBindingEditor 在 saving 时本来也会早退）。
-			void saveSettings(h).then(() => {
-				if (current(h, generation) && !s.error) openBindingEditor(h, action);
-			});
+			finishBindingEdit(h, scope, action, generation, previous, before);
 		},
 		onCancel: () => h.closeDialogs(),
 	});
@@ -295,17 +295,108 @@ function openAddBinding(h: SettingsFlowHost, action: ActionId, chords: string[])
 			const chord = text.trim();
 			if (!parseChord(chord)) return;
 			h.closeDialogs();
-			if (current(h, generation) && !chords.includes(chord)) setKeymapDraft(s, scope, action, [...chords, chord]);
-			// 同 openBindingEditor：先落盘，成功后再回到绑定菜单。
-			void saveSettings(h).then(() => {
-				if (current(h, generation) && !s.error) openBindingEditor(h, action);
-			});
+			if (!current(h, generation)) return;
+			const previous = draftEntry(s, scope, action);
+			const before = conflictKeys(s, scope, action);
+			if (!chords.includes(chord)) setKeymapDraft(s, scope, action, [...chords, chord]);
+			finishBindingEdit(h, scope, action, generation, previous, before);
 		},
 		onCancel: () => {
 			h.closeDialogs();
 			if (current(h, generation)) openBindingEditor(h, action);
 		},
 	});
+}
+
+/**
+ * 一次键位改动之后的闸门：只有"按得出来"的绑定才落盘。
+ *
+ * 同一个作用域里先精确匹配上的那条拿走按键（见 `resolveKeys`），所以后一个同键绑定是静默
+ * 失效的 —— 而这很容易造出来：在排在占用者下面的动作上 Add key 就是。这类 `dead` 冲突交给
+ * 用户决定（从占用者手里抢过来 / 取消这次改动）；`steals` 按得出来，但会让另一个动作的同键
+ * 不再触发，落盘成功后补一句提示。
+ *
+ * `before` 是编辑前的冲突集合：文件里本来就有的冲突（手工写重复的键）不该拦住一次无关的编辑。
+ */
+function finishBindingEdit(h: SettingsFlowHost, scope: KeyScope, action: ActionId, generation: number, previous: KeymapPatchValue | undefined, before: ReadonlySet<string>): void {
+	const s = h.state.settings;
+	const draft = settingsDraft(s);
+	if (!s.baseline || !draft || !current(h, generation)) return;
+	const conflicts = keymapConflicts(draft.keymap[scope], action).filter((conflict) => !before.has(conflictKey(conflict)));
+	const dead = conflicts.filter((conflict) => conflict.kind === "dead");
+	if (dead.length) {
+		openConflictMenu(h, scope, action, generation, previous, dead);
+		return;
+	}
+	const stolen = conflicts.find((conflict) => conflict.kind === "steals");
+	saveBindingEdit(h, action, generation, stolen ? conflictNotice(stolen, action) : undefined);
+}
+
+/** `dead` 冲突的收尾：把选择交给用户 —— 从占用者手里抢过来，或者取消这次改动。 */
+function openConflictMenu(h: SettingsFlowHost, scope: KeyScope, action: ActionId, generation: number, previous: KeymapPatchValue | undefined, dead: KeyConflict[]): void {
+	const s = h.state.settings;
+	const first = dead[0]!;
+	const ownerLabel = actionDescription(first.other);
+	h.openMenu("settings", {
+		title: t("settings.keyConflict.title", { key: chordLabel(first.chord), action: ownerLabel }),
+		subject: actionDescription(action),
+		items: [t("settings.keyConflict.take", { action: ownerLabel }), t("settings.keyConflict.cancel")],
+		hints: hints(),
+		onSelect: (index) => {
+			h.closeDialogs();
+			if (!current(h, generation)) return;
+			if (index !== 0) {
+				cancelBindingEdit(h, scope, action, generation, previous);
+				return;
+			}
+			// 抢过来：先把这串键从每个占用者手里摘掉（摘空了就是解绑），再落盘我们的改动。
+			// 同一个占用者可能占着多条（两条冲突指向同一个动作），先合并再写，免得后一次覆盖前一次。
+			const releases = new Map<ActionId, KeyChord[]>();
+			for (const conflict of dead) {
+				const chords = releases.get(conflict.other) ?? keymapDraftChords(s, scope, conflict.other);
+				releases.set(conflict.other, chords.filter((chord) => chord !== conflict.otherChord));
+			}
+			for (const [owner, remaining] of releases) setKeymapDraft(s, scope, owner, remaining);
+			saveBindingEdit(h, action, generation, conflictNotice(first, action));
+		},
+		onCancel: () => {
+			h.closeDialogs();
+			cancelBindingEdit(h, scope, action, generation, previous);
+		},
+	});
+}
+
+/** 取消一次被拦下的改动：草稿还原成编辑前那份（错误 / 提示不动），回到绑定菜单。 */
+function cancelBindingEdit(h: SettingsFlowHost, scope: KeyScope, action: ActionId, generation: number, previous: KeymapPatchValue | undefined): void {
+	if (!current(h, generation)) return;
+	restoreKeymapDraft(h.state.settings, scope, action, previous);
+	openBindingEditor(h, action);
+}
+
+/** 落盘这次键位改动，成功且没有错误时回到绑定菜单（可以接着编下一条）；`notice` 追加在"已生效"后面。 */
+function saveBindingEdit(h: SettingsFlowHost, action: ActionId, generation: number, notice?: string): void {
+	void saveSettings(h).then(() => {
+		const s = h.state.settings;
+		if (!current(h, generation) || s.error) return;
+		if (notice) s.notice = [s.notice, notice].filter((text): text is string => !!text).join(" · ");
+		openBindingEditor(h, action);
+	});
+}
+
+/** `steals` 的提示文案：这串键现在归谁，谁不再触发它。 */
+function conflictNotice(conflict: KeyConflict, owner: ActionId): string {
+	return t("settings.keyConflict.stolen", { key: chordLabel(conflict.chord), action: actionDescription(owner), other: actionDescription(conflict.other) });
+}
+
+/** 这个 (scope, action) 当前的草稿条目；编辑前捕获，取消时原样还原。 */
+function draftEntry(s: SettingsState, scope: KeyScope, action: ActionId): KeymapPatchValue | undefined {
+	return s.patch.keymap?.[scope]?.[action];
+}
+
+/** 当前草稿里 `action` 的冲突集合 —— 改动前后各取一次，差集才是这次引进来的。 */
+function conflictKeys(s: SettingsState, scope: KeyScope, action: ActionId): Set<string> {
+	const draft = settingsDraft(s);
+	return new Set(keymapConflicts(draft?.keymap[scope] ?? {}, action).map(conflictKey));
 }
 
 export function restoreSettingsDefaults(h: SettingsFlowHost): void {

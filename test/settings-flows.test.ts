@@ -473,6 +473,113 @@ test("openBindingEditor Esc on the add prompt returns to the action menu", async
 	assert.ok(h.menu()); // back on the action menu
 	assert.equal(settingsDirtyCount(h.state), 0);
 });
+test("a key that cannot fire is refused until the user takes it from its owner", async () => {
+	const h = fixture();
+	await readSettings(h.host);
+	h.state.category = "keybindings";
+	h.state.keyScope = "sessions";
+	// session-rename 排在 session-delete 后面：d 永远轮不到它。
+	openBindingEditor(h.host, "session-rename");
+	h.menu()!.onSelect(0); // Add key…
+	h.prompt()!.onSubmit("d");
+	// 拦下来了：一个字节都没写，处理菜单顶上来。
+	assert.equal(h.writes(), 0);
+	assert.match(h.menu()!.title, /"d" cannot fire/);
+	assert.match(h.menu()!.title, /Delete session/);
+	assert.match(h.menu()!.subject!, /Rename session/);
+	assert.match(h.menu()!.items[0]!, /Take it from Delete session/);
+	// 抢过来：delete 解绑，我们的 d 落盘，并说明这串键现在归谁。
+	h.menu()!.onSelect(0);
+	await settle();
+	assert.deepEqual(h.state.baseline?.raw.keymap, { sessions: { "session-delete": null, "session-rename": ["r", "d"] } });
+	assert.deepEqual(keymapDraftChords(h.state, "sessions", "session-rename"), ["r", "d"]);
+	assert.deepEqual(keymapDraftChords(h.state, "sessions", "session-delete"), []);
+	assert.equal(settingsDirtyCount(h.state), 0);
+	assert.equal(h.writes(), 1);
+	assert.match(h.state.notice!, /"d" now goes to Rename session/);
+	assert.match(h.state.notice!, /Delete session\(s\) no longer fires/);
+	assert.ok(h.menu()); // 落完盘回到绑定菜单
+});
+
+test("cancelling a refused key edit restores the draft the edit replaced", async () => {
+	const h = fixture();
+	await readSettings(h.host);
+	h.state.category = "keybindings";
+	h.state.keyScope = "sessions";
+	// 编辑前已经有一份没落盘的改动（比如上一次保存失败留下的）。
+	setKeymapDraft(h.state, "sessions", "session-rename", ["r", "z"]);
+	openBindingEditor(h.host, "session-rename");
+	h.menu()!.onSelect(0); // Add key…
+	h.prompt()!.onSubmit("d");
+	// Esc 取消这次改动：回到编辑前那份草稿，而不是清空。
+	h.menu()!.onCancel();
+	await settle();
+	assert.deepEqual(keymapDraftChords(h.state, "sessions", "session-rename"), ["r", "z"]);
+	assert.deepEqual(h.state.patch.keymap?.sessions?.["session-rename"], { set: ["r", "z"] });
+	assert.deepEqual(keymapDraftChords(h.state, "sessions", "session-delete"), ["d"]);
+	assert.equal(h.writes(), 0);
+	assert.ok(h.menu()); // 回到绑定菜单
+	// 菜单里选"取消这次改动"和 Esc 一样。
+	h.menu()!.onSelect(0);
+	h.prompt()!.onSubmit("d");
+	h.menu()!.onSelect(1);
+	await settle();
+	assert.deepEqual(keymapDraftChords(h.state, "sessions", "session-rename"), ["r", "z"]);
+	assert.equal(h.writes(), 0);
+});
+
+test("a key taken from another action is written and reported, and reset is guarded too", async () => {
+	const h = fixture();
+	await readSettings(h.host);
+	h.state.category = "keybindings";
+	h.state.keyScope = "sessions";
+	// session-new 排在 session-delete 前面：d 按得出来，但 delete 的 d 不再触发。
+	openBindingEditor(h.host, "session-new");
+	h.menu()!.onSelect(0); // Add key…
+	h.prompt()!.onSubmit("d");
+	await settle();
+	assert.deepEqual(h.state.baseline?.raw.keymap, { sessions: { "session-new": ["n", "d"] } });
+	assert.equal(h.state.error, undefined);
+	assert.equal(h.writes(), 1);
+	assert.match(h.state.notice!, /"d" now goes to New session/);
+	assert.match(h.state.notice!, /Delete session\(s\) no longer fires/);
+	// 前缀重叠同理：g 归 New session 后，go-top 的 gg 再也触发不了。
+	h.menu()!.onSelect(0);
+	h.prompt()!.onSubmit("g");
+	await settle();
+	assert.match(h.state.notice!, /"g" now goes to New session/);
+	assert.match(h.state.notice!, /Go to top no longer fires/);
+});
+
+test("reset to default is refused when the default key is taken, and a conflict already in the file never blocks", async () => {
+	// 文件里 session-new 占了 r（它排在 session-rename 前面）。
+	const h = fixture({ keymap: { sessions: { "session-new": "r", "session-rename": "z" } } });
+	await readSettings(h.host);
+	h.state.category = "keybindings";
+	h.state.keyScope = "sessions";
+	// 编辑前没有冲突（z 没人用）：Reset 把 rename 打回默认的 r，这一下才撞上 session-new。
+	openBindingEditor(h.host, "session-rename");
+	const resetIndex = h.menu()!.items.length - 1;
+	assert.match(h.menu()!.items[resetIndex]!, /Reset to default/);
+	h.menu()!.onSelect(resetIndex);
+	assert.equal(h.writes(), 0);
+	assert.match(h.menu()!.title, /"r" cannot fire/);
+	assert.match(h.menu()!.title, /New session/);
+	h.menu()!.onSelect(0); // 抢过来
+	await settle();
+	assert.deepEqual(h.state.baseline?.raw.keymap, { sessions: { "session-new": null } });
+	// 文件里本来就有的冲突不该拦人：remove 掉自己另一条键照常落盘。
+	const dirty = fixture({ keymap: { sessions: { "session-rename": ["r", "d"] } } });
+	await readSettings(dirty.host);
+	dirty.state.category = "keybindings";
+	dirty.state.keyScope = "sessions";
+	openBindingEditor(dirty.host, "session-rename");
+	dirty.menu()!.onSelect(1); // Remove: r
+	await settle();
+	assert.equal(dirty.writes(), 1);
+	assert.deepEqual(dirty.state.baseline?.raw.keymap, { sessions: { "session-rename": "d" } });
+});
+
 test("theme picker switches pi on the spot, without a preview or a save step", async () => {
 	const h = fixture();
 	await readSettings(h.host);

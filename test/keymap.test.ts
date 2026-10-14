@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { mergeKeymap, resolveConfig } from "../src/config/config.ts";
 import { DEFAULT_KEYMAP } from "../src/config/keymap.ts";
-import { chordFromKeypress, chordLabel, compileKeymap, isReservedKey, labelsForFocus, matchesKeyId, normalizeKeyStep, parseChord, type ResolveResult, resolveKeys, scopeChain } from "../src/config/keys.ts";
+import { chordFromKeypress, chordLabel, compileKeymap, isReservedKey, keymapConflicts, labelsForFocus, matchesKeyId, normalizeKeyStep, parseChord, type ResolveResult, resolveKeys, scopeChain } from "../src/config/keys.ts";
 import { KeySequencer, PENDING_TIMEOUT_MS } from "../src/ui/key-sequencer.ts";
 
 /** Action of a resolve result, or undefined when it did not resolve to one. */
@@ -193,6 +193,46 @@ test("resolveKeys: pane bindings shadow global, multi-key sequences go through p
 	assert.deepEqual(resolveKeys(bindings, "content", ["z"]), { kind: "pending" });
 	assert.equal(actionOf(resolveKeys(bindings, "content", ["z", "z"])), "content-center");
 	assert.deepEqual(resolveKeys(bindings, "sessions", ["z"]), { kind: "none" });
+});
+
+test("keymapConflicts: an unreachable binding is reported with whoever takes the keys first", () => {
+	const conflictsOf = (keymap: Parameters<typeof keymapConflicts>[0], action: string) => keymapConflicts(keymap, action as never);
+	// "d" 排在 session-rename 前面（默认表里的声明顺序）：给 rename 加 d 按不出来
+	const sameChord = mergeKeymap(DEFAULT_KEYMAP, { sessions: { "session-rename": ["r", "d"] } });
+	assert.deepEqual(conflictsOf(sameChord.sessions, "session-rename"), [
+		{ kind: "dead", other: "session-delete", chord: "d", otherChord: "d" },
+	]);
+	// 反方向看同一个场景：占用者那边报的是"rename 的 d 被吃掉了"
+	assert.deepEqual(conflictsOf(sameChord.sessions, "session-delete"), [
+		{ kind: "steals", other: "session-rename", chord: "d", otherChord: "d" },
+	]);
+	// 短键永远赢：session-archive 的 "x" 是 "x y" 的前缀（不管声明顺序）
+	const prefix = mergeKeymap(DEFAULT_KEYMAP, { sessions: { "session-rename": ["r", "x y"] } });
+	assert.deepEqual(conflictsOf(prefix.sessions, "session-rename"), [
+		{ kind: "dead", other: "session-archive", chord: "x y", otherChord: "x" },
+	]);
+	// 声明顺序在前的那一方拿到键，另一方被吃掉（steals）
+	const steals = mergeKeymap(DEFAULT_KEYMAP, { sessions: { "session-new": ["n", "d"] } });
+	assert.deepEqual(conflictsOf(steals.sessions, "session-new"), [
+		{ kind: "steals", other: "session-delete", chord: "d", otherChord: "d" },
+	]);
+	// 我们的键是别人长序列的前缀：我们触发，它不再触发
+	const stealsPrefix = mergeKeymap(DEFAULT_KEYMAP, { sessions: { "session-new": ["n", "g"] } });
+	assert.deepEqual(conflictsOf(stealsPrefix.sessions, "session-new"), [
+		{ kind: "steals", other: "go-top", chord: "g", otherChord: "gg" },
+	]);
+	// 完全同序的重复键只报第一条：先出现的那条能触发，后面的那条是死的
+	assert.deepEqual(conflictsOf({ "session-delete": "d", "session-rename": "d" }, "session-rename"), [
+		{ kind: "dead", other: "session-delete", chord: "d", otherChord: "d" },
+	]);
+	assert.deepEqual(conflictsOf({ "session-delete": "d", "session-rename": "d" }, "session-delete"), [
+		{ kind: "steals", other: "session-rename", chord: "d", otherChord: "d" },
+	]);
+	// 自己两条键重叠不算冲突（编辑器也不会造出来）
+	assert.deepEqual(conflictsOf({ "session-delete": ["d", "d d"] }, "session-delete"), []);
+	// 没有键的动作、认不出的键都不参与
+	assert.deepEqual(conflictsOf({ "session-delete": "d", "session-rename": "ctrl+foo" }, "session-rename"), []);
+	assert.deepEqual(conflictsOf({}, "session-rename"), []);
 });
 
 test("tree dialog scope: its keys shadow the tree pane's and the global ones, everything else falls through", () => {

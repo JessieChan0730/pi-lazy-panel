@@ -277,17 +277,102 @@ export interface Binding {
 	chord: KeyChord;
 }
 
-/** Flatten one scope of the keymap into bindings. Invalid chords are skipped. */
-export function compileScope(scope: KeyScope, keymap: PaneKeymap): Binding[] {
-	const out: Binding[] = [];
+/** One action's claim on a key sequence inside one scope; the order is the keymap's own order. */
+interface ScopeBinding {
+	action: ActionId;
+	chord: KeyChord;
+	seq: KeySequence;
+}
+
+/** Every claim of one scope, in keymap order (the order `resolveKeys` walks). Invalid chords are skipped. */
+function scopeBindings(keymap: PaneKeymap): ScopeBinding[] {
+	const out: ScopeBinding[] = [];
 	for (const [action, chords] of Object.entries(keymap) as Array<[ActionId, KeyChord | KeyChord[] | undefined]>) {
 		if (chords === undefined) continue;
 		for (const chord of Array.isArray(chords) ? chords : [chords]) {
 			const seq = parseChord(chord);
-			if (seq) out.push({ scope, action, seq, chord });
+			if (seq) out.push({ action, chord, seq });
 		}
 	}
 	return out;
+}
+
+/** Flatten one scope of the keymap into bindings. Invalid chords are skipped. */
+export function compileScope(scope: KeyScope, keymap: PaneKeymap): Binding[] {
+	return scopeBindings(keymap).map((entry) => ({ scope, ...entry }));
+}
+
+/**
+ * One contested key sequence inside a scope, seen from the action that was just
+ * edited.
+ *
+ * `dead` — the edited binding can never fire: `other` takes those keys first.
+ *   Either it holds a shorter sequence the edited one starts with (a full match
+ *   beats a longer sequence still waiting for keys), or it holds the very same
+ *   sequence and sits above the edited action in the keymap.
+ * `steals` — the edited binding does fire, so `other`'s `otherChord` no longer
+ *   does: same sequence below the edited action, or a longer one starting with it.
+ *
+ * 同一个作用域里两条动作抢同一串按键时的两个方向：`dead` = 刚编辑的这条根本按不出来
+ * （`other` 的键更短、或同一条键排在它前面），`steals` = 按得出来，但 `other` 的键被吃掉。
+ * 判定照抄 `resolveKeys`：每按一个键，谁先精确匹配谁先拿到 —— 精确匹配永远赢过还在等下一键的
+ * 长序列，所以短键不管排第几都赢。
+ */
+export interface KeyConflict {
+	kind: "dead" | "steals";
+	/** The other action involved. */
+	other: ActionId;
+	/** The edited action's chord in the contest (display form). */
+	chord: KeyChord;
+	/** The other action's chord in the contest — the one that really fires when `kind` is "dead". */
+	otherChord: KeyChord;
+}
+
+/** Stable identity of one conflict, so a caller can tell "already there" from "just introduced". */
+export function conflictKey(conflict: KeyConflict): string {
+	return `${conflict.kind}|${conflict.other}|${conflict.chord}|${conflict.otherChord}`;
+}
+
+/**
+ * What `action`'s own bindings in one scope (`config.keymap[scope]`) contest with
+ * the other actions of that scope. Conflicts the action already had are reported
+ * too, so a caller can subtract the set it saw before an edit.
+ *
+ * Two chords of the same action overlapping are not reported: the editor refuses
+ * a chord an action already has, and "which of my own two chords wins" is not a
+ * question the user asked.
+ */
+export function keymapConflicts(keymap: PaneKeymap, action: ActionId): KeyConflict[] {
+	const entries = scopeBindings(keymap);
+	const index = new Map(entries.map((entry, i) => [entry, i]));
+	const out: KeyConflict[] = [];
+	const seen = new Set<string>();
+	const push = (conflict: KeyConflict): void => {
+		const key = conflictKey(conflict);
+		if (seen.has(key)) return;
+		seen.add(key);
+		out.push(conflict);
+	};
+	for (const own of entries) {
+		if (own.action !== action) continue;
+		// 谁会把我们这串键先拿走：序列是它的前缀，且它要么更短（短键必赢），要么排在我们前面。
+		const preemptors = entries.filter((other) => other.action !== action && startsWith(own.seq, other.seq) &&
+			(other.seq.length < own.seq.length || index.get(other)! < index.get(own)!));
+		if (preemptors.length) {
+			for (const other of preemptors) push({ kind: "dead", other: other.action, chord: own.chord, otherChord: other.chord });
+			continue;
+		}
+		// 我们能触发：同一条序列排在我们后面的、以及以我们为前缀的更长的键，都被我们吃掉了。
+		for (const other of entries) {
+			if (other.action !== action && startsWith(other.seq, own.seq)) push({ kind: "steals", other: other.action, chord: own.chord, otherChord: other.chord });
+		}
+	}
+	return out;
+}
+
+/** Does `seq` start with `prefix` (an equal sequence counts)? */
+function startsWith(seq: KeySequence, prefix: KeySequence): boolean {
+	return prefix.length <= seq.length && prefix.every((key, i) => key === seq[i]);
 }
 
 export type ResolveResult =

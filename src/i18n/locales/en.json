@@ -57,6 +57,12 @@
       "unbind": "Unbind (no key)",
       "reset": "Reset to default"
     },
+    "keyConflict": {
+      "title": "\"{{key}}\" cannot fire: {{action}} takes it first",
+      "take": "Take it from {{action}}",
+      "cancel": "Cancel this edit",
+      "stolen": "\"{{key}}\" now goes to {{action}}; {{other}} no longer fires on it"
+    },
     "layerDescription": "This scope only; inheritance is not expanded. Other scopes may still bind this action. Focus, priority and disabled actions affect execution.",
     "noBindings": "No bindings in this scope",
     "themeUnavailable": "Cannot read pi's themes",
