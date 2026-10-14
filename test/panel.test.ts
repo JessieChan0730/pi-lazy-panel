@@ -113,7 +113,7 @@ interface Harness {
 	text: (width?: number) => string[];
 }
 
-function makePanel(opts: { keymap?: typeof DEFAULT_KEYMAP; height?: number; themeSource?: ThemeSource; settingsSource?: SettingsSource } = {}): Harness {
+function makePanel(opts: { keymap?: typeof DEFAULT_KEYMAP; height?: number; themeSource?: ThemeSource; settingsSource?: SettingsSource; status?: string } = {}): Harness {
 	const calls: Array<{ scope: string; sort: string }> = [];
 	let closed = false;
 	const data: DataSource = {
@@ -135,6 +135,8 @@ function makePanel(opts: { keymap?: typeof DEFAULT_KEYMAP; height?: number; them
 		...(opts.keymap ? { keymap: opts.keymap } : {}),
 		...(opts.themeSource ? { themeSource: opts.themeSource } : {}),
 		...(opts.settingsSource ? { settingsSource: opts.settingsSource } : {}),
+		// 启动时的 footer 状态（index.ts 传配置的第一条警告）。
+		...(opts.status ? { status: opts.status } : {}),
 	});
 	return {
 		panel,
@@ -4562,4 +4564,42 @@ test("picking a value on the general page writes and applies it right away", asy
 	assert.equal(h.panel.state.settings.patch.locale, undefined);
 	assert.match(h.text(120).join("\n"), /Simplified Chinese/);
 	h.panel.dispose();
+});
+
+/**
+ * 回归：footer 的 status 在启动时就是配置里的第一条警告（index.ts 把 config.warnings[0]
+ * 当 status 传进来）。保存设置会走 refreshConfig，那里曾经无条件 `this.status = undefined`，
+ * 于是改任意一项（哪怕和警告无关）都会让配置里的问题不再提示，而且不会自己回来。
+ */
+test("saving settings keeps the startup config warning in the footer", async () => {
+	// 真的警告文案来自 src/config/config.ts:123（不是 i18n 文案，这里是它的前缀）。
+	const warning = 'config: "theme" is not a plugin setting';
+	// 落盘的配置里带着 theme：resolveConfig 每次都会为它推一条警告。
+	const raw = { theme: "dark" };
+	const source: SettingsSource = {
+		read: async () => ({ raw, fingerprint: "x" }),
+		save: async (_baseline, patch) => ({ snapshot: { raw: { ...raw, ...patch }, fingerprint: "y" }, warnings: [] }),
+		apply: () => {},
+	};
+	const h = makePanel({ settingsSource: source, status: warning });
+	assert.match(h.text(120).at(-1)!, /is not a plugin setting/, "启动时的 status（配置警告）显示在 footer");
+	h.panel.openSettings();
+	await settingsSettled(h.panel);
+	// 改一个和警告无关的项：l 进列表 → Enter 开菜单 → j 下移 → Enter 当场保存 → apply → refreshConfig。
+	for (const key of ["l", "\r", "j", "\r"]) h.panel.handleInput(key);
+	await settingsSettled(h.panel);
+	h.panel.handleInput("q");
+	assert.equal(h.panel.state.settings.phase, "closed");
+	assert.match(h.text(120).at(-1)!, /is not a plugin setting/, "保存后 footer 的配置警告仍在");
+	h.panel.dispose();
+
+	// 配置没问题时照旧清掉：保存前的临时提示不该一直挂着。
+	const clean = makePanel({ settingsSource: fakeSettingsSource(), status: warning });
+	clean.panel.openSettings();
+	await settingsSettled(clean.panel);
+	for (const key of ["l", "\r", "j", "\r"]) clean.panel.handleInput(key);
+	await settingsSettled(clean.panel);
+	clean.panel.handleInput("q");
+	assert.doesNotMatch(clean.text(120).join("\n"), /is not a plugin setting/);
+	clean.panel.dispose();
 });

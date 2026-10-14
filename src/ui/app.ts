@@ -382,7 +382,10 @@ export class LazyPanel implements Component, Focusable {
 				this.ratio = config.leftColumnRatio;
 				// 正文排版含角色等本地化标题；仅清缓存，不重载会话或重置滚动位置。
 				this.contentViewport.setBlocks(this.contentViewport.blocks, this.contentViewport.leaf);
-				this.status = undefined;
+				// footer 的 status 不能无条件清掉：启动时它就是 config.warnings[0]（index.ts），
+				// 这里是配置刚被重读后的警告，清掉等于"改任意一项设置，配置里的问题就不提示了"；
+				// 没有警告时仍然是 undefined，保存前的临时提示照旧被顶掉。
+				this.status = config.warnings[0];
 				this.o.requestRender();
 			},
 		};
