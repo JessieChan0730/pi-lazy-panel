@@ -73,7 +73,7 @@
     "themeApplyFailed": "切换主题失败：{{error}}",
     "switchRegion": "切区域",
     "switchScope": "切作用域",
-    "scrollDetails": "滚动说明",
+    "scrollDetails": "滚动详情",
     "close": "关闭"
   },
   "alert": {

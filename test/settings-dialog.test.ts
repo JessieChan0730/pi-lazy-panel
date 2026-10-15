@@ -132,6 +132,96 @@ test("the detail box only appears for items that carry a description", () => {
 	h.state.category = "layout";
 	assert.ok(h.dialog.hints.some(([, label]) => /scroll/i.test(label)), "the scroll hint comes back with the box");
 });
+test("status messages use a bottom frame outside the main settings box in both languages", () => {
+	try {
+		for (const language of ["en", "zh"] as const) {
+			initI18n(language);
+			for (const width of [60, 76, 108]) {
+				for (const status of ["notice", "error", "loading", "saving"] as const) {
+					const h = makeDialog();
+					if (status === "notice") h.state.notice = t("settings.saved");
+					else if (status === "error") h.state.error = t("settings.saveFailed", { error: "conflict ".repeat(12) });
+					else h.state[status] = true;
+					const lines = h.dialog.render(width, 28).map(stripTerminalSequences);
+					assert.equal(lines.length, 28);
+					assert.ok(lines.every((line) => visibleWidth(line) === width));
+					const boxes = lines.flatMap((line, i) => line.startsWith("┌") ? [i] : []);
+					assert.equal(boxes.length, 2, "one main box and one auxiliary box");
+					assert.ok(lines[boxes[1]! - 1]!.startsWith("└"), "main box closes before feedback");
+					const expected = status === "notice" ? t("settings.saved") : status === "error" ? "conflict" : t(`settings.${status}`);
+					assert.ok(lines.slice(boxes[1]).some((line) => line.includes(expected)));
+					if (status === "notice") assert.ok(lines.some((line) => line.includes(t("settings.saved"))));
+					if (width < 76) continue;
+					const divider = lines.findIndex((line) => line.startsWith("├"));
+					const sidebarColumn = lines[1]!.indexOf("│", 1);
+					assert.ok(divider > 1);
+					assert.ok(sidebarColumn > 1);
+					for (const line of lines.slice(1, divider)) {
+						// 用可见列而不是字符串下标检查，兼容中文的双宽字符。
+						const column = visibleWidth(line.slice(0, line.indexOf("│", 1)));
+						assert.equal(column, sidebarColumn, `${language}/${width}/${status}: ${line}`);
+					}
+				}
+			}
+		}
+	} finally {
+		initI18n("en");
+	}
+});
+test("feedback and existing descriptions share one bottom frame with a divider", () => {
+	for (const category of ["layout", "keybindings"] as const) {
+		const h = makeDialog();
+		h.state.category = category;
+		h.state.notice = t("settings.saved");
+		const lines = h.text().split("\n");
+		const boxes = lines.flatMap((line, i) => line.startsWith("┌") ? [i] : []);
+		assert.equal(boxes.length, 2, "do not stack a third box for feedback");
+		const bottom = lines.slice(boxes[1]);
+		assert.ok(bottom[1]!.includes(t("settings.saved")));
+		assert.ok(bottom[2]!.startsWith("├"), "result and explanation are separated");
+		assert.ok(bottom.some((line) => line.includes(category === "layout" ? "leftColumnRatio" : "keyScope")));
+		h.state.notice = undefined;
+		const descriptionOnly = h.text().split("\n");
+		assert.equal(descriptionOnly.filter((line) => line.startsWith("┌")).length, 2);
+		assert.equal(descriptionOnly.filter((line) => line.startsWith("├")).length, 1, "no empty feedback section");
+	}
+});
+test("long feedback scrolls from any region and new results start at the top", () => {
+	const h = makeDialog();
+	h.dialog.open();
+	h.state.error = `Long error ${"conflict ".repeat(100)}END_OF_ERROR`;
+	assert.match(h.text(60, 18), /↓ PgDn/);
+	assert.ok(h.dialog.hints.some(([key]) => key === "PgUp/PgDn"));
+	let text = "";
+	for (let i = 0; i < 10; i++) {
+		h.dialog.handleInput("\x1b[6~");
+		text += h.text(60, 18);
+	}
+	assert.match(text, /END_OF_ERROR/);
+	assert.equal(h.state.positions.general?.cursor, 0);
+	h.state.error = undefined;
+	h.state.notice = t("settings.saved");
+	assert.match(h.text(60, 18), /Settings applied/);
+	assert.equal(h.state.positions.general?.detailScroll, 0);
+	const lines = screen(h.dialog);
+	const result = cellAt(lines, t("settings.saved"));
+	assert.equal(h.dialog.hitAt(result.x, result.y), undefined, "feedback does not intercept list clicks");
+	const close = cellAt(lines, `[ q ${t("hint.close")} ]`);
+	assert.deepEqual(h.dialog.hitAt(close.x, close.y), { region: "buttons", index: 0 });
+});
+test("short viewports retain feedback without sacrificing the main controls", () => {
+	for (const height of [7, 8, 9, 10, 11]) {
+		const h = makeDialog();
+		h.state.category = "layout";
+		h.state.notice = t("settings.saved");
+		const lines = h.dialog.render(60, height).map(stripTerminalSequences);
+		assert.equal(lines.length, height);
+		assert.ok(lines.every((line) => visibleWidth(line) === 60));
+		assert.ok(lines.some((line) => line.includes(t("settings.saved"))));
+		assert.ok(lines.some((line) => line.includes(`[ q ${t("hint.close")} ]`)));
+		assert.equal(lines.filter((line) => line.startsWith("┌")).length, height < 9 ? 1 : 2);
+	}
+});
 test("action shortcuts work from categories and list without focusing buttons", () => {
 	for (const region of ["categories", "list"] as const) {
 		const h = makeDialog();

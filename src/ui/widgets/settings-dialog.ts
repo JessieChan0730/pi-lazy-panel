@@ -75,6 +75,7 @@ interface SettingsClickable {
 
 export class SettingsDialog {
 	private disposed = false;
+	private lastFeedback = "";
 	/** 上一次绘制里所有可点的格子（render 里清空重填）：鼠标点击照着画面查。 */
 	private clickables: SettingsClickable[] = [];
 	/** 上一次绘制时主对话框在屏幕上的位置（`overlay()` 里记）；鼠标命中只认这一份，没画过就点不到。 */
@@ -89,8 +90,7 @@ export class SettingsDialog {
 	get hints(): KeyHint[] {
 		// 正常路径上每一次改动都已经落盘，所以只有失败时才有"重试"这一项。
 		const retry: KeyHint[] = this.retryable() ? [["s", t("settings.retry")]] : [];
-		// 说明框按需出现（只在光标项有说明时），滚动提示也跟着只在它出现时提示。
-		const scroll: KeyHint[] = this.detailItem()?.description ? [["PgUp/PgDn", t("settings.scrollDetails")]] : [];
+		const scroll: KeyHint[] = this.detailItem()?.description || this.feedback().length ? [["PgUp/PgDn", t("settings.scrollDetails")]] : [];
 		return [["Esc/q", t("hint.close")], ["h/←", t("settings.categories")], ["l/→", t("settings.list")], ["Tab", t("settings.switchRegion")], ["j/k/↑↓", t("hint.move")], ["Enter", t("hint.choose")], ...retry, ["d", t("settings.restore")], ["r", t("settings.reload")], ...scroll];
 	}
 
@@ -180,7 +180,7 @@ export class SettingsDialog {
 			this.move(1);
 		} else if (matchesKeyId(data, "k") || matchesKeyId(data, "up")) {
 			this.move(-1);
-		} else if (state.region === "list" && (matchesKeyId(data, "pageup") || matchesKeyId(data, "pagedown"))) {
+		} else if (matchesKeyId(data, "pageup") || matchesKeyId(data, "pagedown")) {
 			const position = this.position();
 			position.detailScroll = Math.max(0, position.detailScroll + (matchesKeyId(data, "pageup") ? -3 : 3));
 		}
@@ -339,16 +339,13 @@ export class SettingsDialog {
 		if (width < 16 || height < 7) {
 			return Array.from({ length: Math.max(0, height) }, (_, i) => fit(i === 0 ? `Esc ${t("hint.close")}` : i === 1 ? t("settings.title") : "", width));
 		}
-		// 底部独立说明框（lazygit 风格）占若干行，主对话框占其余高度。
-		const detailBox = this.detailBox(width, height);
-		const mainHeight = height - detailBox.length;
+		const auxiliaryBox = this.auxiliaryBox(width, height);
+		const mainHeight = height - auxiliaryBox.length;
 		const inner = width - 2;
-		const messages = [state.loading ? t("settings.loading") : state.saving ? t("settings.saving") : undefined, state.error, state.notice].filter((v): v is string => !!v);
-		const messageLines = messages.flatMap((message) => wrapTextWithAnsi(message, Math.max(1, inner - 2))).slice(0, Math.max(1, mainHeight - 6));
-		const areaHeight = mainHeight - 4 - messageLines.length; // borders + divider + buttons
 		const wide = width >= 76;
 		const sidebarWidth = wide ? Math.max(16, ...SETTINGS_CATEGORIES.map((c) => visibleWidth(t(`settings.category.${c}`)) + 4)) : 0;
 		const contentWidth = wide ? inner - sidebarWidth - 3 : inner - 2;
+		const areaHeight = mainHeight - 4; // borders + divider + buttons
 		// 宽屏：正文按 " 分类栏 │ 内容 " 分两格，内容从这一列开始；窄屏只有内容。
 		const contentCol = wide ? sidebarWidth + 3 : 0;
 		const category = t(`settings.category.${state.category}`);
@@ -384,7 +381,7 @@ export class SettingsDialog {
 		const labels = buttons.map((button) => `${button.key} ${button.label}`);
 		const close = labels.map((label, i) => renderButton(i, `[ ${label} ]`, visibleWidth(label) + 6)).join(" ");
 		// 按钮行的可点区间（每个按钮 `[ q Close ]` 恰好是 label + 6 列，之间隔一格）：窄屏只画选中的那个。
-		const buttonRow = areaHeight + messageLines.length + 1;
+		const buttonRow = areaHeight + 1;
 		if (width < 76) {
 			this.clickables.push({ row: buttonRow, from: 0, to: inner, hit: { region: "buttons", index: selectedButton } });
 		} else {
@@ -397,7 +394,6 @@ export class SettingsDialog {
 		}
 		const main = frame([
 			...area,
-			...messageLines.map((line) => theme.fg(state.error ? "error" : "muted", ` ${line}`)),
 			FRAME_DIVIDER,
 			fit(width < 76 ? renderButton(selectedButton, `[ ${labels[selectedButton]} ] ${selectedButton + 1}/${labels.length}`, inner) : close, inner),
 		], {
@@ -408,7 +404,7 @@ export class SettingsDialog {
 			titleStyle: (s) => theme.bold(theme.fg("accent", s)),
 			metaStyle: (s) => theme.fg("dim", s),
 		});
-		return [...main, ...detailBox];
+		return [...main, ...auxiliaryBox];
 	}
 
 	/**
@@ -452,37 +448,50 @@ export class SettingsDialog {
 		return lines;
 	}
 
-	/**
-	 * 底部独立说明框（lazygit 风格）：当前项的 id / 名称:值 / 说明，可用 PgUp/PgDn 滚动。
-	 * 画成一个单独的 muted 边框方框，和主对话框竖直堆叠，高度不够（height < 11）时不画。
-	 * **只有带说明的项才画这个框**（布局宽度、快捷键、以及出问题的主题行）：其余设置在行上
-	 * 就看得懂，框里只剩重复的行名和值，白占高度。
-	 */
-	private detailBox(width: number, height: number): string[] {
-		if (width < 16 || height < 11) return [];
+	private feedback(): string[] {
+		const { state, theme } = this.o;
+		const messages: string[] = [];
+		if (state.loading || state.saving) messages.push(theme.fg("muted", t(state.loading ? "settings.loading" : "settings.saving")));
+		if (state.error) messages.push(theme.fg("error", state.error));
+		if (state.notice) messages.push(theme.fg("muted", state.notice));
+		return messages;
+	}
+
+	/** 操作结果和当前项说明共用一个底部框，中间以横线分隔，整体可用 PgUp/PgDn 滚动。 */
+	private auxiliaryBox(width: number, height: number): string[] {
 		const { theme, state } = this.o;
-		const items = this.items();
+		const feedback = this.feedback();
 		const pos = this.position();
+		// 新的操作结果必须从头展示，不能被上一次说明框的滚动位置藏住。
+		const feedbackKey = feedback.length ? `${state.category}/${state.keyScope}/${pos.cursor}/${feedback.join("\n")}` : "";
+		if (feedbackKey !== this.lastFeedback) pos.detailScroll = 0;
+		this.lastFeedback = feedbackKey;
+		// 极矮屏优先保留操作结果和至少 6 行主框，放不下额外边框时退化为一行。
+		if (height < 9) return feedback.length ? [fit(` ${feedback[0]}`, width)] : [];
+		const items = this.items();
 		const cursor = clamp(pos.cursor, 0, Math.max(0, items.length - 1));
 		const item = items[cursor];
-		if (!item?.description) return [];
 		const inner = width - 2;
 		/** The theme row's id is its category name; showing it there would be noise. */
 		const idNoise = state.category;
-		const detail = [
-			item.id === idNoise ? "" : item.id,
-			item.value ? `${item.label}: ${item.value}` : "",
-			item.description,
-		]
-			.filter((text) => text.length > 0)
-			.flatMap((text) => wrapTextWithAnsi(text, Math.max(1, inner - 2)));
-		if (!detail.length) return [];
-		// 方框最多占半屏、至多 6 行正文，剩余高度留给主对话框。
-		const bodyHeight = Math.max(1, Math.min(detail.length, Math.floor(height / 2) - 2, 6));
-		pos.detailScroll = clamp(pos.detailScroll, 0, Math.max(0, detail.length - bodyHeight));
-		const body = detail.slice(pos.detailScroll, pos.detailScroll + bodyHeight).map((line) => theme.fg("muted", fit(` ${line}`, inner)));
-		const scroll = `${pos.detailScroll > 0 ? "↑ " : ""}${pos.detailScroll + bodyHeight < detail.length ? "↓ PgDn" : ""}`.trim();
-		const meta = [items.length > 1 ? `${cursor + 1}/${items.length}` : "", scroll].filter(Boolean).join("  ");
+		const detail = height >= 11 && item?.description
+			? [
+					item.id === idNoise ? "" : item.id,
+					item.value ? `${item.label}: ${item.value}` : "",
+					item.description,
+				]
+					.filter((text) => text.length > 0)
+					.flatMap((text) => wrapTextWithAnsi(text, Math.max(1, inner - 2)))
+					.map((line) => theme.fg("muted", line))
+			: [];
+		const messages = feedback.flatMap((text) => wrapTextWithAnsi(text, Math.max(1, inner - 2)));
+		const content = [...messages, ...(messages.length && detail.length ? [FRAME_DIVIDER] : []), ...detail];
+		if (!content.length) return [];
+		const bodyHeight = Math.max(1, Math.min(content.length, Math.floor(height / 2) - 2, height - 8, 6));
+		pos.detailScroll = clamp(pos.detailScroll, 0, Math.max(0, content.length - bodyHeight));
+		const body = content.slice(pos.detailScroll, pos.detailScroll + bodyHeight).map((line) => line === FRAME_DIVIDER ? line : fit(` ${line}`, inner));
+		const scroll = `${pos.detailScroll > 0 ? "↑ " : ""}${pos.detailScroll + bodyHeight < content.length ? "↓ PgDn" : ""}`.trim();
+		const meta = [detail.length && items.length > 1 ? `${cursor + 1}/${items.length}` : "", scroll].filter(Boolean).join("  ");
 		return frame(body, {
 			width,
 			height: body.length + 2,
