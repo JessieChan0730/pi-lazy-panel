@@ -115,6 +115,27 @@ test("layout category shows the ratio value and the width description in the det
 	// 不同比例下显示的数值不同，整幅渲染必然不一样。
 	assert.notEqual(a, wide.text());
 });
+test("setting details show localized labels and descriptions without internal keys", () => {
+	try {
+		for (const language of ["en", "zh"] as const) {
+			initI18n(language);
+			const h = makeDialog();
+			h.state.category = "layout";
+			assert.doesNotMatch(h.text(), /leftColumnRatio/);
+			assert.ok(h.text().includes(`${t("settings.leftWidth")}: 25%`));
+			assert.ok(h.text().includes(t("settings.widthDescription").slice(0, 25)));
+			h.state.category = "keybindings";
+			assert.doesNotMatch(h.text(), /keyScope/);
+			assert.ok(h.text().includes(t("settings.keyScope")));
+			assert.ok(h.text().includes(t("settings.scopeDescription").slice(0, 25)));
+			h.state.positions.global = { cursor: 1, scroll: 0, detailScroll: 0 };
+			assert.doesNotMatch(h.text(), /move-down/);
+			assert.ok(h.text().includes(t("settings.layerDescription").slice(0, 25)));
+		}
+	} finally {
+		initI18n("en");
+	}
+});
 test("the detail box only appears for items that carry a description", () => {
 	// 布局和快捷键本来就容易看错，底部说明框（第二个 ┌ 开头的方框）留着；
 	// 常规 / 主题行自己说得清，没有说明就不画框，把高度还给列表。
@@ -179,7 +200,8 @@ test("feedback and existing descriptions share one bottom frame with a divider",
 		const bottom = lines.slice(boxes[1]);
 		assert.ok(bottom[1]!.includes(t("settings.themeApplied", { name: "orange" })));
 		assert.ok(bottom[2]!.startsWith("├"), "result and explanation are separated");
-		assert.ok(bottom.some((line) => line.includes(category === "layout" ? "leftColumnRatio" : "keyScope")));
+		assert.ok(bottom.some((line) => line.includes(t(category === "layout" ? "settings.leftWidth" : "settings.keyScope"))));
+		assert.doesNotMatch(bottom.join("\n"), /leftColumnRatio|keyScope/);
 		h.state.notice = undefined;
 		const descriptionOnly = h.text().split("\n");
 		assert.equal(descriptionOnly.filter((line) => line.startsWith("┌")).length, 2);

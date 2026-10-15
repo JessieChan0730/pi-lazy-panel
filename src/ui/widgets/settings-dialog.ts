@@ -478,11 +478,8 @@ export class SettingsDialog {
 		const cursor = clamp(pos.cursor, 0, Math.max(0, items.length - 1));
 		const item = items[cursor];
 		const inner = width - 2;
-		/** The theme row's id is its category name; showing it there would be noise. */
-		const idNoise = state.category;
 		const detail = height >= 11 && item?.description
 			? [
-					item.id === idNoise ? "" : item.id,
 					item.value ? `${item.label}: ${item.value}` : "",
 					item.description,
 				]
