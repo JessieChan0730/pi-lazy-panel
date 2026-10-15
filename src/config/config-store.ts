@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { hostname } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
 import { KEY_SCOPES, LEFT_COLUMN_RATIO_MAX, LEFT_COLUMN_RATIO_MIN } from "../constants.ts";
@@ -38,7 +39,7 @@ export interface ConfigSaveResult {
 
 /** File-operation seam for deterministic failure tests; normal callers omit it. */
 export interface ConfigStoreOptions {
-	io?: Partial<Pick<typeof fs, "open" | "realpath" | "readlink" | "rename" | "stat" | "unlink" | "rmdir" | "mkdir">>;
+	io?: Partial<Pick<typeof fs, "open" | "readFile" | "writeFile" | "readdir" | "realpath" | "readlink" | "rename" | "stat" | "unlink" | "rmdir" | "mkdir">>;
 	lockTimeoutMs?: number;
 }
 
@@ -50,6 +51,29 @@ const FIELD_VALUES = {
 
 /** How far `resolveTarget` follows a chain of links, mirroring the kernel's ELOOP cap. */
 const MAX_LINK_DEPTH = 32;
+
+/** What a lock directory holds: who took it, and since when. */
+interface LockOwner {
+	pid: number;
+	host: string;
+	/** Epoch ms the lock was taken. */
+	at: number;
+}
+
+interface LockState {
+	owner: LockOwner | undefined;
+	ownerFile: string | undefined;
+	mtimeMs: number;
+	reclaimable: boolean;
+}
+
+/**
+ * How long a lock no process can vouch for may sit before we break it: one whose
+ * record is missing or unreadable, or whose owner lives on another machine (a
+ * shared home directory), where a PID says nothing about liveness.
+ * A known live local process is never evicted based on age alone.
+ */
+const STALE_LOCK_MS = 30_000;
 
 /** Unlike loadConfig, this never converts a broken file to writable defaults. */
 export async function readSnapshot(file: string): Promise<ConfigSnapshot> {
@@ -94,19 +118,7 @@ export async function savePatch(file: string, baseline: ConfigSnapshot, patch: S
 	const mode = await existingMode(io, file);
 	const lock = `${file}.lock`;
 	await io.mkdir(dirname(file), { recursive: true });
-	const deadline = performance.now() + (options.lockTimeoutMs ?? 5000);
-	while (true) {
-		try {
-			await io.mkdir(lock);
-			break;
-		} catch (error) {
-			if (!hasCode(error, "EEXIST")) throw new Error(`Cannot acquire config lock ${lock}`, { cause: error });
-		}
-		if (performance.now() >= deadline) {
-			throw new Error(`Timed out waiting for config lock ${lock}; close all pi processes before removing a stale lock directory`);
-		}
-		await delay(25);
-	}
+	const ownerFile = await acquireLock(io, lock, options.lockTimeoutMs ?? 5000);
 
 	let snapshot: ConfigSnapshot;
 	try {
@@ -177,19 +189,138 @@ export async function savePatch(file: string, baseline: ConfigSnapshot, patch: S
 		}
 	} catch (error) {
 		try {
-			await io.rmdir(lock);
+			await removeLock(io, lock, ownerFile);
 		} catch (unlockError) {
 			throw new AggregateError([error, unlockError], `Config save failed; cannot release lock ${lock}`, { cause: unlockError });
 		}
 		throw error;
 	}
 	try {
-		await io.rmdir(lock);
+		await removeLock(io, lock, ownerFile);
 	} catch {
 		// Commit already succeeded: callers must apply the snapshot, not report rollback.
 		return { snapshot, warnings: [`Cannot release config lock ${lock}; close all pi processes before removing this lock directory`] };
 	}
 	return { snapshot, warnings: [] };
+}
+
+async function acquireLock(io: typeof fs, lock: string, timeoutMs: number): Promise<string> {
+	const id = randomUUID();
+	const pending = `${lock}.${id}.pending`;
+	const ownerFile = `owner-${id}.json`;
+	const owner: LockOwner = { pid: process.pid, host: hostname(), at: Date.now() };
+	await io.mkdir(pending, { mode: 0o700 });
+	try {
+		// 先写完整 owner 再发布目录，避免新锁短暂为空，被另一个回收者的 rmdir 误删。
+		await io.writeFile(join(pending, ownerFile), JSON.stringify(owner), { flag: "wx", mode: 0o600 });
+		const deadline = performance.now() + timeoutMs;
+		while (true) {
+			const state = await readLockState(io, lock);
+			if (!state || (isStaleLock(state) && await breakStaleLock(io, lock, state))) {
+				try {
+					await io.rename(pending, lock);
+					return ownerFile;
+				} catch (error) {
+					// Windows may report EPERM/EACCES instead of ENOTEMPTY for an existing directory.
+					const occupied = ["EEXIST", "ENOTEMPTY", "EPERM", "EACCES"].some((code) => hasCode(error, code));
+					if (!occupied || !await readLockState(io, lock)) {
+						throw new Error(`Cannot acquire config lock ${lock}`, { cause: error });
+					}
+				}
+			}
+			if (performance.now() >= deadline) {
+				throw new Error(`Timed out waiting for config lock ${lock}${describeHolder((await readLockState(io, lock))?.owner)}; close all pi processes before removing a stale lock directory`);
+			}
+			await delay(25);
+		}
+	} catch (error) {
+		try {
+			await removeLock(io, pending, ownerFile);
+		} catch (cleanupError) {
+			throw new AggregateError([error, cleanupError], `Cannot acquire config lock or remove pending directory ${pending}`, { cause: cleanupError });
+		}
+		throw error;
+	}
+}
+
+/** Only a single owner record (or an empty legacy lock) is safe to reclaim. */
+async function readLockState(io: typeof fs, lock: string): Promise<LockState | undefined> {
+	let mtimeMs: number;
+	let files: string[];
+	try {
+		mtimeMs = (await io.stat(lock)).mtimeMs;
+		files = await io.readdir(lock);
+	} catch (error) {
+		if (hasCode(error, "ENOENT")) return undefined;
+		throw new Error(`Cannot inspect config lock ${lock}`, { cause: error });
+	}
+	const ownerFile = files.length === 1 && /^(?:owner|owner-[\da-f-]+)\.json$/.test(files[0]!) ? files[0] : undefined;
+	// Unknown contents must not be deleted, even if their directory is old.
+	const reclaimable = files.length === 0 || ownerFile !== undefined;
+	return { owner: ownerFile ? await readLockOwner(io, join(lock, ownerFile)) : undefined, ownerFile, mtimeMs, reclaimable };
+}
+
+async function readLockOwner(io: typeof fs, file: string): Promise<LockOwner | undefined> {
+	try {
+		const parsed: unknown = JSON.parse(await io.readFile(file, "utf8"));
+		if (isPlainObject(parsed) && typeof parsed.pid === "number" && Number.isSafeInteger(parsed.pid) && parsed.pid > 0 && parsed.pid <= 0x7fffffff && typeof parsed.host === "string" && parsed.host.length > 0) {
+			const at = typeof parsed.at === "number" && Number.isFinite(parsed.at) && Math.abs(parsed.at) <= 8.64e15 ? parsed.at : 0;
+			return { pid: parsed.pid, host: parsed.host, at };
+		}
+	} catch {
+		// 没有记录（旧版本留下的锁、mkdir 之后立刻崩了）或读到一半被删：交给年龄判断。
+	}
+	return undefined;
+}
+
+function isStaleLock(state: LockState): boolean {
+	if (!state.reclaimable) return false;
+	if (state.owner?.host === hostname()) return isProcessGone(state.owner.pid);
+	return Date.now() - state.mtimeMs >= STALE_LOCK_MS;
+}
+
+/** Whether `pid` is known to be dead; anything we cannot tell (EPERM, another user's process) counts as alive. */
+function isProcessGone(pid: number): boolean {
+	if (!Number.isInteger(pid) || pid <= 0) return true;
+	try {
+		process.kill(pid, 0);
+		return false;
+	} catch (error) {
+		return hasCode(error, "ESRCH");
+	}
+}
+
+async function breakStaleLock(io: typeof fs, lock: string, state: LockState): Promise<boolean> {
+	try {
+		// 只删观察到的那一任属主的唯一文件名；后来者的文件名不同，rmdir 会以 ENOTEMPTY 保护它。
+		await removeLock(io, lock, state.ownerFile);
+		return true;
+	} catch (error) {
+		throw new Error(`Cannot reclaim stale config lock ${lock}`, { cause: error });
+	}
+}
+
+async function removeLock(io: typeof fs, lock: string, ownerFile: string | undefined): Promise<void> {
+	if (ownerFile) {
+		try {
+			await io.unlink(join(lock, ownerFile));
+		} catch (error) {
+			if (!hasCode(error, "ENOENT")) throw error;
+		}
+	}
+	try {
+		await io.rmdir(lock);
+	} catch (error) {
+		// A successor may already have published its nonempty directory.
+		if (!["ENOENT", "ENOTEMPTY", "EEXIST"].some((code) => hasCode(error, code))) throw error;
+	}
+}
+
+/** The holder's description for the timeout message, or "" when there is no usable record. */
+function describeHolder(owner: LockOwner | undefined): string {
+	if (!owner) return "";
+	const since = owner.at > 0 ? new Date(owner.at).toISOString() : "unknown";
+	return ` (held by pid ${owner.pid} on ${owner.host} since ${since})`;
 }
 
 /**
