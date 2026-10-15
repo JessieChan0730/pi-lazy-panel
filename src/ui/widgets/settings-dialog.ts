@@ -200,7 +200,7 @@ export class SettingsDialog {
 	move(delta: number): void {
 		const state = this.o.state;
 		if (state.region === "categories") {
-			state.category = SETTINGS_CATEGORIES[clamp(SETTINGS_CATEGORIES.indexOf(state.category) + delta, 0, SETTINGS_CATEGORIES.length - 1)]!;
+			this.selectCategory(SETTINGS_CATEGORIES[clamp(SETTINGS_CATEGORIES.indexOf(state.category) + delta, 0, SETTINGS_CATEGORIES.length - 1)]!);
 		} else if (state.region === "list") {
 			const position = this.position();
 			position.cursor = clamp(position.cursor + delta, 0, Math.max(0, this.items().length - 1));
@@ -208,6 +208,12 @@ export class SettingsDialog {
 		} else {
 			state.button = clamp(state.button + delta, 0, this.buttons().length - 1);
 		}
+	}
+
+	private selectCategory(category: SettingsState["category"]): void {
+		const state = this.o.state;
+		if (state.category !== category) state.notice = undefined;
+		state.category = category;
 	}
 
 	/**
@@ -227,7 +233,7 @@ export class SettingsDialog {
 		const state = this.o.state;
 		if (hit.region === "categories") {
 			const category = SETTINGS_CATEGORIES[hit.index];
-			if (category) state.category = category;
+			if (category) this.selectCategory(category);
 		} else if (hit.region === "list") {
 			const position = this.position();
 			position.cursor = clamp(hit.index, 0, Math.max(0, this.items().length - 1));

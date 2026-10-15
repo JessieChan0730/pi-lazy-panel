@@ -1,7 +1,7 @@
 /** Settings menus and persistence orchestration. Widgets never read or write files. */
-import { resolveConfig } from "../../config/config.ts";
+import { resolveConfig, type ResolvedConfig, type SettingsPatch } from "../../config/config.ts";
 import type { KeymapPatchValue } from "../../config/config-store.ts";
-import { chordLabel, conflictKey, keymapConflicts, parseChord, type KeyConflict } from "../../config/keys.ts";
+import { chordLabel, conflictKey, keymapConflicts, labelsFor, parseChord, type KeyConflict } from "../../config/keys.ts";
 import { actionDescription, DEFAULT_KEYMAP, scopeTitle } from "../../config/keymap.ts";
 import { KEY_SCOPES, LEFT_COLUMN_RATIO_MAX, LEFT_COLUMN_RATIO_MIN } from "../../constants.ts";
 import { t } from "../../i18n/index.ts";
@@ -111,8 +111,10 @@ export function editSetting(h: SettingsFlowHost, key: string): void {
 			title: t("settings.keyScope"), items: KEY_SCOPES.map(scopeTitle), initialIndex: KEY_SCOPES.indexOf(s.keyScope), hints: hints(),
 			onSelect: (index) => {
 				h.closeDialogs();
-				if (current(h, generation))
+				if (current(h, generation)) {
+					if (s.keyScope !== KEY_SCOPES[index]) s.notice = undefined;
 					s.keyScope = KEY_SCOPES[index]!;
+				}
 				h.refreshSettings();
 			},
 			onCancel: () => h.closeDialogs(),
@@ -373,7 +375,7 @@ function cancelBindingEdit(h: SettingsFlowHost, scope: KeyScope, action: ActionI
 	openBindingEditor(h, action);
 }
 
-/** 落盘这次键位改动，成功且没有错误时回到绑定菜单（可以接着编下一条）；`notice` 追加在"已生效"后面。 */
+/** 落盘这次键位改动，成功且没有错误时回到绑定菜单；冲突提示追加在具体设置结果后面。 */
 function saveBindingEdit(h: SettingsFlowHost, action: ActionId, generation: number, notice?: string): void {
 	void saveSettings(h).then(() => {
 		const s = h.state.settings;
@@ -502,6 +504,32 @@ export function exitSettings(h: SettingsFlowHost): void {
 		onCancel: () => h.closeDialogs(),
 	});
 }
+/** Use the committed values, after apply has switched the UI language. */
+function appliedNotices(config: ResolvedConfig, patch: SettingsPatch): string[] {
+	const notices: string[] = [];
+	for (const key of Object.keys(patch) as EditableSetting[]) {
+		if (key === "keymap") {
+			for (const scope of KEY_SCOPES) {
+				for (const action of Object.keys(patch.keymap?.[scope] ?? {}) as ActionId[]) {
+					notices.push(t("settings.keyApplied", {
+						scope: scopeTitle(scope), action: actionDescription(action),
+						value: labelsFor(config.keymap, scope, action).join(" / ") || t("settings.unbound"),
+					}));
+				}
+			}
+			continue;
+		}
+		const setting = t(key === "leftColumnRatio" ? "settings.leftWidth" : `settings.${key}`);
+		const value = key === "locale"
+			? (config.locale ? t(`settings.language.${config.locale}`) : t("settings.system"))
+			: key === "leftColumnRatio"
+				? `${Number((config.leftColumnRatio * 100).toFixed(2))}%`
+				: key === "defaultScope" ? t(`settings.scope.${config.defaultScope}`) : t(`settings.sort.${config.defaultSort}`);
+		notices.push(t("settings.settingApplied", { setting, value }));
+	}
+	return notices;
+}
+
 export async function saveSettings(h: SettingsFlowHost, exit = false): Promise<void> {
 	const s = h.state.settings;
 	if (s.saving || s.loading || !s.baseline || !h.settingsSource || s.phase !== "open" || h.isDisposed())
@@ -512,12 +540,13 @@ export async function saveSettings(h: SettingsFlowHost, exit = false): Promise<v
 		return;
 	}
 	const generation = s.generation;
+	const patch = { ...s.patch };
 	s.saving = true;
 	s.error = undefined;
 	s.notice = undefined;
 	h.refreshSettings();
 	try {
-		const result = await h.settingsSource.save(s.baseline, { ...s.patch });
+		const result = await h.settingsSource.save(s.baseline, patch);
 		if (!current(h, generation))
 			return;
 		// The merged snapshot (including unrelated external edits) is the new baseline.
@@ -548,7 +577,11 @@ export async function saveSettings(h: SettingsFlowHost, exit = false): Promise<v
 				s.error = t("settings.themeApplyFailed", { error: switched?.error ?? name });
 			}
 		}
-		s.notice = [result.warnings.length ? t("settings.savedWarning", { warning: result.warnings.join("; ") }) : t("settings.saved"), themeNotice].filter((text): text is string => !!text).join(" · ");
+		s.notice = [
+			...(!s.error ? appliedNotices(s.config, patch) : []),
+			themeNotice,
+			result.warnings.length ? t("settings.savedWarning", { warning: result.warnings.join("; ") }) : undefined,
+		].filter((text): text is string => !!text).join(" · ") || undefined;
 		// Keep errors/warnings visible rather than losing them on save-and-exit.
 		if (exit && !s.error && !result.warnings.length)
 			h.closeSettings();

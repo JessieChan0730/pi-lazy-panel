@@ -139,7 +139,7 @@ test("status messages use a bottom frame outside the main settings box in both l
 			for (const width of [60, 76, 108]) {
 				for (const status of ["notice", "error", "loading", "saving"] as const) {
 					const h = makeDialog();
-					if (status === "notice") h.state.notice = t("settings.saved");
+					if (status === "notice") h.state.notice = t("settings.themeApplied", { name: "orange" });
 					else if (status === "error") h.state.error = t("settings.saveFailed", { error: "conflict ".repeat(12) });
 					else h.state[status] = true;
 					const lines = h.dialog.render(width, 28).map(stripTerminalSequences);
@@ -148,9 +148,9 @@ test("status messages use a bottom frame outside the main settings box in both l
 					const boxes = lines.flatMap((line, i) => line.startsWith("┌") ? [i] : []);
 					assert.equal(boxes.length, 2, "one main box and one auxiliary box");
 					assert.ok(lines[boxes[1]! - 1]!.startsWith("└"), "main box closes before feedback");
-					const expected = status === "notice" ? t("settings.saved") : status === "error" ? "conflict" : t(`settings.${status}`);
+					const expected = status === "notice" ? t("settings.themeApplied", { name: "orange" }) : status === "error" ? "conflict" : t(`settings.${status}`);
 					assert.ok(lines.slice(boxes[1]).some((line) => line.includes(expected)));
-					if (status === "notice") assert.ok(lines.some((line) => line.includes(t("settings.saved"))));
+					if (status === "notice") assert.ok(lines.some((line) => line.includes(t("settings.themeApplied", { name: "orange" }))));
 					if (width < 76) continue;
 					const divider = lines.findIndex((line) => line.startsWith("├"));
 					const sidebarColumn = lines[1]!.indexOf("│", 1);
@@ -172,12 +172,12 @@ test("feedback and existing descriptions share one bottom frame with a divider",
 	for (const category of ["layout", "keybindings"] as const) {
 		const h = makeDialog();
 		h.state.category = category;
-		h.state.notice = t("settings.saved");
+		h.state.notice = t("settings.themeApplied", { name: "orange" });
 		const lines = h.text().split("\n");
 		const boxes = lines.flatMap((line, i) => line.startsWith("┌") ? [i] : []);
 		assert.equal(boxes.length, 2, "do not stack a third box for feedback");
 		const bottom = lines.slice(boxes[1]);
-		assert.ok(bottom[1]!.includes(t("settings.saved")));
+		assert.ok(bottom[1]!.includes(t("settings.themeApplied", { name: "orange" })));
 		assert.ok(bottom[2]!.startsWith("├"), "result and explanation are separated");
 		assert.ok(bottom.some((line) => line.includes(category === "layout" ? "leftColumnRatio" : "keyScope")));
 		h.state.notice = undefined;
@@ -200,11 +200,11 @@ test("long feedback scrolls from any region and new results start at the top", (
 	assert.match(text, /END_OF_ERROR/);
 	assert.equal(h.state.positions.general?.cursor, 0);
 	h.state.error = undefined;
-	h.state.notice = t("settings.saved");
-	assert.match(h.text(60, 18), /Settings applied/);
+	h.state.notice = t("settings.themeApplied", { name: "orange" });
+	assert.match(h.text(60, 18), /Theme set to: orange/);
 	assert.equal(h.state.positions.general?.detailScroll, 0);
 	const lines = screen(h.dialog);
-	const result = cellAt(lines, t("settings.saved"));
+	const result = cellAt(lines, t("settings.themeApplied", { name: "orange" }));
 	assert.equal(h.dialog.hitAt(result.x, result.y), undefined, "feedback does not intercept list clicks");
 	const close = cellAt(lines, `[ q ${t("hint.close")} ]`);
 	assert.deepEqual(h.dialog.hitAt(close.x, close.y), { region: "buttons", index: 0 });
@@ -213,15 +213,55 @@ test("short viewports retain feedback without sacrificing the main controls", ()
 	for (const height of [7, 8, 9, 10, 11]) {
 		const h = makeDialog();
 		h.state.category = "layout";
-		h.state.notice = t("settings.saved");
+		h.state.notice = t("settings.themeApplied", { name: "orange" });
 		const lines = h.dialog.render(60, height).map(stripTerminalSequences);
 		assert.equal(lines.length, height);
 		assert.ok(lines.every((line) => visibleWidth(line) === 60));
-		assert.ok(lines.some((line) => line.includes(t("settings.saved"))));
+		assert.ok(lines.some((line) => line.includes(t("settings.themeApplied", { name: "orange" }))));
 		assert.ok(lines.some((line) => line.includes(`[ q ${t("hint.close")} ]`)));
 		assert.equal(lines.filter((line) => line.startsWith("┌")).length, height < 9 ? 1 : 2);
 	}
 });
+test("success feedback survives focus changes but clears when the keyboard changes category", () => {
+	const h = makeDialog();
+	h.dialog.open();
+	h.state.category = "theme";
+	h.state.region = "list";
+	h.state.notice = t("settings.themeApplied", { name: "orange" });
+	h.dialog.handleInput("h");
+	assert.equal(h.state.region, "categories");
+	assert.equal(h.state.notice, "Theme set to: orange");
+	h.dialog.handleInput("j"); // Already at the last category.
+	assert.equal(h.state.notice, "Theme set to: orange");
+	h.dialog.handleInput("k");
+	assert.equal(h.state.category, "keybindings");
+	assert.equal(h.state.notice, undefined);
+	assert.doesNotMatch(h.text(), /Theme set to/);
+	h.dialog.handleInput("j");
+	assert.equal(h.state.category, "theme");
+	assert.doesNotMatch(h.text(), /Theme set to/);
+	assert.equal(h.text().split("\n").filter((line) => line.startsWith("┌")).length, 1);
+});
+
+test("mouse category changes clear success feedback without hiding errors or descriptions", () => {
+	for (const input of ["click", "wheel"] as const) {
+		const h = makeDialog();
+		h.dialog.open();
+		h.state.notice = t("settings.themeApplied", { name: "orange" });
+		h.state.error = "Save failed";
+		const lines = screen(h.dialog);
+		const target = cellAt(lines, input === "click" ? "Layout" : "› General");
+		if (input === "click") h.dialog.focusHit(h.dialog.hitAt(target.x, target.y)!);
+		else h.dialog.wheel(target.x, target.y, 1);
+		assert.equal(h.state.category, "layout");
+		assert.equal(h.state.notice, undefined);
+		assert.equal(h.state.error, "Save failed");
+		assert.doesNotMatch(h.text(), /Theme set to/);
+		assert.match(h.text(), /Save failed/);
+		assert.match(h.text(), /SESSIONS and TREE share this width/);
+	}
+});
+
 test("action shortcuts work from categories and list without focusing buttons", () => {
 	for (const region of ["categories", "list"] as const) {
 		const h = makeDialog();

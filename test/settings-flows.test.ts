@@ -130,7 +130,7 @@ test("General pickers write immediately; cancel closes the child and undo never 
 	assert.deepEqual(h.state.baseline?.raw, { locale: "zh", defaultScope: "all" });
 	assert.equal(settingsDraft(h.state)?.locale, "zh");
 	assert.equal(settingsDirtyCount(h.state), 0);
-	assert.match(h.state.notice!, /applied|Saved/i);
+	assert.equal(h.state.notice, "Interface language set to: Simplified Chinese");
 	// 再选一次当前值：没有改动，也就没有写入。
 	editSetting(h.host, "locale");
 	h.menu()!.onSelect(1);
@@ -161,6 +161,34 @@ test("returning to implicit defaults clears edits without writing explicit overr
 	assert.equal(h.writes(), 0);
 });
 
+test("success feedback names each changed setting and value in the applied language", async () => {
+	try {
+		for (const language of ["en", "zh"] as const) {
+			const h = fixture({}, { apply: (config) => {
+				initI18n(config.locale);
+			} });
+			await readSettings(h.host);
+			setSettingsDraft(h.state, "locale", language);
+			await saveSettings(h.host);
+			assert.equal(h.state.notice, language === "zh" ? "设置界面语言为：简体中文" : "Interface language set to: English");
+			for (const [key, value, expected] of [
+				["defaultScope", "all", language === "zh" ? "设置默认会话范围为：全部目录" : "Default session scope set to: All folders"],
+				["defaultSort", "title", language === "zh" ? "设置默认排序为：标题" : "Default sort order set to: Title"],
+				["leftColumnRatio", 0.3, language === "zh" ? "设置左栏宽度为：30%" : "Left column width set to: 30%"],
+			] as const) {
+				setSettingsDraft(h.state, key, value);
+				await saveSettings(h.host);
+				assert.equal(h.state.notice, expected);
+			}
+			editSetting(h.host, "theme");
+			h.menu()!.onSelect(1);
+			assert.equal(h.state.notice, language === "zh" ? "主题设置为：nord" : "Theme set to: nord");
+		}
+	} finally {
+		initI18n("en");
+	}
+});
+
 test("scope picker lists all five scopes and preserves independent positions", async () => {
 	const h = fixture();
 	await readSettings(h.host);
@@ -172,6 +200,10 @@ test("scope picker lists all five scopes and preserves independent positions", a
 	assert.equal(h.menu(), undefined);
 	assert.equal(h.state.positions.global.cursor, 4);
 	assert.equal(h.writes(), 0);
+	h.state.notice = "Previous binding saved";
+	editSetting(h.host, "keyScope");
+	h.menu()!.onSelect(0);
+	assert.equal(h.state.notice, undefined);
 });
 test("restore defaults confirms, marks only existing overrides for deletion, preserves unknowns", async () => {
 	const h = fixture({ locale: "zh", defaultScope: "all", unknown: { future: true } });
@@ -192,7 +224,7 @@ test("restore defaults confirms, marks only existing overrides for deletion, pre
 	assert.equal(h.localeRefreshes(), 1);
 	assert.deepEqual(h.state.patch, {});
 	assert.equal(settingsDraft(h.state)?.locale, undefined);
-	assert.match(h.state.notice!, /applied|Saved/i);
+	assert.equal(h.state.notice, "Interface language set to: Follow system · Default session scope set to: Current folder");
 });
 test("dirty exit defaults continue, discard requires second confirmation, clean exit immediate", async () => {
 	const h = fixture();
@@ -268,6 +300,7 @@ test("a failed write keeps the change, and s retries it", async () => {
 	assert.equal(h.state.error, undefined);
 	assert.equal(h.state.baseline?.raw.locale, "zh");
 	assert.equal(settingsRetryKind(h.state), undefined);
+	assert.equal(h.state.notice, "Interface language set to: Simplified Chinese");
 	// 改回磁盘上已有的值 = 放弃这次改动：还没有落盘的改动和错误一起清掉，也不去写文件。
 	fail = true;
 	editSetting(h.host, "locale");
@@ -420,6 +453,7 @@ test("keybinding editor adds, removes, unbinds and resets a binding, writing eac
 	assert.deepEqual(h.state.baseline?.raw.keymap, { sessions: { "session-delete": ["d", "ctrl+d"] } });
 	assert.equal(settingsDirtyCount(h.state), 0);
 	assert.ok(h.menu());
+	assert.equal(h.state.notice, "Key binding for Delete session(s) (Sessions pane) set to: d / Ctrl+d");
 	// Menu reopened after the add; remove the original "d".
 	h.menu()!.onSelect(1);
 	await settle();
@@ -431,6 +465,7 @@ test("keybinding editor adds, removes, unbinds and resets a binding, writing eac
 	assert.deepEqual(keymapDraftChords(h.state, "sessions", "session-delete"), ["d"]);
 	assert.ok(!keymapActionDirty(h.state, "sessions", "session-delete"));
 	assert.equal(h.state.baseline?.raw.keymap, undefined);
+	assert.match(h.state.notice!, /set to: d$/);
 	assert.equal(h.writes(), 3);
 });
 test("unbinding a default binding persists null and reset deletes the override on save", async () => {
@@ -602,7 +637,7 @@ test("theme picker switches pi on the spot, without a preview or a save step", a
 	assert.equal(h.state.activeTheme, "nord");
 	assert.equal(h.state.themeDraft, undefined);
 	assert.equal(settingsDirtyCount(h.state), 0);
-	assert.equal(h.state.notice, "Theme: nord");
+	assert.equal(h.state.notice, "Theme set to: nord");
 	assert.equal((h.state.patch as Record<string, unknown>).theme, undefined, "主题不写进面板配置草稿");
 	assert.equal(h.writes(), 0, "主题走 pi，不碰面板的配置文件");
 	// 再打开：光标落在当前主题上，pi 生效的就是它。
@@ -683,6 +718,7 @@ test("a failed theme switch keeps the theme as a retryable change", async () => 
 	assert.equal(h.state.error, undefined);
 	assert.equal(settingsRetryKind(h.state), undefined);
 	assert.equal(h.state.phase, "open");
+	assert.equal(h.state.notice, "Theme set to: nord");
 });
 test("reloading settings drops a pending failed theme switch", async () => {
 	const h = fixture();
