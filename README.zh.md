@@ -10,6 +10,8 @@ pi-lazy-panel 是 [pi](https://pi.dev) 会话和会话树管理的面板，提�
 
 围绕会话的常用操作（新建 / 恢复 / 分叉 / 克隆 / 改名 / 删除 / 压缩 / 导出 / 导入 / 分享 / 复制）都收敛成单键快捷键，全程无需鼠标。
 
+按 `,` 打开内置的**设置面板**：常规（语言、默认范围、默认排序）、布局（左侧栏宽度）、快捷键（按作用域，直接按下想绑的键来录入）、主题（切 pi 自己的主题）。每一处改动立即生效并写回 `~/.pi/agent/lazy-panel.json`，不需要手写 JSON。
+
 ## 界面预览
 
 ![pi-lazy-panel 界面预览](https://raw.githubusercontent.com/JessieChan0730/pi-lazy-panel/HEAD/assets/readme/preview-zh.png)
@@ -21,10 +23,11 @@ pi-lazy-panel 是 [pi](https://pi.dev) 会话和会话树管理的面板，提�
 3. 覆盖全套会话命令：resume / new / fork / clone / rename / delete / compact / export / import / share / copy
 4. 会话树导航：可恢复到任意节点，并选择「不摘要 / 摘要 / 自定义摘要」处理被放弃的分支
 5. lazygit 风格搜索：`/` 就地跳转、`n` / `N` 循环，支持 `name:` `model:` `path:` `tag:` `role:` `after:` `before:` 限定词
-6. 主题跟随 pi 自动切换
+6. 主题跟随 pi 自动切换——设置页直接切 pi 自己的主题，内置主题和 `~/.pi/agent/themes/` 下的自定义主题都在列表里
 7. 支持中英文（跟随系统语言，可在配置里覆盖）
-8. 快捷键完全可自定义：在 `~/.pi/agent/lazy-panel.json` 里重绑任意动作
+8. 快捷键完全可自定义：在设置页里改，或直接改 `~/.pi/agent/lazy-panel.json`
 9. 鼠标轻量适配（滚轮滚动、单击聚焦、双击进入 / 折叠）
+10. 内置设置面板（`,`）：常规 / 布局 / 快捷键 / 主题四类就地编辑，快捷键靠按键录入，会被按键冲突挡在写入之前，改一处立刻落盘一处
 
 ## 快速开始
 
@@ -38,7 +41,7 @@ pi install npm:pi-lazy-panel
 pi install git:github.com/JessieChan0730/pi-lazy-panel
 ```
 
-安装后在 pi 里执行 `/lazy-panel` 打开面板，`?` 可查看当前面板的全部快捷键。
+安装后在 pi 里执行 `/lazy-panel` 打开面板，`?` 可查看当前面板的全部快捷键，`,` 打开设置页。
 
 ## 本地开发
 
@@ -95,10 +98,13 @@ npm run i18n:check     # 中英文案对齐
 
 `keymap` 按 `scope`（`global` / `sessions` / `tree` / `content` / `tree-dialog`）分组，键为动作 id、值为一个或多个 chord（如 `"ctrl+d"`、`["A", "ctrl+space"]`）；用户提供的键位**整体替换**该动作的默认值，`null` 表示解绑。完整的动作 id 与键位说明见 [docs/keybindings.zh.md](./docs/keybindings.zh.md)。
 
+设置页（`,`）改的就是这个文件：只改动过的字段，其余内容（含缩进、行尾）原样保留；其他窗口的不相交修改会自动合并，同字段冲突时停下写入并提供重试。
+
 ## 下一步计划
 
-- 添加设置面板
-- 添加多主题 / 自定义主题
+0.2.0 加上了设置面板；0.2.x 系列用来修问题、打磨和代码优化，不加新功能。
+
+两个已知的显示问题仍未解决：关掉 `?` 后马上切面板会闪一帧残影；pi 处于 regular（主屏）模式时，会话很长会把面板顶部截断——后者用 `pi --tui-mode fullscreen`（或 pi 的 `settings.json` 里 `"tuiMode": "fullscreen"`）可以避开。
 
 ## 贡献
 

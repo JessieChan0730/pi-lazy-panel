@@ -296,7 +296,26 @@ async function breakStaleLock(io: typeof fs, lock: string, state: LockState): Pr
 		await removeLock(io, lock, state.ownerFile);
 		return true;
 	} catch (error) {
+		// Windows 上两个回收者同时 rmdir 同一个目录时，输的那一方拿到的是 EPERM/EACCES 而不是
+		// ENOTEMPTY；目录"待删除"时连 stat / readdir 都可能失败。所以删除失败不等于没回收成功：
+		// 回头看状态，那一任属主已经不在了就当回收成功，交给外层重新读一次，别把一次输掉的竞争
+		// 报成"设置未保存"（用户除了重试什么也做不了）。
+		if (await isReclaimed(io, lock, state)) return true;
 		throw new Error(`Cannot reclaim stale config lock ${lock}`, { cause: error });
+	}
+}
+
+/**
+ * Whether the stale lock we failed to remove is already gone or replaced by a new owner —
+ * the two ways a reclaim loses to another writer. 读不出来时按"已经不是那一任了"处理：
+ * 外层循环会重新读状态，最坏是等到超时给一句可读的超时提示。
+ */
+async function isReclaimed(io: typeof fs, lock: string, state: LockState): Promise<boolean> {
+	try {
+		const now = await readLockState(io, lock);
+		return now === undefined || now.ownerFile !== state.ownerFile;
+	} catch {
+		return true;
 	}
 }
 
