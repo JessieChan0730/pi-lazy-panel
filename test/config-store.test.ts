@@ -489,6 +489,25 @@ test("concurrent saves reclaim a crashed lock and still merge disjoint patches",
 	assert.deepEqual(await fs.readdir(join(file, "..")), ["lazy-panel.json"]);
 });
 
+test("a reclaim that loses the race is not reported as a failed save", async (t) => {
+	const file = await fixture(t);
+	const baseline = await readSnapshot(file);
+	await fs.mkdir(`${file}.lock`);
+	await writeLock(file, { pid: await exitedPid(), host: hostname(), at: Date.now() });
+	// 两个回收者同时 rmdir 同一个目录时，Windows 给输的那一方报 EPERM/EACCES 而不是 ENOTEMPTY。
+	// 这里让这一把 rmdir 先把目录删掉再报错，模拟"目录其实已经没了，我们却收到 EPERM"。
+	const saved = await savePatch(file, baseline, { locale: "zh" }, {
+		io: {
+			rmdir: async (path) => {
+				await fs.rmdir(path);
+				if (path === `${file}.lock`) throw Object.assign(new Error(`EPERM: operation not permitted, rmdir '${path}'`), { code: "EPERM" });
+			},
+		},
+	});
+	assert.deepEqual(saved.snapshot.raw, { locale: "zh" });
+	assert.deepEqual(await fs.readdir(join(file, "..")), ["lazy-panel.json"]);
+});
+
 test("keymap edits write set / unbind / reset and drop empty scopes", async (t) => {
 	const file = await fixture(t);
 	// set: single chord written as a string, multiple as an array.
