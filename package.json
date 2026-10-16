@@ -27,6 +27,7 @@
 		"docs/design.md",
 		"docs/keybindings.md",
 		"docs/keybindings.zh.md",
+		"docs/theme.md",
 		"README.md"
 	],
 	"type": "module",
