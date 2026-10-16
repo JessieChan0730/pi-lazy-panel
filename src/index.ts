@@ -32,7 +32,7 @@ import {
 	shareSession,
 } from "./actions/session-actions.ts";
 import { copyNodeText, labelNode, restoreNode } from "./actions/tree-actions.ts";
-import { loadConfig } from "./config/config.ts";
+import { loadConfig, readConfigSnapshot, saveConfigPatch } from "./config/config.ts";
 import { loadSessionFileState, updateSessionFileState } from "./config/archive.ts";
 import { loadPiSettings } from "./config/pi-settings.ts";
 import { COMMAND_NAME } from "./constants.ts";
@@ -44,6 +44,7 @@ import { filterSessions, listSessions, sortSessions } from "./data/sessions.ts";
 import { applyTreeFilter, loadTree } from "./data/tree.ts";
 import { LazyPanel } from "./ui/app.ts";
 import type { ActionSource, DataSource } from "./ui/ports.ts";
+import { attachKeyLog } from "./ui/key-log.ts";
 import { attachMouse } from "./ui/mouse-input.ts";
 import { mountPanelOverlay } from "./ui/overlay-lifecycle.ts";
 
@@ -121,6 +122,8 @@ export default function (pi: ExtensionAPI) {
 			let onOverlayHandle: ((handle: OverlayHandle) => void) | undefined;
 			// regular 模式下 pi 不开鼠标追踪，面板自己开；关闭时再关掉（fullscreen 由 pi 管，不碰）。
 			let disableMouse: (() => void) | undefined;
+			// 设了 LAZY_PANEL_KEY_LOG 才生效：把原始按键 dump 到文件，排查终端键位编码用。
+			let disableKeyLog: (() => void) | undefined;
 			const currentFile = ctx.sessionManager.getSessionFile();
 			const version = extensionVersion();
 
@@ -134,7 +137,10 @@ export default function (pi: ExtensionAPI) {
 					// 因此显示边界的错位另由 mountPanelOverlay 强刷处理。旧版本保留存在性判断。
 					if (typeof tui.setClearOnShrink === "function") tui.setClearOnShrink(true);
 					const panel = new LazyPanel({
-						theme,
+						// 回调参数 `theme` 是构造时的快照（pi 换主题时整体替换掉），面板要用 `ctx.ui.theme`
+						// 这个 live proxy，否则用户在 pi 的 /settings 里换了主题，面板会一直是旧颜色。
+						// 面板不拥有主题：颜色一律取自 pi 的主题，见 docs/theme.md。
+						theme: ctx.ui.theme as unknown as typeof theme,
 						data,
 						actions,
 						getHeight: () => tui.terminal.rows,
@@ -145,6 +151,30 @@ export default function (pi: ExtensionAPI) {
 						initialState: { scope: config.defaultScope, sort: config.defaultSort, treeFilter: piSettings.treeFilter },
 						leftColumnRatio: config.leftColumnRatio,
 						configDefaults: config,
+						settingsSource: {
+							read: () => readConfigSnapshot(getAgentDir()),
+							save: (baseline, patch) => saveConfigPatch(getAgentDir(), baseline, patch),
+							apply: (saved) => { initI18n(saved.locale); },
+						},
+						// 主题只有一个来源：pi。设置页列出 pi 能加载的主题，选中即切（走
+						// ctx.ui.setTheme，由 pi 负责写它自己的 settings.json 和热重载）；
+						// 失败时面板留下待重试的主题，s 再试一次。
+						themeSource: {
+							list: () => ctx.ui.getAllThemes(),
+							theme: ctx.ui.theme,
+							// 面板不自己记主题：ctx.ui.theme 就是 pi 当前活动（也是它保存）的那个。
+							savedName: () => ctx.ui.theme.name,
+							set: (name) => {
+								const result = ctx.ui.setTheme(name);
+								if (result.success) {
+									// 换主题后带颜色的缓存（CONTENT 排版 / changelog）要跟着丢，
+									// 面板自己的重绘交给 requestRender。
+									tui.invalidate();
+									tui.requestRender();
+								}
+								return result;
+							},
+						},
 						skipSummaryPrompt: piSettings.skipBranchSummaryPrompt,
 						// 打开时 SESSIONS 光标落到 pi 当前打开的会话上；新会话没有文件 / 还没列出时留在第一行。
 						...(currentFile ? { currentSessionFile: currentFile } : {}),
@@ -156,6 +186,7 @@ export default function (pi: ExtensionAPI) {
 					// fullscreen 模式 pi 已经开了鼠标并派给 overlay 的 handleMouse；regular 模式
 					// 由 attachMouse 自己开 SGR 上报并解析（fullscreen 下是 no-op）。
 					disableMouse = attachMouse(tui, panel);
+					disableKeyLog = attachKeyLog(tui);
 					if (args.trim() === "settings") panel.openSettings();
 					void panel.load();
 					return panel;
@@ -170,6 +201,7 @@ export default function (pi: ExtensionAPI) {
 			);
 			// 面板关闭后恢复终端自己的滚动 / 选择。
 			disableMouse?.();
+			disableKeyLog?.();
 		},
 	});
 }

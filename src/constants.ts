@@ -21,6 +21,8 @@ export const PINS_FILE_NAME = "lazy-panel-pins.json";
 
 /** Layout ratio for the left column (sessions + tree) vs. the right column (content). */
 export const LEFT_COLUMN_RATIO = 0.25;
+export const LEFT_COLUMN_RATIO_MIN = 0.15;
+export const LEFT_COLUMN_RATIO_MAX = 0.6;
 
 /** Identifiers for the three focusable panes. */
 export const PANE_IDS = ["sessions", "tree", "content"] as const;

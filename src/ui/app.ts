@@ -62,7 +62,8 @@ import type {
 } from "../types.ts";
 import { ContentViewport } from "./content-viewport.ts";
 import { toggleArchive, togglePin } from "./flows/archive-flows.ts";
-import type { FlowHost } from "./flows/host.ts";
+import type { SettingsFlowHost } from "./flows/host.ts";
+import { editSetting, exitSettings, readSettings, reloadSettings, restoreSettingsDefaults, retrySettings } from "./flows/settings-flows.ts";
 import {
 	confirmCloneSession,
 	confirmDeleteSession,
@@ -79,20 +80,20 @@ import {
 	startFork,
 } from "./flows/session-flows.ts";
 import { copyEntryText, copyTreeNode, openLabelInput, openTreeFilterMenu, restoreTreeNode, type TreeTarget } from "./flows/tree-flows.ts";
-import { fit, sideBySide } from "./frame.ts";
+import { boxCell, boxContains, centeredRect, fit, sideBySide, type BoxRect } from "./frame.ts";
 import { KeySequencer } from "./key-sequencer.ts";
 import { hitTest, listVisibleRows, type MouseTarget, panelGeometry } from "./mouse.ts";
 import { renderContentPane } from "./panes/content-pane.ts";
 import { clampFirst, renderSessionsPane, scrollOffset, sessionAtLine, sessionFirstLine, sessionLineCount } from "./panes/sessions-pane.ts";
 import { renderTreePane } from "./panes/tree-pane.ts";
-import type { ActionSource, DataSource } from "./ports.ts";
+import type { ActionSource, DataSource, SettingsSource, ThemeSource } from "./ports.ts";
 import { applySessionFileState, createInitialState, type PanelState } from "./state.ts";
 import { TreeView } from "./tree-view.ts";
 import { ChangelogDialog } from "./widgets/changelog-dialog.ts";
 import { ContextUsageDialog } from "./widgets/context-usage-dialog.ts";
 
 import { renderFooter } from "./widgets/footer.ts";
-import { buildHelpLines, compactKeys, helpViewport, overlayHelp } from "./widgets/help-overlay.ts";
+import { buildHelpLines, compactKeys, helpBoxSize, helpEntryAtRow, helpViewport, overlayHelp, type HelpLine, type HelpOverlayProps } from "./widgets/help-overlay.ts";
 import { InputDialog, type InputDialogSpec } from "./widgets/input-dialog.ts";
 
 import { renderSearchStatus, SearchBar } from "./widgets/search-bar.ts";
@@ -119,8 +120,12 @@ export interface LazyPanelOptions {
 	keymap?: Keymap;
 	initialState?: Partial<PanelState>;
 	leftColumnRatio?: number;
-	/** Configured defaults for the read-only settings page, independent of browsing state. */
+	/** Configured defaults for settings, independent of browsing state. */
 	configDefaults?: Pick<ResolvedConfig, "locale" | "defaultScope" | "defaultSort">;
+	/** Raw configuration persistence and save-time language application. */
+	settingsSource?: SettingsSource;
+	/** pi's themes: the settings page lists them and switches to one (the panel has no theme of its own). */
+	themeSource?: ThemeSource;
 	/** Initial footer status, e.g. config warnings. */
 	status?: string;
 	/** Extension version, shown muted at the far right of the footer. */
@@ -146,6 +151,14 @@ interface Overlay {
 	isOpen(): boolean;
 	/** Every key while this is the first open overlay. */
 	handleInput(data: string): void;
+	/**
+	 * Pointer while this is the first open overlay. Only the dialogs with a list or
+	 * several regions implement it (`SelectDialog`, the tree dialog, help, settings,
+	 * context usage, changelog); the rest keep swallowing clicks and wheels.
+	 * `press` / `move` / `drag` never reach it — they stay with the terminal's own
+	 * text selection (see `LazyPanel.handleMouse`).
+	 */
+	handleMouse?(event: TuiMouseEvent): TuiMouseEventResult | undefined;
 	/** Draw it over the rendered panel lines. */
 	draw(lines: string[], width: number): string[];
 	/** Footer hints of the overlay that currently owns the keyboard. */
@@ -169,8 +182,8 @@ interface SearchOrigin {
 
 export class LazyPanel implements Component, Focusable {
 	readonly state: PanelState;
-	readonly keymap: Keymap;
-	private readonly bindings: Binding[];
+	keymap: Keymap;
+	private bindings: Binding[];
 	private sessions: SessionRow[] = [];
 	/** Discard out-of-order list / metadata reads. */
 	private sessionListRequest = 0;
@@ -187,7 +200,7 @@ export class LazyPanel implements Component, Focusable {
 	/** Session pi has open (see `LazyPanelOptions.currentSessionFile`): the one `d` must not delete. */
 	private readonly currentSessionFile: string | undefined;
 	private disposed = false;
-	private readonly ratio: number;
+	private ratio: number;
 	private readonly searchBar: SearchBar;
 	/** Shared centered text prompt: labelling a node, the custom summary instructions, renaming a session. */
 	private readonly inputDialog: InputDialog;
@@ -203,7 +216,7 @@ export class LazyPanel implements Component, Focusable {
 	private readonly changelogDialog: ChangelogDialog;
 	private readonly settingsDialog: SettingsDialog;
 	/** What the dialog flows (./flows/) get from the panel; see `FlowHost`. */
-	private readonly flowHost: FlowHost;
+	private readonly flowHost: SettingsFlowHost;
 	/**
 	 * Every dialog / overlay, in the order they take the keys: the first open one
 	 * gets every key (`handleInput`) and gives the footer its hints (`renderBottom`),
@@ -223,7 +236,7 @@ export class LazyPanel implements Component, Focusable {
 	/** True while an Enter action is waiting for pi (keys are ignored, the panel is hidden). */
 	private entering = false;
 	/** Keys of an unfinished multi-key sequence such as "gg" (panes and tree dialog alike). */
-	private readonly keys: KeySequencer;
+	private keys: KeySequencer;
 	private _focused = false;
 	/** Debounced reload of tree + content after the sessions cursor moved. */
 	private sessionLoadTimer: ReturnType<typeof setTimeout> | undefined;
@@ -231,6 +244,8 @@ export class LazyPanel implements Component, Focusable {
 	private sessionLoadResolve: (() => void) | undefined;
 	/** Terminal width from the last render, used to size the help overlay when clamping its scroll. */
 	private lastWidth = 80;
+	/** 上一次绘制时帮助弹窗在屏幕上的位置（draw 里记）；鼠标命中只认这一份，没画过就点不到。 */
+	private helpRect: BoxRect | undefined;
 	/** Set while the search bar is open (`mode === "search"`). */
 	private searchOrigin: SearchOrigin | undefined;
 
@@ -281,27 +296,37 @@ export class LazyPanel implements Component, Focusable {
 			onClose: () => {
 				if (this.state.mode === "settings") this.state.mode = this.baseMode();
 			},
+			onExit: () => exitSettings(this.flowHost),
+			onEdit: (id) => editSetting(this.flowHost, id),
+			onRetry: () => retrySettings(this.flowHost),
+			onDefaults: () => restoreSettingsDefaults(this.flowHost),
+			onReload: () => reloadSettings(this.flowHost),
 		});
 		this.overlays = [
 			widgetOverlay(this.inputDialog),
-			widgetOverlay(this.selectDialog),
+			{ ...widgetOverlay(this.selectDialog), handleMouse: (event) => this.selectDialogMouse(event) },
 			widgetOverlay(this.infoDialog),
-			widgetOverlay(this.usageDialog),
+			{ ...widgetOverlay(this.usageDialog), handleMouse: (event) => this.usageMouse(event) },
 			{
 				isOpen: () => this.changelogDialog.isOpen,
 				handleInput: (data) => this.handleChangelogInput(data),
+				handleMouse: (event) => this.changelogMouse(event),
 				draw: (lines, width) => this.changelogDialog.overlay(lines, width),
 				hints: () => this.changelogDialog.hints,
 			},
 			// A previously requested async info/prompt may arrive while settings is open.
 			// Keep those dialogs above settings in both paint order and input priority.
-			{ ...widgetOverlay(this.settingsDialog), base: true },
+			{ ...widgetOverlay(this.settingsDialog), base: true, handleMouse: (event) => this.settingsMouse(event) },
 			{
 				isOpen: () => this.state.helpOpen,
 				handleInput: (data) => this.handleHelpInput(data),
+				handleMouse: (event) => this.helpMouse(event),
 				draw: (lines, width) => {
 					this.syncHelpViewport(width, lines.length);
-					return overlayHelp(lines, { keymap: this.keymap, focus: this.state.focus, cursor: this.state.helpCursor, scroll: this.state.helpScroll, theme: this.o.theme }, width);
+					// 记下这次画出来的位置（和 syncHelpViewport 用同一份尺寸）：鼠标点按只认它。
+					const size = helpBoxSize(width, lines.length);
+					this.helpRect = centeredRect(width, lines.length, size.width, size.height);
+					return overlayHelp(lines, this.helpProps(), width);
 				},
 				hints: () => [
 					["j/k/↑↓", t("hint.move")],
@@ -312,6 +337,7 @@ export class LazyPanel implements Component, Focusable {
 			{
 				isOpen: () => this.treeDialog.isOpen,
 				handleInput: (data) => this.handleTreeDialogInput(data),
+				handleMouse: (event) => this.treeDialogMouse(event),
 				draw: (lines, width) => this.treeDialog.overlay(lines, width, this.state.showLabelTimestamps),
 				hints: () => this.treeDialog.hints,
 				base: true,
@@ -342,6 +368,26 @@ export class LazyPanel implements Component, Focusable {
 			reloadTree: (file, entryId) => this.reloadTree(file, entryId),
 			setTreeFilter: (filter) => this.setTreeFilter(filter),
 			refreshSession: (file) => this.refreshSession(file),
+			settingsSource: o.settingsSource,
+			themeSource: o.themeSource,
+			closeSettings: () => {
+				this.settingsDialog.close();
+			},
+			refreshSettings: () => this.o.requestRender(),
+			refreshConfig: (config) => {
+				// 重建键位让编辑过的快捷键立即生效（未完成的多键序列被丢弃）。
+				this.keymap = config.keymap;
+				this.bindings = compileKeymap(this.keymap);
+				this.keys = new KeySequencer(this.bindings, () => this.o.requestRender());
+				this.ratio = config.leftColumnRatio;
+				// 正文排版含角色等本地化标题；仅清缓存，不重载会话或重置滚动位置。
+				this.contentViewport.setBlocks(this.contentViewport.blocks, this.contentViewport.leaf);
+				// footer 的 status 不能无条件清掉：启动时它就是 config.warnings[0]（index.ts），
+				// 这里是配置刚被重读后的警告，清掉等于"改任意一项设置，配置里的问题就不提示了"；
+				// 没有警告时仍然是 undefined，保存前的临时提示照旧被顶掉。
+				this.status = config.warnings[0];
+				this.o.requestRender();
+			},
 		};
 	}
 
@@ -631,20 +677,39 @@ export class LazyPanel implements Component, Focusable {
 		} else if (matchesKeyId(data, "k") || matchesKeyId(data, "up")) {
 			this.state.helpCursor--;
 		} else if (matchesKeyId(data, "return")) {
-			this.syncHelpViewport(this.lastWidth, Math.max(8, this.o.getHeight()) - 1);
-			const entries = buildHelpLines(this.keymap, this.state.focus).filter((line) => line.kind === "binding");
-			const entry = entries[this.state.helpCursor];
-			if (!entry) return;
-			// 直接分发动作，不重放键位（搜索中的 n、自定义同键覆盖都不能改变所选命令）。
-			// 先关帮助，确认框/输入框照常由原有 flow 打开；本次 Enter 不再交给新弹窗。
-			this.closeHelp();
-			this.dispatch(entry.action);
+			this.activateHelpEntry();
 			return;
 		} else {
 			return;
 		}
-		this.syncHelpViewport(this.lastWidth, Math.max(8, this.o.getHeight()) - 1);
+		this.syncHelp();
 		this.o.requestRender();
+	}
+
+	/** 帮助弹窗的渲染 / 命中入参（光标和滚动位置都放在 PanelState 里）。 */
+	private helpProps(): HelpOverlayProps {
+		return { keymap: this.keymap, focus: this.state.focus, cursor: this.state.helpCursor, scroll: this.state.helpScroll, theme: this.o.theme };
+	}
+
+	/** 帮助里可执行的命令，按下标选（分区标题、提示行和空白行都不参与）。 */
+	private helpEntries(): Extract<HelpLine, { kind: "binding" }>[] {
+		return buildHelpLines(this.keymap, this.state.focus).filter((line) => line.kind === "binding");
+	}
+
+	/** Enter（以及鼠标双击）：先关帮助再执行选中的命令。 */
+	private activateHelpEntry(): void {
+		this.syncHelp();
+		const entry = this.helpEntries()[this.state.helpCursor];
+		if (!entry) return;
+		// 直接分发动作，不重放键位（搜索中的 n、自定义同键覆盖都不能改变所选命令）。
+		// 先关帮助，确认框/输入框照常由原有 flow 打开；本次 Enter 不再交给新弹窗。
+		this.closeHelp();
+		this.dispatch(entry.action);
+	}
+
+	/** 按上一次渲染的尺寸夹取帮助的光标 / 滚动位置（按键和鼠标都从这里走）。 */
+	private syncHelp(): void {
+		this.syncHelpViewport(this.lastWidth, Math.max(8, this.o.getHeight()) - 1);
 	}
 
 	private syncHelpViewport(width: number, height: number): void {
@@ -657,6 +722,7 @@ export class LazyPanel implements Component, Focusable {
 		this.state.helpOpen = false;
 		this.state.helpCursor = 0;
 		this.state.helpScroll = 0;
+		this.helpRect = undefined;
 		this.keys.clear();
 		this.o.requestRender();
 	}
@@ -723,13 +789,24 @@ export class LazyPanel implements Component, Focusable {
 	/**
 	 * 鼠标只做三件事：滚轮 / 三指滚动指针下的面板；单击切焦点并选中列表项；
 	 * 双击 SESSIONS 进入会话、双击 TREE 折叠 / 展开分支。press / drag / move 不处理，
-	 * 交回终端做文本选择。注意：只有 pi 跑在 fullscreen TUI 模式下才会收到鼠标事件，
-	 * regular（默认）模式由终端自己处理滚动 / 选择，见 docs/issues.md。
+	 * 交回终端做文本选择。两种 TUI 模式的事件都汇到这里：fullscreen 由 pi 派给 overlay，
+	 * regular（默认）由 index.ts 的 attachMouse 自己开 SGR 上报、解析后喂进来（关闭面板时
+	 * 恢复终端自己的滚动 / 选择）。
+	 *
+	 * 弹窗打开时按同一份 `overlays` 顺序（最上层先拿，和按键 / footer 提示同序）交给它：
+	 * 带列表 / 多区域的弹窗自己处理，其余（输入框、会话信息）继续吞掉点击 / 滚轮，
+	 * 点击落在弹窗外面或边框上什么都不做，绝不关闭弹窗。
 	 */
 	handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
 		if (this.disposed || this.entering) return undefined;
-		// 搜索输入 / 各类弹窗打开时：吞掉面板区域的滚轮和点击，避免误动下面的列表，但不做交互。
-		if (this.state.sessionStateBusy || this.state.mode !== "normal" || this.activeOverlay()) {
+		const overlay = this.activeOverlay();
+		if (overlay) {
+			if (event.type !== "wheel" && event.type !== "click") return undefined; // 交回终端做文本选择
+			if (!this.state.sessionStateBusy) overlay.handleMouse?.(event);
+			return { handled: true };
+		}
+		// 搜索输入 / 会话状态写入期间：吞掉面板区域的滚轮和点击，避免误动下面的列表，但不做交互。
+		if (this.state.sessionStateBusy || this.state.mode !== "normal") {
 			return event.type === "wheel" || event.type === "click" ? { handled: true } : undefined;
 		}
 		if (event.type === "wheel") return this.handleWheel(event);
@@ -820,6 +897,122 @@ export class LazyPanel implements Component, Focusable {
 			if (double) this.toggleTreeFold(); // 双击折叠 / 展开分支
 		}
 		return { handled: true };
+	}
+
+	// -----------------------------------------------------------------------
+	// Mouse in dialogs (list / multi-region dialogs; the keyboard stays primary)
+	// -----------------------------------------------------------------------
+
+	/**
+	 * 弹窗鼠标的统一外壳：只处理滚轮和点击（press / move / drag 交回终端做文本选择），
+	 * 处理完重画并吞掉事件 —— 无论指针落在哪儿，点击都不会落到下面的面板上。
+	 * 指针在弹窗外面 / 边框上时各 handler 什么都不做（点空白绝不关闭弹窗）。
+	 *
+	 * 每个弹窗的"点击意味着什么"都写在这里（和面板的 handleClick 一样集中），
+	 * 双击 = Enter 走的是弹窗自己那条 Enter 路径（activate / 树对话框的 restore）。
+	 */
+	private overlayMouse(event: TuiMouseEvent, wheel: () => void, click: (double: boolean) => void): TuiMouseEventResult | undefined {
+		if (event.type === "wheel") wheel();
+		else if (event.type === "click") click((event.clickCount ?? 1) >= 2);
+		else return undefined;
+		this.o.requestRender();
+		return { handled: true };
+	}
+
+	/** 确认框 / 警告框 / 恢复菜单 / fork 选择器 / TREE 过滤：单击选中，双击 = Enter，滚轮移动光标。 */
+	private selectDialogMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+		return this.overlayMouse(
+			event,
+			() => this.selectDialog.wheel(event.x, event.y, event.wheelDelta ?? 0),
+			(double) => {
+				const index = this.selectDialog.indexAt(event.x, event.y);
+				if (index === undefined) return;
+				this.selectDialog.moveTo(index);
+				if (double) this.selectDialog.activate();
+			},
+		);
+	}
+
+	/** 帮助：单击选中一条命令，双击执行（等价 Enter），滚轮按行数移动选中项。 */
+	private helpMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+		return this.overlayMouse(
+			event,
+			() => {
+				const rect = this.helpRect;
+				if (!rect || !boxContains(rect, event.x, event.y)) return;
+				const count = this.helpEntries().length;
+				this.state.helpCursor = clamp(this.state.helpCursor + (event.wheelDelta ?? 0), 0, Math.max(0, count - 1));
+				this.syncHelp();
+			},
+			(double) => {
+				const rect = this.helpRect;
+				const cell = rect ? boxCell(rect, event.x, event.y) : undefined;
+				const entry = rect && cell ? helpEntryAtRow(this.helpProps(), rect.width, rect.height, cell.row) : undefined;
+				if (entry === undefined) return; // 分区标题 / 提示 / 空白行：点了不做事
+				this.state.helpCursor = entry;
+				this.syncHelp();
+				if (double) this.activateHelpEntry(); // 双击 = Enter：关掉帮助再执行
+			},
+		);
+	}
+
+	/**
+	 * 树对话框：单击行选中（并像搜索框里按 Esc 一样把按键交还给列表，关键字保留），
+	 * 单击搜索行聚焦它，双击 = Enter（恢复节点），滚轮移动光标。
+	 */
+	private treeDialogMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+		return this.overlayMouse(
+			event,
+			() => this.treeDialog.wheel(event.x, event.y, event.wheelDelta ?? 0),
+			(double) => {
+				const hit = this.treeDialog.indexAt(event.x, event.y);
+				if (hit === "search") {
+					this.treeDialog.focusSearch();
+					return;
+				}
+				if (hit === undefined) return;
+				this.treeDialog.leaveSearch();
+				this.treeDialog.moveTo(hit);
+				if (double) restoreTreeNode(this.flowHost, this.dialogTreeNode());
+			},
+		);
+	}
+
+	/** 设置页：点分类栏切分类、点设置行放光标、点按钮栏选按钮（双击 = Enter：进列表 / 编辑 / 运行）。 */
+	private settingsMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+		return this.overlayMouse(
+			event,
+			() => this.settingsDialog.wheel(event.x, event.y, event.wheelDelta ?? 0),
+			(double) => {
+				const hit = this.settingsDialog.hitAt(event.x, event.y);
+				if (!hit) return;
+				this.settingsDialog.focusHit(hit);
+				if (double) this.settingsDialog.activate();
+			},
+		);
+	}
+
+	/** 上下文占用：单击选中分类行，双击预览它的 prompt（没有 prompt 的统计行没有可看的），滚轮移动选中项。 */
+	private usageMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+		return this.overlayMouse(
+			event,
+			() => this.usageDialog.wheel(event.x, event.y, event.wheelDelta ?? 0),
+			(double) => {
+				const index = this.usageDialog.categoryAt(event.x, event.y);
+				if (index === undefined) return;
+				this.usageDialog.select(index);
+				if (double) this.usageDialog.activate();
+			},
+		);
+	}
+
+	/** changelog：只读大文本框，滚轮滚内容（没有可点的行，点击只是被吞掉）。 */
+	private changelogMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+		return this.overlayMouse(
+			event,
+			() => this.changelogDialog.wheel(event.x, event.y, event.wheelDelta ?? 0),
+			() => {},
+		);
 	}
 
 	/**
@@ -1730,6 +1923,7 @@ export class LazyPanel implements Component, Focusable {
 		this.keys.clear();
 		this.state.mode = "settings";
 		this.settingsDialog.open();
+		void readSettings(this.flowHost);
 	}
 
 	/** @: show pi's changelog. Rendering the whole file is slow, so the box opens with a loading spinner first. */
@@ -1900,8 +2094,16 @@ export class LazyPanel implements Component, Focusable {
 		this.sessionLoadPromise = undefined;
 	}
 
+	/**
+	 * pi calls this on invalidations, including every theme change. The panel
+	 * itself paints from live state, but two things cache rendered output with
+	 * theme colors baked in — the CONTENT layout and the changelog markdown —
+	 * and their cache keys (width, highlight, markdown) do not move when the
+	 * theme does, so they must be dropped here or those stay in the old colors.
+	 */
 	invalidate(): void {
-		// Nothing cached across renders yet.
+		this.contentViewport.invalidate();
+		this.changelogDialog.invalidate();
 	}
 
 	// -----------------------------------------------------------------------

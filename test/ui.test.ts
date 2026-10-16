@@ -19,7 +19,7 @@ import {
 	nearestListedIndex,
 } from "../src/data/tree-fold.ts";
 import type { TreeRow } from "../src/types.ts";
-import { fit, FRAME_DIVIDER, frame, metaBudget, overlayCentered, sideBySide } from "../src/ui/frame.ts";
+import { boxCell, boxContains, centeredRect, fit, FRAME_DIVIDER, frame, metaBudget, overlayCentered, sideBySide } from "../src/ui/frame.ts";
 import { hitTest, listVisibleRows, panelGeometry } from "../src/ui/mouse.ts";
 import { renderSessionsPane, scrollOffset, sessionAtLine, sessionFirstLine, sessionLineCount, sessionsMeta } from "../src/ui/panes/sessions-pane.ts";
 import { renderTreePane, treeMeta } from "../src/ui/panes/tree-pane.ts";
@@ -176,6 +176,67 @@ test("overlayCentered draws the box in the middle of the base lines and keeps ev
 	assert.equal(out[6], base[6]);
 	// a box taller than the base is clipped, never extends the output
 	assert.equal(overlayCentered(["yy"], box, 4, 2).length, 1);
+});
+
+test("centeredRect is exactly where overlayCentered composites the box (draw and hit-test share it)", () => {
+	const base = Array.from({ length: 10 }, () => "x".repeat(20));
+	const box = ["┌──┐", "│ab│", "└──┘"];
+	const rect = centeredRect(20, base.length, 4, box.length);
+	assert.deepEqual(rect, { top: 3, left: 8, width: 4, height: 3 });
+	// 反漂移：rect 的左上角必须正好是画出来那个 ┌，否则点击和画面就分叉了。
+	const out = overlayCentered(base, box, 4, 20);
+	const at = (lines: string[]) => stripTerminalSequences(lines[rect.top]!).slice(rect.left, rect.left + 4);
+	assert.equal(at(out), "┌──┐");
+	assert.equal(at(overlayCentered(base, box, 4, 20, undefined, rect.top)), "┌──┐");
+	// 比终端大的框：位置夹回 0，不会算出负数
+	assert.deepEqual(centeredRect(20, 4, 60, 30), { top: 0, left: 0, width: 60, height: 30 });
+	// fixedTop 照抄（动画时用它钉住已排版好的框）
+	assert.equal(centeredRect(20, 10, 4, 3, 7).top, 7);
+	// width / height 原样保留：这里不做夹取，夹取是调用方的事
+	assert.equal(centeredRect(20, 10, 99, 99).width, 99);
+});
+
+test("boxCell maps a cell to a body row/col, and rejects the border and anything outside", () => {
+	const rect = centeredRect(20, 10, 6, 4); // top 3, left 7
+	assert.deepEqual(boxCell(rect, 7, 3), undefined, "top-left corner is the border");
+	assert.deepEqual(boxCell(rect, 12, 3), undefined, "top border");
+	assert.deepEqual(boxCell(rect, 7, 4), undefined, "left border");
+	assert.deepEqual(boxCell(rect, 12, 4), undefined, "right border");
+	assert.deepEqual(boxCell(rect, 12, 6), undefined, "bottom border");
+	assert.deepEqual(boxCell(rect, 6, 4), undefined, "just outside on the left");
+	assert.deepEqual(boxCell(rect, 13, 4), undefined, "just outside on the right");
+	// 正文两行四列
+	assert.deepEqual(boxCell(rect, 8, 4), { row: 0, col: 0 });
+	assert.deepEqual(boxCell(rect, 11, 5), { row: 1, col: 3 });
+	assert.deepEqual(boxCell(rect, 12, 5), undefined, "column past the body");
+	// 被终端裁掉一部分的框：露出来的正文格照样能命中
+	const clipped = centeredRect(20, 2, 6, 6); // top 0
+	assert.deepEqual(boxCell(clipped, 8, 1), { row: 0, col: 0 });
+});
+
+test("boxContains includes the frame, which is what the wheel gate wants", () => {
+	const rect = centeredRect(20, 10, 6, 4); // top 3, left 7
+	assert.equal(boxContains(rect, 7, 3), true, "border cells count");
+	assert.equal(boxContains(rect, 12, 6), true);
+	assert.equal(boxContains(rect, 6, 3), false);
+	assert.equal(boxContains(rect, 13, 3), false);
+	assert.equal(boxContains(rect, 7, 2), false);
+	assert.equal(boxContains(rect, 7, 7), false);
+});
+
+test("overlayCentered keeps the right border aligned when a wide char straddles the box edge", () => {
+	const termW = 60;
+	// 右侧内容是中文（宽字符），行尾是面板右边框 │；弹窗居中后右边界会落在某个中文字符中间。
+	let content = "│ 板应该具有更好的视觉层级和交互反馈效果来提升整体";
+	content = content + " ".repeat(termW - 1 - visibleWidth(content)) + "│";
+	const base = [content];
+	const boxW = 31; // 奇数宽度，保证右边界落在中文字符上
+	const box = ["X".repeat(boxW)];
+	const dim = (s: string) => s;
+	const out = overlayCentered(base, box, boxW, termW, dim);
+	assert.equal(visibleWidth(out[0]!), termW);
+	// 修复前右边框会被挤到倒数第二列、末尾多出一个空格；修复后 │ 仍在最后一列。
+	assert.equal(stripTerminalSequences(out[0]!).at(-1), "│");
 });
 
 test("scrollOffset keeps the cursor visible", () => {

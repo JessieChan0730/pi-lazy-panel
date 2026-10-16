@@ -23,7 +23,7 @@ import { SPINNER_FRAMES } from "../../constants.ts";
 import { matchesKeyId } from "../../config/keys.ts";
 import { t } from "../../i18n/index.ts";
 import type { KeyHint } from "../../types.ts";
-import { frame, overlayCentered } from "../frame.ts";
+import { boxContains, centeredRect, frame, overlayCentered, type BoxRect } from "../frame.ts";
 import { dialogHeader } from "./dialog-header.ts";
 
 /** Title on the top border (pi's own heading for /changelog, localised). */
@@ -58,6 +58,8 @@ export class ChangelogDialog {
 	/** Rotating-square frame index for the loading line, advanced by the panel. */
 	private spinnerFrame = 0;
 	private scroll = 0;
+	/** 上一次绘制时这个大方框在屏幕上的位置（`overlay()` 里记）；滚轮命中只认这一份。 */
+	private boxRect: BoxRect | undefined;
 	/** Rendered lines cached by (width, markdown) so reopening the same changelog is instant. */
 	private cache: { width: number; markdown: string; lines: string[] } | undefined;
 	/** Body rows visible at the last render, for paging and clamping. */
@@ -111,6 +113,11 @@ export class ChangelogDialog {
 		// 保留 cache：同一宽度、同一份 changelog 下次打开直接复用渲染结果。
 	}
 
+	/** Drop the render cache: it holds pi's markdown colors, which a theme change replaces. */
+	invalidate(): void {
+		this.cache = undefined;
+	}
+
 	handleInput(data: string): void {
 		if (!this.isOpen) return;
 		// 加载中只允许取消（Esc / q），滚动等按键先吞掉。
@@ -129,8 +136,15 @@ export class ChangelogDialog {
 		// 其他按键一律吞掉；越界的滚动位置在 render 时夹回来。
 	}
 
-	private scrollBy(delta: number): void {
+	/** j / k 和滚轮：滚动正文 `delta` 行（只往下限夹取，上限在 render 时按内容夹回来）。 */
+	scrollBy(delta: number): void {
 		this.scroll = Math.max(0, this.scroll + delta);
+	}
+
+	/** Wheel: scroll, but only while the pointer is over the box (like the panes). */
+	wheel(x: number, y: number, delta: number): void {
+		if (delta === 0 || this.loading) return;
+		if (this.boxRect && boxContains(this.boxRect, x, y)) this.scrollBy(delta);
 	}
 
 	private lines(width: number): string[] {
@@ -191,6 +205,9 @@ export class ChangelogDialog {
 	/** Composite the box centered over the already-rendered panel `lines`. */
 	overlay(lines: string[], termW: number): string[] {
 		const { width, height } = ChangelogDialog.size(termW, lines.length);
-		return overlayCentered(lines, this.render(width, height), width, termW, (s) => this.o.theme.fg("dim", s));
+		const box = this.render(width, height);
+		// 记下这次画出来的位置：滚轮只在这个框里生效（画哪儿就滚哪儿）。
+		this.boxRect = centeredRect(termW, lines.length, width, box.length);
+		return overlayCentered(lines, box, width, termW, (s) => this.o.theme.fg("dim", s), this.boxRect.top);
 	}
 }

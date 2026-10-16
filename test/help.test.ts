@@ -6,7 +6,8 @@ import { mergeKeymap } from "../src/config/config.ts";
 import { DEFAULT_KEYMAP } from "../src/config/keymap.ts";
 import { initI18n } from "../src/i18n/index.ts";
 import type { Keymap } from "../src/types.ts";
-import { buildHelpLines, helpBoxSize, helpLineCount, helpViewport, renderHelpBox } from "../src/ui/widgets/help-overlay.ts";
+import { buildHelpLines, compactKeys, helpBoxSize, helpEntryAtRow, helpLineCount, helpViewport, renderHelpBox } from "../src/ui/widgets/help-overlay.ts";
+import { labelsFor } from "../src/config/keys.ts";
 
 initI18n("en");
 
@@ -181,5 +182,51 @@ test("wide characters do not stall wrapping when the description column is one c
 		assert.ok(narrow.every((line) => visibleWidth(line) === 14));
 	} finally {
 		initI18n("en");
+	}
+});
+
+test("helpEntryAtRow maps a body row back to the command drawn on it (mouse clicks use this)", () => {
+	const { width, height } = helpBoxSize(100, 40);
+	const props = { keymap: DEFAULT_KEYMAP, focus: "sessions" as const, cursor: 0, scroll: 0, theme };
+	const entries = buildHelpLines(DEFAULT_KEYMAP, "sessions").filter((line) => line.kind === "binding");
+	const lines = renderHelpBox(props, width, height).map(stripTerminalSequences);
+	const rows = Array.from({ length: height - 2 }, (_, row) => helpEntryAtRow(props, width, height, row));
+
+	// 正文第 0 行留白、第 1 行是分区标题：点它们不该选中任何命令
+	assert.equal(rows[0], undefined);
+	assert.equal(rows[1], undefined);
+	// 正文之外的行也点不到
+	assert.equal(helpEntryAtRow(props, width, height, height), undefined);
+
+	// 每一条命令第一次出现的那些行，画的正是它
+	const firstRow = new Map<number, number>();
+	let previous = -1;
+	rows.forEach((index, row) => {
+		if (index === undefined) return;
+		assert.ok(index >= 0 && index < entries.length, `第 ${row} 行映射到真实存在的命令`);
+		assert.ok(index >= previous, "序号随行号递增（命令按顺序排）");
+		previous = index;
+		if (!firstRow.has(index)) firstRow.set(index, row);
+	});
+	assert.ok(firstRow.size > 0, "至少能看到几条命令");
+	for (const [index, row] of firstRow) {
+		const keys = lines[row + 1]!; // 正文第 row 行 = 方框第 row + 1 行（上面还有一条边框）
+		assert.ok(keys.includes(compactKeys(labelsFor(DEFAULT_KEYMAP, "sessions", entries[index]!.action))), `第 ${row} 行画的是第 ${index} 条命令`);
+	}
+	// 第一条命令紧跟在分区标题下面（第 2 行），键位就画在那一行上
+	assert.equal(rows[2], 0, "第一条命令在第 2 行");
+	assert.ok(lines[3]!.includes(compactKeys(labelsFor(DEFAULT_KEYMAP, "sessions", entries[0]!.action))));
+});
+
+test("helpEntryAtRow keeps wrapped continuation rows on the same command and follows the scroll", () => {
+	const { width, height } = helpBoxSize(40, 40); // 窄框：描述会折行
+	const props = { keymap: DEFAULT_KEYMAP, focus: "sessions" as const, cursor: 0, scroll: 0, theme };
+	const rows = Array.from({ length: height - 2 }, (_, row) => helpEntryAtRow(props, width, height, row));
+	assert.ok(rows.some((index, i) => i > 0 && index !== undefined && index === rows[i - 1]), "折行的续行映射回同一条命令");
+
+	// 滚动之后整体前移：第 row 行变成没滚动时的第 row + 3 行
+	const scrolled = { ...props, scroll: 3 };
+	for (let row = 0; row < 10; row++) {
+		assert.equal(helpEntryAtRow(scrolled, width, height, row), rows[row + 3], `滚动后第 ${row} 行`);
 	}
 });

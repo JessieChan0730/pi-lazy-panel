@@ -5,9 +5,38 @@
  * pi-tui requires from `Component.render()`.
  */
 
-import { compositeTuiLine, stripTerminalSequences, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { compositeTuiLine, sliceByColumn, stripTerminalSequences, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 export type Style = (s: string) => string;
+
+// 清除 SGR 样式并闭合 OSC8 超链接，和 pi-tui 内部的 SEGMENT_RESET 一致，避免补的空格继承上一段颜色。
+const SEGMENT_RESET = "\x1b[0m\x1b]8;;\x07";
+
+/**
+ * 把恰好横跨 `boundary` 这一列的宽字符（如中文、Emoji）替换成等宽空格。
+ *
+ * pi-tui 的 compositeTuiLine 在叠加弹窗时，会按列把底图切成「弹窗左侧 / 弹窗 / 弹窗右侧」。
+ * 如果某个宽字符一半在弹窗内、一半在弹窗外，它既进不了左段也进不了右段，会被整个丢掉，
+ * compositeTuiLine 再把少掉的那一列用空格补在整行末尾——于是弹窗右侧的内容（含右边框）整体向左错一列。
+ * 英文都是单列字符，边界永远落在字符间隙，所以只有中文等宽字符才会触发。
+ *
+ * 这里提前把跨边界的宽字符换成同宽空格：边界落到字符间隙上，compositeTuiLine 不再丢字，右侧也就不再错位。
+ * 边界本就落在间隙、或底图在该列之前就结束时，原样返回。
+ */
+function clearStraddleAt(line: string, boundary: number): string {
+	if (boundary <= 0) return line;
+	const lineW = visibleWidth(line);
+	if (lineW <= boundary) return line; // 边界在内容末尾之后，不存在跨界字符
+	// 严格截取 [0, boundary)：跨界的宽字符会被整体排除，head 宽度退到 boundary - 1（或更小）。
+	const head = sliceByColumn(line, 0, boundary, true);
+	const headW = visibleWidth(head);
+	if (headW === boundary) return line; // 边界正好落在字符间隙，无需处理
+	// 截取 [boundary, 末尾)：跨界字符（起点 < boundary）同样被排除，tail 从它之后开始。
+	const tail = sliceByColumn(line, boundary, lineW - boundary);
+	const tailStartCol = lineW - visibleWidth(tail); // tail 在原行里的真实起始列
+	const gap = Math.max(0, tailStartCol - headW); // 被丢弃的宽字符所占的列数，用等宽空格补齐
+	return head + SEGMENT_RESET + " ".repeat(gap) + tail;
+}
 
 export interface FrameOptions {
 	width: number;
@@ -68,7 +97,8 @@ export function frame(body: string[], o: FrameOptions): string[] {
 }
 
 function topBorder(o: FrameOptions, inner: number): string {
-	const title = ` ${o.title} `;
+	// 标题为空时不画 " title " 段，顶边连成整条横线（避免 "┌─  ──┐" 中间的缺口）；meta 仍正常显示。
+	const title = o.title ? ` ${o.title} ` : "";
 	const meta = o.meta ? ` ${o.meta} ` : "";
 	const titleW = visibleWidth(title);
 	const metaW = visibleWidth(meta);
@@ -77,10 +107,60 @@ function topBorder(o: FrameOptions, inner: number): string {
 	if (fill < 0) {
 		// Not enough room: drop meta, then clip title.
 		const t = truncateToWidth(title, Math.max(0, inner - 2), "…", false);
-		return o.border(`┌─`) + o.titleStyle(t) + o.border("─".repeat(Math.max(0, inner - 1 - visibleWidth(t))) + "┐");
+		return o.border(`┌─`) + (t ? o.titleStyle(t) : "") + o.border("─".repeat(Math.max(0, inner - 1 - visibleWidth(t))) + "┐");
 	}
+	const styledTitle = title ? o.titleStyle(title) : "";
 	const metaPart = meta ? (o.metaStyle ?? o.titleStyle)(meta) + o.border("─") : "";
-	return o.border("┌─") + o.titleStyle(title) + o.border("─".repeat(fill)) + metaPart + o.border("┐");
+	return o.border("┌─") + styledTitle + o.border("─".repeat(fill)) + metaPart + o.border("┐");
+}
+
+/**
+ * Where a centered dialog box sits in the viewport it is composited into, in
+ * cell coordinates (0-based, relative to the top-left of the panel body).
+ */
+export interface BoxRect {
+	top: number;
+	left: number;
+	width: number;
+	height: number;
+}
+
+/**
+ * Where a `width` × `height` box lands in a `termW` × `termH` viewport.
+ *
+ * 画和命中共用这一份几何：`overlayCentered` 用它算位置，弹窗鼠标命中也用它（`boxCell`），
+ * 所以改版式不会让点击和画面错位（和 `ui/mouse.ts` 的 panelGeometry 是同一条纪律）。
+ * `width` / `height` 原样保留 —— 调用方已经按终端夹取过，这里再做"帮忙"的夹取只会让两张图分叉。
+ *
+ * `termH` is how many lines the overlay is composited into: the panel BODY, one row
+ * shorter than the terminal (the footer is appended after the overlays), never
+ * `event.height` — getting that wrong shifts every box down by one row.
+ */
+export function centeredRect(termW: number, termH: number, width: number, height: number, fixedTop?: number): BoxRect {
+	return {
+		top: Math.max(0, Math.floor(fixedTop ?? (termH - height) / 2)),
+		left: Math.max(0, Math.floor((termW - width) / 2)),
+		width,
+		height,
+	};
+}
+
+/** Is the cell (x, y) anywhere on the box, border included? (Wheel is forgiving about the frame; clicks use `boxCell`.) */
+export function boxContains(r: BoxRect, x: number, y: number): boolean {
+	return x >= r.left && x < r.left + r.width && y >= r.top && y < r.top + r.height;
+}
+
+/**
+ * The cell's row / column inside a box's body (0 = the line under the top border,
+ * 0 = the column after the left border), or undefined on the border and outside
+ * the box. Clicks there do nothing — a stray click never closes a dialog.
+ */
+export function boxCell(r: BoxRect, x: number, y: number): { row: number; col: number } | undefined {
+	if (!boxContains(r, x, y)) return undefined;
+	const row = y - r.top - 1;
+	const col = x - r.left - 1;
+	if (row < 0 || row >= r.height - 2 || col < 0 || col >= r.width - 2) return undefined;
+	return { row, col };
 }
 
 /**
@@ -97,20 +177,24 @@ function topBorder(o: FrameOptions, inner: number): string {
  * 上层原样叠加，嵌套时不会越叠越暗，关闭后也不影响原来的面板状态。
  */
 export function overlayCentered(base: string[], box: string[], width: number, termW: number, backdrop?: Style, fixedTop?: number): string[] {
-	const top = Math.max(0, Math.floor(fixedTop ?? (base.length - box.length) / 2));
-	const left = Math.max(0, Math.floor((termW - width) / 2));
+	// 位置走 centeredRect：弹窗的鼠标命中用同一个函数，画到哪就点到哪。
+	const { top, left } = centeredRect(termW, base.length, width, box.length, fixedTop);
 	const out = backdrop ? base.map((line) => backdrop(stripTerminalSequences(line))) : [...base];
 	if (backdrop && box.length && width > 0 && termW > 0) {
 		const gutterLeft = Math.max(0, left - 1);
 		const gutterWidth = Math.min(termW, left + width + 1) - gutterLeft;
 		const blank = " ".repeat(gutterWidth);
 		for (let i = Math.max(0, top - 1); i < Math.min(out.length, top + box.length + 1); i++) {
-			out[i] = compositeTuiLine(out[i] ?? "", blank, gutterLeft, gutterWidth, termW);
+			// 先清掉跨越边框右边界的宽字符，否则 compositeTuiLine 丢字会让右侧内容错位。
+			const base = clearStraddleAt(out[i] ?? "", gutterLeft + gutterWidth);
+			out[i] = compositeTuiLine(base, blank, gutterLeft, gutterWidth, termW);
 		}
 	}
 	for (let i = 0; i < box.length && top + i < out.length; i++) {
+		// 同理：弹窗右边界跨界的宽字符先换成空格，再叠加弹窗。
+		const base = clearStraddleAt(out[top + i] ?? "", left + width);
 		// 宽字符恰好跨过终端右边界时，pi-tui 会整字裁掉，再补齐留下的那一列。
-		out[top + i] = fit(compositeTuiLine(out[top + i] ?? "", box[i]!, left, width, termW), termW);
+		out[top + i] = fit(compositeTuiLine(base, box[i]!, left, width, termW), termW);
 	}
 	return out;
 }

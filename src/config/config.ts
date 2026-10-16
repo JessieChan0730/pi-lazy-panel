@@ -19,10 +19,23 @@
 
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { CONFIG_FILE_NAME, KEY_SCOPES, SESSION_SORT_MODES } from "../constants.ts";
+import { CONFIG_FILE_NAME, KEY_SCOPES, LEFT_COLUMN_RATIO, LEFT_COLUMN_RATIO_MAX, LEFT_COLUMN_RATIO_MIN, SESSION_SORT_MODES } from "../constants.ts";
 import { type Locale, SUPPORTED_LOCALES } from "../i18n/index.ts";
 import type { ActionId, KeyChord, Keymap, KeyScope, PaneKeymap, SessionSortMode, UserConfig, UserPaneKeymap } from "../types.ts";
+import { isReservedKey } from "./keys.ts";
+import type { ConfigSaveResult, ConfigSnapshot, SettingsPatch } from "./config-store.ts";
+import { readSnapshot, savePatch } from "./config-store.ts";
 import { DEFAULT_KEYMAP } from "./keymap.ts";
+
+export type { ConfigSaveResult, ConfigSnapshot, SettingsPatch } from "./config-store.ts";
+
+export function readConfigSnapshot(agentDir: string): Promise<ConfigSnapshot> {
+	return readSnapshot(join(agentDir, CONFIG_FILE_NAME));
+}
+
+export function saveConfigPatch(agentDir: string, baseline: ConfigSnapshot, patch: SettingsPatch): Promise<ConfigSaveResult> {
+	return savePatch(join(agentDir, CONFIG_FILE_NAME), baseline, patch);
+}
 
 /** Fully resolved configuration used at runtime. */
 export interface ResolvedConfig {
@@ -40,7 +53,7 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
 	keymap: DEFAULT_KEYMAP,
 	defaultScope: "current-folder",
 	defaultSort: "recent",
-	leftColumnRatio: 0.25,
+	leftColumnRatio: LEFT_COLUMN_RATIO,
 	warnings: [],
 };
 
@@ -96,7 +109,7 @@ export function resolveConfig(user: unknown): ResolvedConfig {
 
 	let leftColumnRatio = DEFAULT_CONFIG.leftColumnRatio;
 	if (u.leftColumnRatio !== undefined) {
-		if (typeof u.leftColumnRatio === "number" && u.leftColumnRatio >= 0.15 && u.leftColumnRatio <= 0.6) {
+		if (typeof u.leftColumnRatio === "number" && u.leftColumnRatio >= LEFT_COLUMN_RATIO_MIN && u.leftColumnRatio <= LEFT_COLUMN_RATIO_MAX) {
 			leftColumnRatio = u.leftColumnRatio;
 		} else {
 			warnings.push("config: leftColumnRatio must be a number between 0.15 and 0.6");
@@ -104,6 +117,11 @@ export function resolveConfig(user: unknown): ResolvedConfig {
 	}
 
 	const keymap = mergeKeymap(DEFAULT_KEYMAP, u.keymap, warnings);
+	// 主题不在这里配置：面板没有自己的主题，颜色一律取自 pi，主题选择写进 pi 的
+	// settings.json（见 docs/theme.md）。写了这一项的人多半是以为面板能单独设主题。
+	if (u.theme !== undefined) {
+		warnings.push("config: \"theme\" is not a plugin setting; the panel follows pi's theme (set it with pi's /settings)");
+	}
 	// locale 未指定时不写入该键（exactOptionalPropertyTypes），运行时按系统语言。
 	return { keymap, defaultScope, defaultSort, leftColumnRatio, warnings, ...(locale !== undefined ? { locale } : {}) };
 }
@@ -135,11 +153,19 @@ export function mergeKeymap(base: Keymap, user: UserConfig["keymap"], warnings: 
 				delete target[action as ActionId];
 				continue;
 			}
-			if (isChordValue(value)) {
-				target[action as ActionId] = value;
-			} else {
+			if (!isChordValue(value)) {
 				warnings.push(`config: keymap.${scopeName}.${action} must be a string, string[] or null`);
+				continue;
 			}
+			// Esc / Backspace 是保留键（见 keys.ts 的 RESERVED_KEYS）：写进来也不会触发，
+			// 这里丢掉并提示，而不是留一条看起来生效的失效绑定。
+			const chords = (Array.isArray(value) ? value : [value]).filter((chord) => {
+				if (!isReservedKey(chord)) return true;
+				warnings.push(`config: keymap.${scopeName}.${action}: "${chord}" is reserved by the panel and cannot be bound`);
+				return false;
+			});
+			const kept: KeyChord | KeyChord[] | undefined = chords.length === 0 ? undefined : Array.isArray(value) ? chords : chords[0];
+			if (kept !== undefined) target[action as ActionId] = kept;
 		}
 	}
 	return out;

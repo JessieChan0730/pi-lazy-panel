@@ -177,3 +177,85 @@ test("context and prompt dialogs show local shortcuts in both languages and wrap
 		initI18n("en");
 	}
 });
+
+/** 画到屏幕上（overlay 会记下这次的位置，鼠标命中照着它算），返回去掉颜色后的整屏。 */
+function screen(dialog: ContextUsageDialog, termW = 70, termH = 24): string[] {
+	return dialog.overlay(Array.from({ length: termH }, () => "x".repeat(termW)), termW).map(stripTerminalSequences);
+}
+
+/** 某一行上 `needle` 的屏幕坐标（分类行的文字就在正文里，直接点它）。 */
+function cellAt(lines: string[], needle: string): { x: number; y: number } {
+	const y = lines.findIndex((line) => line.includes(needle));
+	assert.ok(y >= 0, `"${needle}" is on screen`);
+	return { x: lines[y]!.indexOf(needle), y };
+}
+
+test("mouse: a click selects the category row it lands on, and a double-click previews it", () => {
+	const dialog = new ContextUsageDialog({ theme });
+	dialog.open({ info: info(), onCopy: () => {}, onClose: () => dialog.close() });
+	// 内容比终端矮时方框也更矮（居中）：命中必须跟着画出来的那一份位置走
+	const lines = screen(dialog);
+	const free = cellAt(lines, "Free space");
+	assert.equal(dialog.categoryAt(free.x, free.y), 4, "Free space 是第 5 个分类");
+	dialog.select(4);
+	assert.match(selected(dialog), /Free space/);
+
+	// 标题边框、分类下面的分隔线、汇总行都不是可点的分类行
+	const notCategories = [
+		lines.findIndex((line) => line.includes("┌")),
+		lines.findIndex((line) => line.includes("├")),
+		lines.findIndex((line) => line.includes(t("usage.messages"))),
+	];
+	for (const y of notCategories) assert.equal(dialog.categoryAt(free.x, y), undefined, `y=${y}`);
+	assert.equal(dialog.categoryAt(0, free.y), undefined, "框外");
+
+	// 双击带 prompt 的分类 → 打开预览（子弹窗替换掉列表，列表不再是命中目标）
+	const system = cellAt(screen(dialog), "System prompt"); // 重新画一次：命中永远对着最近一次画面
+	assert.equal(dialog.categoryAt(system.x, system.y), 0);
+	dialog.select(0);
+	dialog.activate();
+	assert.match(screen(dialog).join("\n"), /Prompt · System prompt/);
+	assert.equal(dialog.categoryAt(system.x, system.y), undefined, "子弹窗开着时列表点不到");
+
+	// 统计行（没有 prompt）也能点中，只是双击没有可预览的东西
+	dialog.handleInput("\x1b"); // 回到列表
+	const back = screen(dialog);
+	const other = cellAt(back, "Other");
+	assert.equal(dialog.categoryAt(other.x, other.y), 3);
+	dialog.select(3);
+	dialog.activate();
+	assert.match(screen(dialog).join("\n"), /Context usage|Context Usage/, "统计行不打开预览");
+});
+
+test("mouse: the wheel moves the selection one category per notch, and only inside the box", () => {
+	const dialog = new ContextUsageDialog({ theme });
+	dialog.open({ info: info(), onCopy: () => {}, onClose: () => dialog.close() });
+	const lines = screen(dialog);
+	const system = cellAt(lines, "System prompt");
+	assert.match(selected(dialog), /System prompt/);
+
+	dialog.wheel(system.x, system.y, 3);
+	assert.match(selected(dialog), /Memory/, "下滑一格到下一个有 prompt 的分类");
+	dialog.wheel(system.x, system.y, -3);
+	assert.match(selected(dialog), /System prompt/, "上滑一格回来");
+	dialog.wheel(system.x, system.y, -3);
+	assert.match(selected(dialog), /System prompt/, "到顶就停住");
+
+	// 指针在方框外面：不动
+	dialog.wheel(0, system.y, 3);
+	assert.match(selected(dialog), /System prompt/);
+
+	// 子弹窗开着时滚轮滚它的正文，不动列表选中项（prompt 要足够长，否则没什么可滚的）
+	const long = info();
+	long.categories[0] = { ...long.categories[0]!, prompt: "System source\n\n".repeat(40) };
+	dialog.open({ info: long, onCopy: () => {}, onClose: () => dialog.close() });
+	dialog.select(0);
+	dialog.activate();
+	const before = screen(dialog);
+	assert.match(before.join("\n"), /Prompt · System prompt/);
+	const detailX = before[1]!.indexOf("│") + 3; // 预览框自己的左边框之后
+	dialog.wheel(detailX, 3, 3);
+	assert.notEqual(screen(dialog).join("\n"), before.join("\n"), "预览正文滚动了");
+	dialog.handleInput("\x1b");
+	assert.match(selected(dialog), /System prompt/, "回列表后选中项没变");
+});

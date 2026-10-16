@@ -32,22 +32,38 @@ The config file lives at `~/.pi/agent/lazy-panel.json`. Every field is optional 
 - Invalid `locale` / `defaultScope` / `defaultSort` fall back to the default, an out-of-range `leftColumnRatio` is ignored too, and the panel reports it in the footer when it opens.
 - When `locale` is omitted it is auto-detected from the system language (see `src/i18n/index.ts`).
 
-## Settings preview
+## Plugin settings
 
 Press **`,`** in any main pane, select **Open plugin settings** from `?`, or run **`/lazy-panel settings`**. The command works even when `settings-open` is unbound. Existing dialogs and search inputs keep their keys; settings cannot be opened inside the full tree dialog.
 
-This stage is a **read-only UI preview**, not a configuration editor. General shows the language and configured default scope/sort (not temporary browsing choices); Layout shows the shared SESSIONS/TREE width; Keybindings lists all five scopes; Theme follows pi. Editing, saving, resetting and theme selection are not implemented yet. The config file is never written by this preview.
+**General** edits the language and configured default scope/sort (not temporary browsing choices). Enter opens a choice menu, and the selection is written and takes effect at once — there is no save step. Language changes apply immediately; default scope/sort apply the next time the panel opens, without moving or reordering the current session list. Follow system removes the language override.
+
+**Keybindings** are editable: the top **Scope** row chooses which scope to edit (global / sessions / tree / content / tree dialog), and each action row below shows its current binding. Press Enter on an action row to open its management menu: `Add key…` (a recorder — **press the key you want**, it appears as you press it, then `Enter` adds it; `Backspace` drops the last key so that multi-key sequences are recorded by pressing `g` `g` and so on; `Esc` cancels), `Remove: <key>` (drop one bound key), `Unbind (no key)` and `Reset to default`. Every edit is written at once and applies immediately (bindings are rebuilt; an unfinished multi-key sequence is dropped); the menu stays open for the next edit, and closes if the write fails. `d` (Restore defaults) on the keybindings page resets every action of the current scope to its built-in binding. Layout width is editable too.
+
+**Key collisions are caught.** Within one scope the first binding that matches exactly takes the keys — an exact match always beats a longer sequence still waiting for its next key, so a shorter key wins whatever the order — which makes a second binding on the same keys silently **unreachable**. Adding a key (or `Reset to default`) that another action of the same scope already holds opens a menu: `Take it from <action>` (drops the key from the owner, which becomes unbound when it was its last key) or `Cancel this edit` (the draft goes back to what it was before, including an earlier unsaved change). A key that does fire but takes the keys away from another action — a `d` stolen from a later action, a `g` that makes `gg` unreachable — is written as usual and reported in the settings box after the write. A duplicate that is already in the config file does not block an unrelated edit (removing one of your own other keys, say).
+
+**Theme** is one row showing pi's current theme; Enter opens a menu of every theme pi can load. Picking one switches pi right away — the panel and pi's interface repaint, and pi saves the choice in its own settings. If pi refuses the theme, the failed one is kept on the row (`*` marker + error) and `s` retries it; `d` gives up on it.
 
 | Fixed key inside settings | Action |
 | --- | --- |
-| `Tab` / `Shift+Tab` | Cycle categories, item list and the Close button |
-| `j/k/↑/↓` | Select a category or item; lists scroll to keep the item visible |
-| `Enter` | Move from categories to the list, or activate Close; never edit an item |
-| `h/l/←/→` in the keybinding list | Cycle binding scopes |
-| `PageUp` / `PageDown` in the item list | Scroll a long item description / binding value |
-| `Esc` / `q` | Close settings, preserving the underlying browsing state |
+| `h` / `←` | Focus categories (left); no effect if already focused |
+| `l` / `→` | Focus the item list (right); no effect if already focused |
+| `Tab` / `Shift+Tab` | Cycle categories, item list and action buttons |
+| `j/k/↑/↓` | Select a category, item or button; keep selection visible |
+| `Enter` | Enter the list, edit a General item, choose a keybinding scope, edit an action's binding, open the theme menu, or activate a button |
+| `s` | Retry what the last write failed at (a failed save, or a theme pi refused); shown as the Retry button only while something is pending; no Tab needed |
+| `d` | Confirm restoring defaults (General / Layout / current keybinding scope), or give up on a failed theme switch; no Tab needed |
+| `r` | Reload the configuration; confirm before discarding a change that was not saved |
+| `PageUp` / `PageDown` in the item list | Scroll a long item description / binding value (the bottom detail box only exists for items that **carry one**: layout width, every keybinding row, and the theme row once a switch failed or no theme was found) |
+| `Esc` / `q` | Exit settings; a change that was not saved offers continue editing, retry and exit, or discard with confirmation |
 
-The management keys above are fixed, independent of custom keymaps. The popup opens/closes with a short (~120ms) vertical reveal, uses a compact layout on narrow terminals, and blocks background mouse actions throughout the transition. Keybinding rows show **only the selected scope's own bindings**; “No local binding” does not mean other scopes cannot bind that action. Inheritance, priority and disabled actions still determine execution.
+Close, Restore defaults and Reload are available as buttons, and Retry joins them while a write is pending; restoring defaults requires confirmation and is written at once. A child choice menu consumes keys before the settings view, and Esc cancels just that choice. To browse or edit another keybinding scope, select the **Scope** row and press Enter.
+
+**Esc and Backspace can never be bound**, in any scope: the recorder refuses both, and a value written into `lazy-panel.json` is dropped with a warning in the footer. Esc is hard-coded by the panel (clear the search, clear the multi-select, leave the panel) before the keymap is consulted, so a binding on it could never fire; Backspace is the recorder's own "drop the last key" and what every text field needs while editing. A **modifier alone** (Ctrl / Shift / Alt / Fn) cannot be bound either — it is not a key any terminal reports, so a chord always needs a base key (`ctrl+d`). **Fn is worse than the others: it can never be part of a chord either.** It is handled below the terminal (keyboard firmware / OS driver), so what arrives is the *result* — on most laptops `Fn`+`F1` is volume-down, not `F1`, and the kitty keyboard protocol has no `fn` modifier bit at all. Turn Fn-lock on (or use another modifier) if a key seems unreachable. Everything else works, including the function keys and Delete / Home / End / PageUp / PageDown in a kitty-protocol terminal such as herdr. With a modifier they are different keys: `ctrl+backspace` is bindable.
+
+Settings opens and closes immediately, without animation. These management keys are fixed, independent of custom keymaps, and retain their logical focus meanings on narrow terminals. The background stays blocked while settings is open, and settings itself now takes the mouse (click a category, a setting or a button). Keybinding rows show **only the selected scope's own bindings**; “No local binding” does not mean other scopes cannot bind that action. Inheritance, priority and disabled actions still determine execution.
+
+Saving patches only edited fields in `lazy-panel.json` (including per-scope / per-action changes under `keymap`), preserving other settings and unknown fields. The file's own layout is kept as well — its indentation, its CRLF or LF line endings and its trailing newline (a config written on one line stays on one line) — so a hand-maintained or dotfiles copy does not turn a one-value edit into a whole-file diff; a file the panel creates itself is two-space indented with a trailing newline. Invalid files are not overwritten; reload after correcting the file. Concurrent unrelated changes are merged; a conflict on the same field or the same binding stops the write — the change stays on screen with an error and the Retry button (`s`), so fix or reload and retry. Merely opening or closing settings does not write the file — each edit is written at once, as it is made.
 
 ## Custom keybindings
 
@@ -88,7 +104,7 @@ Help uses a fixed 28-row popup (including borders), shrinking on smaller termina
 | `C` | `scope-current` | List scope: current folder |
 | `A` | `scope-all` | List scope: all |
 | `?` | `help` | Commands for the current pane: `j` / `k` / `↑` / `↓` select, `Enter` closes help and runs the selected command; `?` / `Esc` / `q` closes without running |
-| `,` | `settings-open` | Open the read-only plugin settings preview; fixed navigation and short open/close animation (see Settings preview above) |
+| `,` | `settings-open` | Open plugin settings immediately; edit and save General, Layout, Keybindings and Theme (see Plugin settings above) |
 | `q` / `Ctrl+c` | `quit` | Quit the panel |
 | `@` | `changelog` | pi's changelog (`/changelog`) as a large popup: `j` `k` `↑` `↓` scroll, `Ctrl+d` / `Ctrl+u` half-page, `g` / `G` top / bottom, `Esc` / `q` / `@` close. The whole file renders slowly, so the popup first shows a spinning square `◰ Loading changelog…` in the center, then the content (cached, so a second `@` opens instantly). The newest version is on top (pi's own `/changelog` puts it last). Not available inside the tree dialog |
 | `Esc` | — (built-in, not configurable) | In order: discard an unfinished keystroke → clear the current pane's search → clear the SESSIONS multi-selection → return from archive to normal sessions → quit |
@@ -205,14 +221,15 @@ Scrolling, search, plus centering and copying the selected message (the one the 
 
 ## Mouse
 
-The core is still the keyboard; the mouse is only lightly supported. Both regular (default) and fullscreen TUI modes are supported: in fullscreen pi dispatches events to the panel, while in regular mode the plugin turns on SGR mouse reporting itself (needs a terminal that supports SGR, which virtually all modern terminals do; while the panel is open the terminal's own selection / scrolling is taken over, and restored on close). See `docs/issues.md`.
+The core is still the keyboard; the mouse is only lightly supported. Both regular (default) and fullscreen TUI modes are supported: in fullscreen pi dispatches events to the panel, while in regular mode the plugin turns on SGR mouse reporting itself (needs a terminal that supports SGR, which virtually all modern terminals do; while the panel is open the terminal's own selection / scrolling is taken over, and restored on close).
 
 | Action | Behavior |
 | --- | --- |
-| Wheel / three-finger up-down | Scroll the view of the pane under the pointer (a list only scrolls, it does not move the selection; CONTENT scrolls by line), without changing focus |
-| Single click | Focus moves to the pane under the pointer; clicking a list item also moves the cursor to it |
-| Double-click SESSIONS | Enter that session (equivalent to `Enter` / resume) |
-| Double-click TREE | Fold / unfold the branch under the cursor (equivalent to `z`) |
+| Wheel / three-finger up-down | Over a pane: scroll its view (a list only scrolls, it does not move the selection; CONTENT scrolls by line), without changing focus. Over a dialog: move the selection (`SelectDialog`, help, the tree dialog, settings, context usage) or scroll the text (changelog, the prompt preview) |
+| Single click | Over a pane: focus moves to the pane under the pointer; clicking a list item also moves the cursor to it. In a dialog: select the row / region under the pointer (sidebar category, setting, button, tree / list row, usage category) |
+| Double-click | Same as `Enter` for the row under the pointer: enter a session, fold a TREE branch, pick a menu entry, run a help command, restore a tree node, edit a setting, run a settings button, preview a usage category |
+| Click outside a dialog / on its border | Nothing — a dialog never closes on a stray click |
+| `press` / `move` / `drag` | Always left to the terminal, so its own text selection keeps working |
 
 
 

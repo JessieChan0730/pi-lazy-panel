@@ -33,7 +33,7 @@ import { matchesKeyId } from "../../config/keys.ts";
 import { t } from "../../i18n/index.ts";
 import type { ContextUsageCategory, ContextUsageInfo, KeyHint } from "../../types.ts";
 import { formatCost, formatTokens } from "../../utils/format.ts";
-import { dialogWidth, fit, FRAME_DIVIDER, frame, metaBudget, overlayCentered } from "../frame.ts";
+import { boxCell, boxContains, centeredRect, dialogWidth, fit, FRAME_DIVIDER, frame, metaBudget, overlayCentered, type BoxRect } from "../frame.ts";
 
 import { renderDialogHints } from "./dialog-hints.ts";
 import { PromptDetailDialog } from "./prompt-detail-dialog.ts";
@@ -135,6 +135,10 @@ export class ContextUsageDialog {
 	private spec: ContextUsageDialogSpec | undefined;
 	private selected = -1;
 	private scroll = 0;
+	/** 上一次绘制时这个方框在屏幕上的位置（`overlay()` 里记）；鼠标命中只认这一份，没画过就点不到。 */
+	private boxRect: BoxRect | undefined;
+	/** 上一次绘制时每个分类行落在正文的第几行（切片之后的，见 render）；鼠标命中和它共用。 */
+	private categoryRows: number[] = [];
 	private readonly detail: PromptDetailDialog;
 
 	constructor(private readonly o: ContextUsageDialogOptions) {
@@ -156,11 +160,15 @@ export class ContextUsageDialog {
 		this.spec = spec;
 		this.selected = spec.info.categories.findIndex((category) => category.prompt !== undefined);
 		this.scroll = 0;
+		this.boxRect = undefined;
+		this.categoryRows = [];
 	}
 
 	/** Drop the dialog without firing a callback. */
 	close(): void {
 		this.spec = undefined;
+		this.boxRect = undefined;
+		this.categoryRows = [];
 		this.detail.close();
 	}
 
@@ -178,13 +186,46 @@ export class ContextUsageDialog {
 		}
 		if (matchesKeyId(data, "j") || matchesKeyId(data, "down")) this.move(1);
 		else if (matchesKeyId(data, "k") || matchesKeyId(data, "up")) this.move(-1);
-		else if (matchesKeyId(data, "enter")) {
-			const category = spec.info.categories[this.selected];
-			if (category?.prompt !== undefined) {
-				this.detail.open({ category: categoryLabel(category.key), prompt: category.prompt, onCopy: spec.onCopy });
-			}
-		} else if (matchesKeyId(data, "y")) spec.onCopy(contextUsageText(spec.info));
+		else if (matchesKeyId(data, "enter")) this.activate();
+		else if (matchesKeyId(data, "y")) spec.onCopy(contextUsageText(spec.info));
 		// 其他按键一律吞掉，不能漏到下面的面板去。
+	}
+
+	/** Enter（以及鼠标双击）：有 prompt 的分类打开预览，统计行没有可看的就什么都不做。 */
+	activate(): void {
+		const spec = this.spec;
+		if (!spec) return;
+		const category = spec.info.categories[this.selected];
+		if (category?.prompt !== undefined) {
+			this.detail.open({ category: categoryLabel(category.key), prompt: category.prompt, onCopy: spec.onCopy });
+		}
+	}
+
+	/**
+	 * 屏幕上 (x, y) 命中的分类行（照上一次绘制的位置算）：子弹窗开着、点在框外 / 边框 /
+	 * 标题 / 汇总行上时返回 undefined。
+	 */
+	categoryAt(x: number, y: number): number | undefined {
+		const cell = this.boxRect && !this.detail.isOpen ? boxCell(this.boxRect, x, y) : undefined;
+		if (!cell) return undefined;
+		const index = this.categoryRows.indexOf(cell.row);
+		return index >= 0 ? index : undefined;
+	}
+
+	/** 鼠标单击：把选中项放到该分类上（统计行也能选，标记跟着指针走，和点哪儿选哪儿一致）。 */
+	select(index: number): void {
+		const categories = this.spec?.info.categories ?? [];
+		if (index >= 0 && index < categories.length) this.selected = index;
+	}
+
+	/**
+	 * Wheel: 子弹窗开着就滚它的正文，否则像 j / k 那样移动选中项，指针在框内才生效。
+	 * 这里一格就是下一个有 prompt 的分类（统计行会被跳过），所以一次滚轮走一格，不走三格。
+	 */
+	wheel(x: number, y: number, delta: number): void {
+		if (delta === 0) return;
+		if (this.detail.isOpen) return this.detail.wheel(x, y, delta);
+		if (this.boxRect && boxContains(this.boxRect, x, y)) this.move(delta > 0 ? 1 : -1);
 	}
 
 	private move(delta: number): void {
@@ -204,14 +245,18 @@ export class ContextUsageDialog {
 		const hints = renderDialogHints(contextUsageHints(), this.o.theme, inner, height === undefined ? Infinity : Math.max(0, height - 4));
 		const hintHeight = hints.length ? hints.length + 1 : 0;
 		let body = info ? this.renderBody(info, inner) : [];
+		// 分类前面还有：窗口行、可选的自动压缩行、可选的分量条、一个空行。
+		const firstCategory = 2 + (info && autoCompactHint(info) ? 1 : 0) + (info?.contextWindow && inner > 2 ? 1 : 0);
 		if (height !== undefined) {
 			const visible = Math.max(1, height - 2 - hintHeight);
-			const firstCategory = 2 + (info && autoCompactHint(info) ? 1 : 0) + (info?.contextWindow && inner > 2 ? 1 : 0);
 			const selectedLine = firstCategory + Math.max(0, this.selected);
 			this.scroll = Math.max(0, Math.min(this.scroll, selectedLine, body.length - visible));
 			if (selectedLine >= this.scroll + visible) this.scroll = selectedLine - visible + 1;
 			body = body.slice(this.scroll, this.scroll + visible);
 		}
+		// 每个分类落在正文的第几行：画到屏幕上的那一次（`overlay` 总是带高度调用）记下来，
+		// 鼠标命中（categoryAt）照着查，免得两边各算一套。
+		if (height !== undefined) this.categoryRows = info ? info.categories.map((_, i) => firstCategory + i - this.scroll) : [];
 		// 提示固定在弹窗底部，不随分类列表滚动，也不受主面板状态文字挤占。
 		if (hints.length) body.push(FRAME_DIVIDER, ...hints);
 		const { theme } = this.o;
@@ -262,8 +307,15 @@ export class ContextUsageDialog {
 
 	/** Composite the box centered over the already-rendered panel `lines`. */
 	overlay(lines: string[], termW: number): string[] {
-		if (this.detail.isOpen) return this.detail.overlay(lines, termW);
+		if (this.detail.isOpen) {
+			// 子弹窗替换掉上面的列表：父弹窗这次没有被画出来，鼠标命中一律作废。
+			this.boxRect = undefined;
+			return this.detail.overlay(lines, termW);
+		}
 		const width = Math.min(termW, dialogWidth(termW));
-		return overlayCentered(lines, this.render(width, lines.length), width, termW, (s) => this.o.theme.fg("dim", s));
+		const box = this.render(width, lines.length);
+		// 记下这次画出来的位置：鼠标的点按（categoryAt / wheel）只认它，画哪儿就点哪儿。
+		this.boxRect = centeredRect(termW, lines.length, width, box.length);
+		return overlayCentered(lines, box, width, termW, (s) => this.o.theme.fg("dim", s), this.boxRect.top);
 	}
 }

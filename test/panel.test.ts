@@ -29,7 +29,8 @@ import type {
 	TreeRow,
 } from "../src/types.ts";
 import { LazyPanel } from "../src/ui/app.ts";
-import type { ActionSource, DataSource } from "../src/ui/ports.ts";
+import type { ActionSource, DataSource, SettingsSource, ThemeSource } from "../src/ui/ports.ts";
+import { settingsDirtyCount } from "../src/ui/settings-state.ts";
 import { cannotDeleteActiveTitle } from "../src/ui/widgets/alert-dialog.ts";
 import { compactDialogTitle } from "../src/ui/widgets/compact-dialog.ts";
 import {
@@ -112,7 +113,7 @@ interface Harness {
 	text: (width?: number) => string[];
 }
 
-function makePanel(opts: { keymap?: typeof DEFAULT_KEYMAP; height?: number } = {}): Harness {
+function makePanel(opts: { keymap?: typeof DEFAULT_KEYMAP; height?: number; themeSource?: ThemeSource; settingsSource?: SettingsSource; status?: string } = {}): Harness {
 	const calls: Array<{ scope: string; sort: string }> = [];
 	let closed = false;
 	const data: DataSource = {
@@ -132,6 +133,10 @@ function makePanel(opts: { keymap?: typeof DEFAULT_KEYMAP; height?: number } = {
 			closed = true;
 		},
 		...(opts.keymap ? { keymap: opts.keymap } : {}),
+		...(opts.themeSource ? { themeSource: opts.themeSource } : {}),
+		...(opts.settingsSource ? { settingsSource: opts.settingsSource } : {}),
+		// 启动时的 footer 状态（index.ts 传配置的第一条警告）。
+		...(opts.status ? { status: opts.status } : {}),
 	});
 	return {
 		panel,
@@ -141,8 +146,7 @@ function makePanel(opts: { keymap?: typeof DEFAULT_KEYMAP; height?: number } = {
 	};
 }
 
-test("settings opens in all panes, owns keys and mouse throughout transitions, and preserves browsing state", async (ctx) => {
-	ctx.mock.timers.enable({ apis: ["setInterval"] });
+test("settings opens immediately in all panes, owns keys and mouse, and preserves browsing state", async () => {
 	for (const focus of ["sessions", "tree", "content"] as const) {
 		const h = makePanel();
 		await h.panel.load();
@@ -153,23 +157,21 @@ test("settings opens in all panes, owns keys and mouse throughout transitions, a
 		const before = structuredClone(h.panel.state);
 		h.panel.handleInput(",");
 		assert.equal(h.panel.state.mode, "settings");
-		assert.equal(h.panel.state.settings.phase, "opening");
+		assert.equal(h.panel.state.settings.phase, "open");
 		const click = () => h.panel.handleMouse(mouseEvent("click", 2, 3, { height: 20 }));
 		const wheel = () => h.panel.handleMouse(mouseEvent("wheel", 2, 3, { height: 20, wheelDelta: 1 }));
+		// （2, 3）落在设置框的边框上：吞掉，什么都不做（盒内的点击/滚轮见后面的设置鼠标测试）
 		assert.deepEqual(click(), { handled: true });
 		assert.deepEqual(wheel(), { handled: true });
+		assert.equal(h.panel.state.settings.category, before.settings.category, "边框上的点击不动分类");
 		h.panel.handleInput("3");
 		h.panel.handleInput("d");
-		ctx.mock.timers.tick(120);
-		assert.match(h.text(120).join("\n"), /Settings · Read-only/);
+		assert.match(h.text(120).join("\n"), /Settings/);
+		assert.doesNotMatch(h.text(120).join("\n"), /Preview only|Settings · Read-only/);
 		assert.match(h.text(120).at(-1)!, /Esc\/q close/);
 		h.panel.handleInput("\x1b");
-		h.panel.handleInput("q");
-		h.panel.handleInput("\r");
-		assert.equal(h.panel.state.mode, "settings");
-		assert.equal(h.closed(), false);
-		assert.deepEqual(click(), { handled: true });
-		ctx.mock.timers.tick(120);
+		assert.equal(h.panel.state.settings.phase, "closed");
+		assert.equal(h.panel.state.mode, "normal");
 		assert.equal(h.closed(), false);
 		assert.deepEqual({ ...h.panel.state, settings: before.settings }, before);
 		h.panel.dispose();
@@ -185,7 +187,7 @@ test("settings supports remapped and multi-key entry, help execution and direct 
 	assert.equal(h.panel.state.settings.phase, "closed");
 	h.panel.handleInput("g");
 	h.panel.handleInput(",");
-	assert.equal(h.panel.state.settings.phase, "opening");
+	assert.equal(h.panel.state.settings.phase, "open");
 	h.panel.handleInput("q");
 	ctx.mock.timers.tick(120);
 	h.panel.handleInput("?");
@@ -193,13 +195,13 @@ test("settings supports remapped and multi-key entry, help execution and direct 
 	assert.ok(h.panel.state.helpCursor >= 0);
 	h.panel.handleInput("\r");
 	assert.equal(h.panel.state.helpOpen, false);
-	assert.equal(h.panel.state.settings.phase, "opening");
+	assert.equal(h.panel.state.settings.phase, "open");
 	const unbound = makePanel({ keymap: mergeKeymap(DEFAULT_KEYMAP, { global: { "settings-open": null } }) });
 	ctx.after(() => unbound.panel.dispose());
 	unbound.panel.handleInput(",");
 	assert.equal(unbound.panel.state.settings.phase, "closed");
 	unbound.panel.openSettings();
-	assert.equal(unbound.panel.state.settings.phase, "opening");
+	assert.equal(unbound.panel.state.settings.phase, "open");
 });
 
 test("settings entry cannot steal search input or keys from existing dialogs", async (ctx) => {
@@ -255,7 +257,7 @@ test("async info requested before settings stays above it and restores the corre
 	}
 });
 
-test("settings reports startup defaults, not temporary scope/sort, and both close paths stop animation", (ctx) => {
+test("settings reports startup defaults, not temporary scope/sort, and closing leaves no animation callbacks", (ctx) => {
 	ctx.mock.timers.enable({ apis: ["setInterval"] });
 	let renders = 0;
 	const panel = new LazyPanel({
@@ -2016,6 +2018,67 @@ test("InputDialog is a reusable 3-row prompt: title / value / subject / hints co
 	assert.equal(cancelled, 1);
 	dlg.close();
 	assert.equal(dlg.isOpen, false);
+});
+
+test("InputDialog capture mode records key presses instead of text", () => {
+	const submitted: string[] = [];
+	let cancelled = 0;
+	const dlg = new InputDialog({ theme: fakeTheme, onChange: () => {} });
+	const open = (): void => dlg.open({
+		title: "Add key", capture: true, placeholder: "Press a key…", hints: [["Enter", "add"]],
+		onSubmit: (v) => submitted.push(v), onCancel: () => cancelled++,
+	});
+
+	// 空的字段显示占位提示，还没有任何按键。
+	open();
+	const field = (): string => stripTerminalSequences(dlg.render(40)[1]!);
+	assert.ok(field().includes("Press a key…"), field());
+	// 释放事件和粘贴都不是单个按键，忽略掉。
+	dlg.handleInput("\x1b[103;1:3u");
+	dlg.handleInput("hello");
+	assert.ok(field().includes("Press a key…"), field());
+	// ctrl+d 录进来，字段显示成可读的 Ctrl+d；有按键时 Enter 保存原始 chord 文本。
+	dlg.handleInput("\x04");
+	assert.ok(field().includes("Ctrl+d"), field());
+	dlg.handleInput("\r");
+	assert.deepEqual(submitted, ["ctrl+d"]);
+	assert.equal(cancelled, 0);
+
+	// 多键序列按顺序累积（gg），Backspace 退回一步。
+	open();
+	dlg.handleInput("g");
+	dlg.handleInput("g");
+	assert.ok(field().includes("gg"), field());
+	dlg.handleInput("\x7f");
+	assert.ok(!field().includes("gg"), field());
+	dlg.handleInput("g");
+	dlg.handleInput("\r");
+	assert.deepEqual(submitted, ["ctrl+d", "g g"]);
+
+	// 序列为空时 Enter 当普通键录入（所以 enter 自己也能绑）；Backspace 是保留键，
+	// 只用来退回：没有可退的步骤时按它什么都不发生，永远录不进去。
+	open();
+	dlg.handleInput("\r");
+	dlg.handleInput("\r");
+	assert.deepEqual(submitted, ["ctrl+d", "g g", "enter"]);
+	open();
+	dlg.handleInput("\x7f");
+	dlg.handleInput("\x7f");
+	assert.ok(field().includes("Press a key…"), field());
+	dlg.handleInput("g");
+	dlg.handleInput("g");
+	dlg.handleInput("\x7f");
+	assert.ok(field().includes("g") && !field().includes("gg"), field());
+	dlg.handleInput("\x7f");
+	dlg.handleInput("\x7f");
+	assert.ok(field().includes("Press a key…"), field());
+	assert.deepEqual(submitted, ["ctrl+d", "g g", "enter"]);
+
+	// Esc 取消，不提交。
+	open();
+	dlg.handleInput("\x1b");
+	assert.equal(cancelled, 1);
+	assert.equal(submitted.length, 3);
 });
 
 test("SelectDialog is a reusable centered menu: items / cursor / subject / hints come from open()", () => {
@@ -3792,6 +3855,17 @@ test("@ opens pi's changelog in a big box: j/k/arrows scroll, G / g jump, Esc / 
 // Mouse: wheel scrolls, click focuses + selects, double-click enters / folds
 // -------------------------------------------------------------------------
 
+/**
+ * 弹窗里某个目标的单元格（用画面本身定位）：含 `needle` 的那一行 + 它自己那一列。
+ * 底图的面板也有边框，所以不能数行里第一个 │；用目标的文字所在列最稳。
+ */
+function dialogCell(h: { text: (width?: number) => string[] }, needle: string, width = 100): { x: number; y: number } {
+	const lines = h.text(width);
+	const y = lines.findIndex((line) => line.includes(needle));
+	assert.ok(y >= 0, `"${needle}" is on screen`);
+	return { x: lines[y]!.indexOf(needle), y };
+}
+
 /** Synthetic normalized mouse event. The overlay is top-left, so x/y equal the screen cell. */
 function mouseEvent(type: TuiMouseEventType, x: number, y: number, extra: Partial<TuiMouseEvent> = {}): TuiMouseEvent {
 	return {
@@ -3923,18 +3997,38 @@ test("double-clicking a tree node toggles its fold", async () => {
 	h.panel.dispose();
 });
 
-test("mouse is swallowed (no-op) while an overlay is open", async () => {
-	const h = makeLoadedPanel();
+test("a click outside a dialog is swallowed with no effect; inside the help box it selects a command", async () => {
+	const h = makeLoadedPanel(); // height 20 → 帮助框 64 宽居中，left = 18
 	await h.panel.load();
 	await settle();
-	h.panel.handleInput("?"); // help overlay
+	h.panel.handleInput("?");
 	assert.equal(h.panel.state.helpOpen, true);
-	const click = h.panel.handleMouse(mouseEvent("click", 2, 5));
-	assert.deepEqual(click, { handled: true }, "click consumed but does nothing");
+
+	// 框外：（2, 5）落在左边的底图上，什么都不做，也不会关掉弹窗
+	assert.deepEqual(h.panel.handleMouse(mouseEvent("click", 2, 5)), { handled: true });
 	assert.equal(h.panel.state.helpOpen, true, "overlay stays open");
-	assert.equal(h.panel.state.cursor.sessions, 0, "list behind the overlay did not move");
-	// press still falls through so the terminal keeps its own handling
+	assert.equal(h.panel.state.helpCursor, 0, "cursor unchanged");
+	assert.equal(h.panel.state.cursor.sessions, 0, "the list behind it did not move");
+	// press 仍然交回终端做文本选择
 	assert.equal(h.panel.handleMouse(mouseEvent("press", 2, 5)), undefined);
+
+	// 框内某条命令行：单击只选中（不执行），双击才是 Enter
+	const entries = buildHelpLines(DEFAULT_KEYMAP, "sessions").filter((line) => line.kind === "binding");
+	const expected = entries.findIndex((line) => line.action === "session-sort");
+	assert.ok(expected > 0);
+	const cell = dialogCell(h, t("action.session-sort"));
+	const sort = h.panel.state.sort;
+
+	h.panel.handleMouse(mouseEvent("click", cell.x, cell.y, { clickCount: 1 }));
+	assert.equal(h.panel.state.helpCursor, expected, "single click selects the command");
+	assert.equal(h.panel.state.helpOpen, true, "and does not run it");
+	assert.equal(h.panel.state.sort, sort, "no action ran");
+	await settle();
+
+	h.panel.handleMouse(mouseEvent("click", cell.x, cell.y, { clickCount: 2 }));
+	assert.equal(h.panel.state.helpOpen, false, "double-click runs it (help closes)");
+	assert.notEqual(h.panel.state.sort, sort, "session-sort acted on the sessions pane");
+	await settle();
 	h.panel.dispose();
 });
 
@@ -4055,45 +4149,163 @@ test("the help footer shows only its own controls and restores the pane hints on
 	h.panel.dispose();
 });
 
-test("mouse clicks and wheel are swallowed while any dialog is open", async () => {
-	const h = makeSessionActionPanel({ data: { loadChangelog: async () => "## [1.0.0]\n\n- hello" } });
+test("dialogs with no list keep swallowing the mouse; no dialog leaks a click to the panes behind it", async () => {
+	const h = makeSessionActionPanel({ data: { loadChangelog: async () => "hello changelog" } });
 	await h.panel.load();
 	await settle();
-	const click = () => h.panel.handleMouse(mouseEvent("click", 2, 3, { height: 24 }));
-	const wheel = () => h.panel.handleMouse(mouseEvent("wheel", 2, 3, { height: 24, wheelDelta: 1 }));
-	const openers: Array<[string, () => Promise<void>]> = [
+	const click = (x = 2, y = 3) => h.panel.handleMouse(mouseEvent("click", x, y, { height: 24 }));
+	const wheel = (x = 2, y = 3, delta = 1) => h.panel.handleMouse(mouseEvent("wheel", x, y, { height: 24, wheelDelta: delta }));
+
+	// 只有输入框 / 只有字段的弹窗：点击和滚轮都被吞掉，什么都不做
+	const passive: Array<[string, () => Promise<void>]> = [
 		["rename prompt", async () => h.panel.handleInput("r")],
-		["delete confirmation", async () => h.panel.handleInput("d")],
 		["session info", async () => {
 			h.panel.handleInput("i");
 			await flush();
 		}],
-		["changelog", async () => {
-			h.panel.handleInput("@");
-			await flush();
-			await flush();
-		}],
-		["tree dialog", async () => {
-			h.panel.handleInput("2");
-			h.panel.handleInput("a");
-		}],
 	];
-	for (const [name, open] of openers) {
+	for (const [name, open] of passive) {
 		await open();
-		const focus = h.panel.state.focus;
 		assert.notEqual(h.panel.state.mode, "normal", `${name} is open`);
 		assert.deepEqual(click(), { handled: true }, name);
 		assert.deepEqual(wheel(), { handled: true }, name);
 		assert.equal(h.panel.state.cursor.sessions, 0, `${name}: the list behind it did not move`);
-		assert.equal(h.panel.state.listScroll.sessions, null, `${name}: nor scroll`);
-		assert.equal(h.panel.state.focus, focus, `${name}: focus unchanged`);
+		h.panel.handleInput("\x1b");
+		assert.equal(h.panel.state.mode, "normal", name);
+	}
+
+	// 有列表 / 多区域的弹窗：鼠标归它自己，但在框内框外都不会漏到下面的面板
+	const interactive: Array<[string, () => Promise<void>, string]> = [
+		["delete confirmation", async () => h.panel.handleInput("d"), t("confirm.yes")],
+		[
+			"changelog",
+			async () => {
+				h.panel.handleInput("@");
+				await flush();
+				await flush();
+			},
+			"hello",
+		],
+		[
+			"tree dialog",
+			async () => {
+				h.panel.handleInput("2");
+				h.panel.handleInput("a");
+			},
+			"msg 1",
+		],
+		["settings", async () => h.panel.handleInput(","), t("settings.defaultSort")],
+	];
+	for (const [name, open, needle] of interactive) {
+		await open();
+		const mode = h.panel.state.mode;
+		const focus = h.panel.state.focus;
+		assert.notEqual(mode, "normal", `${name} is open`);
+		const inside = dialogCell(h, needle);
+		for (const [where, x, y] of [["outside", 2, 3], ["inside", inside.x, inside.y]] as Array<[string, number, number]>) {
+			assert.deepEqual(click(x, y), { handled: true }, `${name} click ${where}`);
+			assert.deepEqual(wheel(x, y), { handled: true }, `${name} wheel ${where}`);
+			assert.equal(h.panel.state.mode, mode, `${name}: still open after a ${where} click`);
+			assert.equal(h.panel.state.cursor.sessions, 0, `${name}: the sessions cursor did not move (${where})`);
+			assert.equal(h.panel.state.listScroll.sessions, null, `${name}: nor scroll (${where})`);
+			assert.equal(h.panel.state.focus, focus, `${name}: focus unchanged (${where})`);
+		}
 		h.panel.handleInput("\x1b");
 		assert.equal(h.panel.state.mode, "normal", name);
 		h.panel.handleInput("1");
 	}
+
 	// with every dialog closed the same click selects the row
 	click();
 	assert.equal(h.panel.state.cursor.sessions, 1);
+	h.panel.dispose();
+});
+
+test("a confirmation menu: a single click selects the entry, a double-click is Enter", async () => {
+	const h = makeSessionActionPanel();
+	await h.panel.load();
+	await settle();
+	h.panel.handleInput("d"); // 删除确认框，默认停在 No
+	assert.equal(h.panel.state.mode, "confirm");
+
+	const yes = dialogCell(h, t("confirm.yes"));
+	h.panel.handleMouse(mouseEvent("click", yes.x, yes.y, { height: 24, clickCount: 1 }));
+	assert.equal(h.panel.state.mode, "confirm", "single click only selects");
+	assert.match(h.text(100)[yes.y]!, /› Yes/, "the cursor moved onto Yes");
+	assert.deepEqual(h.deletes, [], "nothing was deleted");
+
+	h.panel.handleMouse(mouseEvent("click", yes.x, yes.y, { height: 24, clickCount: 2 }));
+	await settle();
+	assert.deepEqual(h.deletes, ["/tmp/s1.jsonl"], "double-click confirmed (same as Enter)");
+	assert.notEqual(h.panel.state.mode, "confirm");
+	h.panel.dispose();
+});
+
+test("the tree dialog takes the mouse: clicking a row selects it and hands the keys back to the list", async () => {
+	const h = makeSessionActionPanel();
+	await h.panel.load();
+	await settle();
+	h.panel.handleInput("2");
+	h.panel.handleInput("a");
+	assert.equal(h.panel.state.mode, "tree");
+
+	// 先把按键交给搜索框：这时点列表行应该像 Esc 一样把按键交还给列表（关键字保留）
+	h.panel.handleInput("/");
+	const row = dialogCell(h, "msg 0");
+	const cursorRow = () => h.text(100).findIndex((line) => line.includes("›") && line.includes("msg "));
+	// 打开时光标落在活动叶子（msg 1）上，不在 msg 0
+	assert.notEqual(cursorRow(), row.y);
+	h.panel.handleMouse(mouseEvent("click", row.x, row.y, { height: 24 }));
+	assert.equal(cursorRow(), row.y, "点中的那一行拿到对话框光标");
+	assert.equal(h.panel.state.mode, "tree", "the dialog stays open");
+
+	// 按键已经回到列表：j 往下动的是列表光标（按键还在搜索框里的话，j 只会变成输入）
+	h.panel.handleInput("j");
+	assert.equal(cursorRow(), row.y + 1, "j moved the list cursor down");
+	h.panel.handleInput("\x1b");
+	assert.equal(h.panel.state.mode, "normal");
+	h.panel.dispose();
+});
+
+test("the changelog box scrolls with the wheel, and a click inside it does nothing", async () => {
+	const lines = Array.from({ length: 60 }, (_, i) => `line ${i}`).join("\n\n");
+	const h = makeSessionActionPanel({ data: { loadChangelog: async () => lines } });
+	await h.panel.load();
+	await settle();
+	h.panel.handleInput("@");
+	await flush();
+	await flush();
+	assert.equal(h.panel.state.mode, "changelog");
+
+	const inside = dialogCell(h, "line 0");
+	const top = h.text(100)[inside.y]!;
+	h.panel.handleMouse(mouseEvent("click", inside.x, inside.y, { height: 24 }));
+	assert.equal(h.text(100)[inside.y], top, "a click in a read-only box changes nothing");
+
+	h.panel.handleMouse(mouseEvent("wheel", inside.x, inside.y, { height: 24, wheelDelta: 3 }));
+	const down = h.text(100)[inside.y]!;
+	assert.notEqual(down, top, "the wheel scrolled the box");
+	h.panel.handleMouse(mouseEvent("wheel", inside.x, inside.y, { height: 24, wheelDelta: -3 }));
+	assert.equal(h.text(100)[inside.y], top, "and back up");
+	// 指针在框外：不滚（和面板一样，滚轮只作用于指针下的东西）
+	h.panel.handleMouse(mouseEvent("wheel", 1, inside.y, { height: 24, wheelDelta: 5 }));
+	assert.equal(h.text(100)[inside.y], top, "a wheel outside the box does nothing");
+	h.panel.dispose();
+});
+
+test("the settings page takes the mouse: clicking the sidebar switches category (the panes behind stay put)", async () => {
+	const h = makePanel();
+	await h.panel.load();
+	h.panel.handleInput(",");
+	assert.equal(h.panel.state.mode, "settings");
+	assert.equal(h.panel.state.settings.category, "general");
+
+	const layout = dialogCell(h, t("settings.category.layout"));
+	h.panel.handleMouse(mouseEvent("click", layout.x, layout.y));
+	assert.equal(h.panel.state.settings.category, "layout");
+	assert.equal(h.panel.state.settings.region, "categories");
+	assert.equal(h.panel.state.cursor.sessions, 0, "the panes behind it did not move");
+	assert.equal(h.panel.state.mode, "settings", "and the page stays open");
 	h.panel.dispose();
 });
 
@@ -4172,4 +4384,222 @@ test("an action bound where it does nothing, or misspelled in the config, only s
 	assert.equal(h.closed(), false);
 	assert.equal(h.panel.state.mode, "normal");
 	h.panel.dispose();
+});
+
+/**
+ * 回归：面板必须从 live theme 取值（入口传 `ctx.ui.theme` 那个 proxy），而不是构造时的快照。
+ * pi 换主题时是整体替换 Theme 实例的，快照会让面板一直用旧颜色。
+ */
+test("the panel reads colors through the live theme, not a snapshot", () => {
+	let accent = "RED";
+	// 模拟 pi 的导出 `theme` proxy：每次取属性都现查当前实例。
+	const live = new Proxy({} as Theme, {
+		get: (_target, prop) => {
+			const current = {
+				fg: (color: string, s: string) => color === "accent" ? `<${accent}>${s}</${accent}>` : s,
+				bg: (_color: string, s: string) => s,
+				bold: (s: string) => s,
+				italic: (s: string) => s,
+				underline: (s: string) => s,
+				inverse: (s: string) => s,
+				strikethrough: (s: string) => s,
+			} as unknown as Record<string | symbol, unknown>;
+			return current[prop];
+		},
+	});
+	const panel = new LazyPanel({ theme: live, data: { listSessions: async () => [row(1, "/a")], loadTree: async () => [], loadContent: async () => [] }, getHeight: () => 20, requestRender: () => {}, onClose: () => {} });
+	const render = () => panel.render(80).join("\n");
+	assert.ok(render().includes("<RED>"), "constructed with the first theme");
+	accent = "BLUE"; // 用户在 pi 里换了主题
+	assert.ok(render().includes("<BLUE>"), "a later render picks up the new theme");
+	assert.ok(!render().includes("<RED>"), "the old snapshot is gone");
+	panel.dispose();
+});
+
+/**
+ * 回归：CONTENT 的排版（正文颜色）和 changelog 的渲染结果都带主题颜色，缓存的 key（宽度 / 高亮 /
+ * markdown）在换主题时不动，所以 pi 调 `invalidate()` 时必须把它们丢掉，否则面板边框变了、
+ * 正文还留在旧颜色。
+ */
+test("invalidate drops the theme-colored caches so a repaint uses the new theme", async () => {
+	let accent = "RED";
+	const live = new Proxy({} as Theme, {
+		get: (_target, prop) => ({
+			fg: (color: string, s: string) => color === "accent" ? `<${accent}>${s}</${accent}>` : s,
+			bg: (_color: string, s: string) => s,
+			bold: (s: string) => s,
+			italic: (s: string) => s,
+			underline: (s: string) => s,
+			inverse: (s: string) => s,
+			strikethrough: (s: string) => s,
+		} as unknown as Record<string | symbol, unknown>)[prop],
+	});
+	const panel = new LazyPanel({
+		theme: live,
+		data: { listSessions: async () => [row(1, "/a")], loadTree: async () => [treeRow(0)], loadContent: async () => [{ entryId: "e0", role: "user", timestamp: 0, markdown: "hello" } as ContentBlock] },
+		getHeight: () => 20,
+		requestRender: () => {},
+		onClose: () => {},
+	});
+	await panel.load();
+	assert.ok(panel.render(100).join("\n").includes("<RED>"));
+	accent = "BLUE";
+	panel.invalidate();
+	assert.ok(panel.render(100).join("\n").includes("<BLUE>"), "the content layout is re-rendered in the new theme");
+	assert.ok(!panel.render(100).join("\n").includes("<RED>"), "no stale colors survive the invalidate");
+	panel.dispose();
+});
+
+/**
+ * 假的主题端口：`sets` 记下真正的切换，pi 当前生效（也就是它保存）的主题是 "dark"。
+ * `fail` 让切换失败，用来覆盖"留在面板上重试"的路径。
+ */
+function fakeThemeSource(fail = false): { source: ThemeSource; sets: string[] } {
+	const sets: string[] = [];
+	return {
+		source: {
+			list: () => [{ name: "dark", path: "/pi/dark.json" }, { name: "nord", path: "/home/u/.pi/agent/themes/nord.json" }],
+			theme: { name: "dark" } as unknown as Theme,
+			savedName: () => sets.at(-1) ?? "dark",
+			set: (name) => {
+				if (fail) return { success: false, error: "invalid theme" };
+				sets.push(name);
+				return { success: true };
+			},
+		},
+		sets,
+	};
+}
+
+function fakeSettingsSource(): SettingsSource {
+	return {
+		read: async () => ({ raw: {}, fingerprint: "x" }),
+		save: async () => ({ snapshot: { raw: {}, fingerprint: "y" }, warnings: [] }),
+		apply: () => {},
+	};
+}
+
+/** Wait until the settings read / save settled. */
+async function settingsSettled(panel: LazyPanel): Promise<void> {
+	for (let i = 0; i < 100 && (panel.state.settings.loading || panel.state.settings.saving); i++) await new Promise((resolve) => setTimeout(resolve, 2));
+	assert.equal(panel.state.settings.loading, false);
+	assert.equal(panel.state.settings.saving, false);
+}
+
+/**
+ * 回归：设置页的主题选择走的是真实按键路径（分类 → 列表 → Enter → 菜单 → Enter），
+ * 这条链上踩过两次坑：主题列表在构造时被快照成空、主题行的 id 是空串导致 Enter 什么都不做。
+ * 主题页只有一行（右边是当前主题），回车弹菜单；选中当场切 pi（由 pi 自己持久化）。
+ */
+test("the theme page switches pi the moment a theme is picked", async () => {
+	const themes = fakeThemeSource();
+	const h = makePanel({ themeSource: themes.source, settingsSource: fakeSettingsSource() });
+	h.panel.openSettings();
+	await settingsSettled(h.panel);
+	assert.equal(h.panel.state.settings.activeTheme, "dark");
+	// 分类光标走到 Theme，再进列表（l）：一行设置，右边是 pi 生效的主题。
+	for (const key of ["j", "j", "j", "l"]) h.panel.handleInput(key);
+	assert.equal(h.panel.state.settings.category, "theme");
+	assert.match(h.text(120).join("\n"), /Theme/);
+	assert.match(h.text(120).join("\n"), /dark/);
+	// Enter 打开主题菜单，选中 nord：当场切 pi，不留草稿、不用再按 s。
+	h.panel.handleInput("\r");
+	assert.match(h.text(120).join("\n"), /Theme/);
+	h.panel.handleInput("j");
+	h.panel.handleInput("\r");
+	assert.deepEqual(themes.sets, ["nord"]);
+	assert.equal(h.panel.state.settings.activeTheme, "nord");
+	assert.equal(h.panel.state.settings.themeDraft, undefined);
+	assert.equal(settingsDirtyCount(h.panel.state.settings), 0);
+	assert.doesNotMatch(h.text(120).join("\n"), /\* Theme/);
+	// 主题页平时只有一行值，没有说明；底部说明框也不出现（只有切换失败时才有）。
+	assert.match(h.text(120).join("\n"), /Theme\s+nord/);
+	h.panel.dispose();
+});
+
+test("a failed theme switch stays on the page, marked and retryable", async () => {
+	const themes = fakeThemeSource(true);
+	const h = makePanel({ themeSource: themes.source, settingsSource: fakeSettingsSource() });
+	h.panel.openSettings();
+	await settingsSettled(h.panel);
+	for (const key of ["j", "j", "j", "l", "\r", "j", "\r"]) h.panel.handleInput(key);
+	// pi 没切过去：当前主题还是 dark，失败的 nord 留着等重试。
+	assert.deepEqual(themes.sets, []);
+	assert.equal(h.panel.state.settings.activeTheme, "dark");
+	assert.equal(h.panel.state.settings.themeDraft, "nord");
+	assert.match(h.text(120).join("\n"), /Cannot switch theme/);
+	assert.match(h.text(120).join("\n"), /s Retry/);
+	assert.match(h.text(120).join("\n"), /\* Theme/);
+	// q：还有没生效的改动 → 挽留 → 选"放弃改动并退出" → 确认。
+	h.panel.handleInput("q");
+	h.panel.handleInput("j");
+	h.panel.handleInput("j");
+	h.panel.handleInput("\r");
+	h.panel.handleInput("y");
+	assert.equal(h.panel.state.settings.phase, "closed");
+	assert.equal(h.panel.state.settings.themeDraft, undefined);
+	h.panel.dispose();
+});
+
+test("picking a value on the general page writes and applies it right away", async () => {
+	let applied = 0;
+	const saved: Record<string, unknown>[] = [];
+	const source: SettingsSource = {
+		read: async () => ({ raw: {}, fingerprint: "x" }),
+		save: async (_baseline, patch) => {
+			saved.push({ ...patch });
+			return { snapshot: { raw: { ...patch }, fingerprint: `saved-${saved.length}` }, warnings: [] };
+		},
+		apply: () => { applied++; },
+	};
+	const h = makePanel({ settingsSource: source });
+	h.panel.openSettings();
+	await settingsSettled(h.panel);
+	// 进列表（l）→ Enter 打开"界面语言"菜单 → 下移到中文 → Enter。
+	for (const key of ["l", "\r", "j", "\r"]) h.panel.handleInput(key);
+	await settingsSettled(h.panel);
+	assert.deepEqual(saved, [{ locale: "zh" }], "回车当场落盘，不用再按 s");
+	assert.equal(applied, 1);
+	assert.equal(settingsDirtyCount(h.panel.state.settings), 0);
+	assert.equal(h.panel.state.settings.patch.locale, undefined);
+	assert.match(h.text(120).join("\n"), /Simplified Chinese/);
+	h.panel.dispose();
+});
+
+/**
+ * 回归：footer 的 status 在启动时就是配置里的第一条警告（index.ts 把 config.warnings[0]
+ * 当 status 传进来）。保存设置会走 refreshConfig，那里曾经无条件 `this.status = undefined`，
+ * 于是改任意一项（哪怕和警告无关）都会让配置里的问题不再提示，而且不会自己回来。
+ */
+test("saving settings keeps the startup config warning in the footer", async () => {
+	// 真的警告文案来自 src/config/config.ts:123（不是 i18n 文案，这里是它的前缀）。
+	const warning = 'config: "theme" is not a plugin setting';
+	// 落盘的配置里带着 theme：resolveConfig 每次都会为它推一条警告。
+	const raw = { theme: "dark" };
+	const source: SettingsSource = {
+		read: async () => ({ raw, fingerprint: "x" }),
+		save: async (_baseline, patch) => ({ snapshot: { raw: { ...raw, ...patch }, fingerprint: "y" }, warnings: [] }),
+		apply: () => {},
+	};
+	const h = makePanel({ settingsSource: source, status: warning });
+	assert.match(h.text(120).at(-1)!, /is not a plugin setting/, "启动时的 status（配置警告）显示在 footer");
+	h.panel.openSettings();
+	await settingsSettled(h.panel);
+	// 改一个和警告无关的项：l 进列表 → Enter 开菜单 → j 下移 → Enter 当场保存 → apply → refreshConfig。
+	for (const key of ["l", "\r", "j", "\r"]) h.panel.handleInput(key);
+	await settingsSettled(h.panel);
+	h.panel.handleInput("q");
+	assert.equal(h.panel.state.settings.phase, "closed");
+	assert.match(h.text(120).at(-1)!, /is not a plugin setting/, "保存后 footer 的配置警告仍在");
+	h.panel.dispose();
+
+	// 配置没问题时照旧清掉：保存前的临时提示不该一直挂着。
+	const clean = makePanel({ settingsSource: fakeSettingsSource(), status: warning });
+	clean.panel.openSettings();
+	await settingsSettled(clean.panel);
+	for (const key of ["l", "\r", "j", "\r"]) clean.panel.handleInput(key);
+	await settingsSettled(clean.panel);
+	clean.panel.handleInput("q");
+	assert.doesNotMatch(clean.text(120).join("\n"), /is not a plugin setting/);
+	clean.panel.dispose();
 });

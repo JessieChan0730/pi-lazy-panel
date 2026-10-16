@@ -70,8 +70,9 @@ src/
 │   ├── key-sequencer.ts      # KeySequencer：多键序列（gg）的前缀缓冲 + 超时，面板和树对话框共用
 │   ├── frame.ts              # 纯函数：画边框（FRAME_DIVIDER 哨兵行画 ├──┤）、左右拼列、按可见宽度补齐/截断、居中叠加弹窗（overlayCentered）、弹窗宽度（dialogWidth）
 │   ├── mouse.ts              # 纯函数：verticalSplit / panelGeometry（面板列/行切分）、listVisibleRows（每个列表可见行数）、hitTest（单元格 (x,y) → 面板 + 列表行号，吃 render 用的首行偏移，SESSIONS 每行 2 行、TREE 每行 1 行）。render 和鼠标共用，保证画的位置=点的位置
-│   ├── mouse-input.ts        # 纯函数：regular 模式下 pi 不开鼠标，插件自己开 SGR 上报（ENABLE/DISABLE_MOUSE）；parseSgrMouseChunk 解析原始序列（批量拆条），MouseTracker 把按下/释放/滚轮变成 TuiMouseEvent（同格点击、双击计数、只认左键），index.ts 用它把鼠标喂给 handleMouse。见 docs/issues.md
+│   ├── mouse-input.ts        # 纯函数：regular 模式下 pi 不开鼠标，插件自己开 SGR 上报（ENABLE/DISABLE_MOUSE）；parseSgrMouseChunk 解析原始序列（批量拆条），MouseTracker 把按下/释放/滚轮变成 TuiMouseEvent（同格点击、双击计数、只认左键），index.ts 用它把鼠标喂给 handleMouse
 │   ├── search-highlight.ts   # 纯函数：搜索命中的高亮（highlightLine 在画好的整行上按可见列叠加样式，照 pi 全屏搜索的做法，前后颜色 / 光标背景不断；matchStyle 其他匹配下划线、当前匹配反色；searchMeta 标题的 2/7 matches）
+│   ├── cursor-tone.ts        # 纯函数：光标行的次级色调（cursorTone 把 dim→muted、muted→text）。光标行整行刷 selectedBg，而主题的 selectedBg 只比它假设的底色亮一档，压在它上面的 dim/muted 会糊掉；面板和树对话框都用它
 │   ├── tree-lines.ts         # 纯函数：按 parentId 算 pi /tree 风格的树线前缀（treePrefixes，折叠的段头画 ⊞），只给树对话框用
 │   ├── tree-outline.ts       # 纯函数：TREE 面板的折叠大纲前缀（treeOutline）：段头画 ▸/▾、没有后代的旁支画 ─，段内每层缩进 2 列、最多 4 层、更深的以 … 代替；三角直接占段头行首两列、不预留空列（lazygit 文件树的画法），线性对话完全不缩进
 │   ├── flows/                # 弹窗流程：每个命令从按键到 action 的整条路径（检查 → 弹输入框 / 菜单 → 调 action → footer 报结果）。顶级函数、第一个参数是 FlowHost；流程的目标由弹窗回调的闭包带着，不存任何状态
@@ -153,7 +154,6 @@ test/
 docs/keybindings.md           # 默认快捷键表，新增 ActionId 时同步更新
 docs/design.md                # 产品设计（原 计划.md）
 docs/progress.md              # 任务进度（原 进度.md），每次开工前先看
-docs/issues.md                # 已知问题 / 搁置的问题，解决后划掉
 AGENTS.md                     # 仅指向本文件，规则统一在这里维护
 ```
 
@@ -185,4 +185,3 @@ AGENTS.md                     # 仅指向本文件，规则统一在这里维护
 
 - ./docs/design.md（设计）
 - ./docs/progress.md （开发进度）
-- ./docs/issues.md（已知/搁置问题）

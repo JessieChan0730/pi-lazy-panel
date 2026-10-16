@@ -35,7 +35,8 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { t } from "../../i18n/index.ts";
 import type { KeyHint, TreeFilter, TreeRow } from "../../types.ts";
 import { clamp } from "../../utils/indices.ts";
-import { FRAME_DIVIDER, frame, overlayCentered } from "../frame.ts";
+import { cursorTone } from "../cursor-tone.ts";
+import { boxCell, boxContains, centeredRect, FRAME_DIVIDER, frame, overlayCentered, type BoxRect } from "../frame.ts";
 import { renderTreeRow } from "../panes/tree-pane.ts";
 import { scrollOffset } from "../panes/sessions-pane.ts";
 import { treePrefixes } from "../tree-lines.ts";
@@ -87,6 +88,8 @@ export class TreeDialog {
 	private query = "";
 	private _searchFocused = false;
 	private _focused = false;
+	/** 上一次绘制时对话框在屏幕上的位置（`overlay()` 里记）；鼠标命中只认这一份，没画过就点不到。 */
+	private boxRect: BoxRect | undefined;
 	/** The search field on the top row. */
 	private readonly search: PromptBar;
 
@@ -149,6 +152,7 @@ export class TreeDialog {
 		this.index = clamp(spec.initialIndex ?? 0, 0, Math.max(0, spec.rows.length - 1));
 		this.query = "";
 		this._searchFocused = false;
+		this.boxRect = undefined;
 		this.search.reset("");
 		this.search.focused = false;
 	}
@@ -157,6 +161,7 @@ export class TreeDialog {
 	close(): void {
 		this.spec = undefined;
 		this._searchFocused = false;
+		this.boxRect = undefined;
 		this.search.focused = false;
 	}
 
@@ -193,11 +198,40 @@ export class TreeDialog {
 		this.moveTo(this.index + delta);
 	}
 
-	/** gg / G and absolute moves, clamped into the listed rows. */
+	/** gg / G, 方向键和鼠标点击：把光标放到 `index`（夹取到列出的行里）。 */
 	moveTo(index: number): void {
 		const next = clamp(index, 0, Math.max(0, this.rows.length - 1));
 		if (next === this.index) return;
 		this.index = next;
+		this.o.onChange();
+	}
+
+	/**
+	 * 屏幕上 (x, y) 命中的东西：列表行返回行号，搜索行返回 "search"，
+	 * 分隔线 / 列表末尾之后的补白行 / 底部提示行 / 框外返回 undefined。鼠标单击选中、双击 Enter 都用它。
+	 */
+	indexAt(x: number, y: number): number | "search" | undefined {
+		const rect = this.boxRect;
+		const cell = rect ? boxCell(rect, x, y) : undefined;
+		if (!rect || !cell) return undefined;
+		if (cell.row === 0) return "search"; // 正文第 0 行是搜索框
+		const line = cell.row - 2; // 第 1 行是分隔线，列表从第 2 行开始
+		const visible = this.visibleRows(rect.height);
+		if (line < 0 || line >= visible) return undefined; // 分隔线、底部提示行或更靠下的补白
+		const index = scrollOffset(this.index, this.rows.length, visible) + line;
+		return index < this.rows.length ? index : undefined; // 列表末尾之后的补白行
+	}
+
+	/** Wheel: move the cursor, but only while the pointer is over the dialog (like the panes). */
+	wheel(x: number, y: number, delta: number): void {
+		if (delta !== 0 && this.boxRect && boxContains(this.boxRect, x, y)) this.move(delta);
+	}
+
+	/** Esc in the search row（以及点击列表）：把按键交还给列表，关键字和过滤结果都留着。 */
+	leaveSearch(): void {
+		if (!this._searchFocused) return;
+		this._searchFocused = false;
+		this.search.focused = false;
 		this.o.onChange();
 	}
 
@@ -211,11 +245,9 @@ export class TreeDialog {
 		this.o.onChange();
 	}
 
-	/** Esc in the search row: hand the keys back to the list; the query (and the narrowed rows) stay. */
-	private leaveSearch(): void {
-		this._searchFocused = false;
-		this.search.focused = false;
-		this.o.onChange();
+	/** 列表一次能列出几行（渲染和鼠标命中共用，免得两边算得不一样）。 */
+	private visibleRows(height: number): number {
+		return Math.max(1, height - CHROME_ROWS);
 	}
 
 	/** Box size for a `termW` × `termH` terminal: as big as it gets with a 2-column / 1-row margin. */
@@ -228,7 +260,7 @@ export class TreeDialog {
 		const { theme } = this.o;
 		const rows = this.rows;
 		const inner = width - 2;
-		const visible = Math.max(1, height - CHROME_ROWS);
+		const visible = this.visibleRows(height);
 
 		const body: string[] = [` ${this.renderSearchRow(inner - 1)}`, FRAME_DIVIDER];
 		if (rows.length === 0) {
@@ -237,7 +269,9 @@ export class TreeDialog {
 			const prefixes = treePrefixes(rows, this.folded);
 			const first = scrollOffset(this.index, rows.length, visible);
 			for (let i = first; i < Math.min(rows.length, first + visible); i++) {
-				body.push(renderTreeRow(rows[i]!, theme.fg("dim", prefixes[i]!), inner, i === this.index, theme, undefined, showLabelTimestamps));
+				// 树线整段 dim；光标行和面板一样提亮一档，否则底色上的树线看不见了。
+				const prefix = theme.fg(cursorTone("dim", i === this.index), prefixes[i]!);
+				body.push(renderTreeRow(rows[i]!, prefix, inner, i === this.index, theme, undefined, showLabelTimestamps));
 			}
 		}
 		while (body.length < visible + 2) body.push("");
@@ -271,7 +305,10 @@ export class TreeDialog {
 	/** Composite the box centered over the already-rendered panel `lines`. */
 	overlay(lines: string[], termW: number, showLabelTimestamps = false): string[] {
 		const { width, height } = TreeDialog.size(termW, lines.length);
-		return overlayCentered(lines, this.render(width, height, showLabelTimestamps), width, termW, (s) => this.o.theme.fg("dim", s));
+		const box = this.render(width, height, showLabelTimestamps);
+		// 记下这次画出来的位置：鼠标的点按（indexAt / wheel）只认它，画哪儿就点哪儿。
+		this.boxRect = centeredRect(termW, lines.length, width, box.length);
+		return overlayCentered(lines, box, width, termW, (s) => this.o.theme.fg("dim", s), this.boxRect.top);
 	}
 }
 

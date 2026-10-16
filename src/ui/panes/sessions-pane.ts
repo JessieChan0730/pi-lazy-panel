@@ -27,6 +27,7 @@ import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { t } from "../../i18n/index.ts";
 import type { ListScope, SearchView, SessionRow, SessionSortMode } from "../../types.ts";
 import { formatShortDate, shortenPath } from "../../utils/format.ts";
+import { cursorTone } from "../cursor-tone.ts";
 import { fit, frame, metaBudget } from "../frame.ts";
 import { highlightLine, matchStyle, searchMeta } from "../search-highlight.ts";
 
@@ -205,11 +206,12 @@ function renderRow(row: SessionRow, inner: number, isCursor: boolean, isCurrent:
 	if (isCursor) {
 		// 截断会在省略号前后插入完整重置码，分段补回背景，避免高亮在行中断开。
 		const hl = (s: string) => fit(s, inner).split("\x1b[0m").map((part) => theme.bg("selectedBg", part)).join("\x1b[0m");
-		// 光标行整行反白；被选中时标题额外着 accent 色。
+		// 光标行整行反白；被选中时标题额外着 accent 色。底色上的次级文字提亮一档（cursorTone），
+		// 否则 dim 的日期 / muted 的详情和 selectedBg 只差一点对比度，看着糊在一起。
 		const titleSpan = isSelected ? theme.bold(theme.fg("accent", titleText)) : theme.bold(titleText);
 		return [
-			hl(theme.bold(theme.fg("accent", marker[0]!)) + marker.slice(1) + indent + titleSpan + " " + theme.fg("dim", date)),
-			hl(theme.fg("muted", line2Raw)),
+			hl(theme.bold(theme.fg("accent", marker[0]!)) + marker.slice(1) + indent + titleSpan + " " + theme.fg(cursorTone("dim", isCursor), date)),
+			hl(theme.fg(cursorTone("muted", isCursor), line2Raw)),
 		];
 	}
 	// 选中行：标题用 accent 色，一眼能从列表里扫出来；未选中用普通 text 色。

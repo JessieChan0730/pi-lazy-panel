@@ -37,7 +37,10 @@ export interface PanelGeometry extends VerticalSplit {
  */
 export function panelGeometry(width: number, height: number, ratio: number = LEFT_COLUMN_RATIO): PanelGeometry {
 	const v = verticalSplit(height);
-	const leftW = Math.max(24, Math.min(width - 30, Math.floor(width * ratio)));
+	// 两栏的最小宽度无法同时满足时按比例退化，绝不产生负列数。
+	const leftW = width < 54
+		? Math.max(0, Math.min(width, Math.floor(width * ratio)))
+		: Math.max(24, Math.min(width - 30, Math.floor(width * ratio)));
 	return { ...v, leftW, rightW: width - leftW };
 }
 
