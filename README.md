@@ -10,6 +10,8 @@ pi-lazy-panel is a panel for managing [pi](https://pi.dev) sessions and session 
 
 The everyday session operations (new / resume / fork / clone / rename / delete / compact / export / import / share / copy) are all condensed into single-key shortcuts — no mouse required.
 
+Press `,` for the built-in **settings page**: General (language, default scope, default sort), Layout (how wide the left column is), Keybindings (per scope, recorded by pressing the keys you want) and Theme (switches pi's own theme). Every edit takes effect at once and is written back to `~/.pi/agent/lazy-panel.json` — no hand-editing JSON.
+
 ## Preview
 
 ![pi-lazy-panel preview](https://raw.githubusercontent.com/JessieChan0730/pi-lazy-panel/HEAD/assets/readme/preview-en.png)
@@ -21,10 +23,11 @@ The everyday session operations (new / resume / fork / clone / rename / delete /
 3. Full coverage of the session commands: resume / new / fork / clone / rename / delete / compact / export / import / share / copy
 4. Session-tree navigation: restore to any node, choosing "No summary / Summarize / Summarize with custom prompt" for the abandoned branch
 5. lazygit-style search: `/` jumps in place, `n` / `N` cycle, with `name:` `model:` `path:` `tag:` `role:` `after:` `before:` qualifiers
-6. Theme follows pi automatically
+6. Theme follows pi automatically — the settings page switches pi's own theme, both the built-in ones and custom ones under `~/.pi/agent/themes/`
 7. Bilingual — English and Chinese (follows the system language, overridable in the config)
-8. Fully customizable keybindings: rebind any action in `~/.pi/agent/lazy-panel.json`
+8. Fully customizable keybindings: rebind any action in the settings page or in `~/.pi/agent/lazy-panel.json`
 9. Light mouse support (wheel to scroll, click to focus, double-click to enter / fold)
+10. Built-in settings page (`,`): General / Layout / Keybindings / Theme edited in place — key bindings are recorded by pressing the keys, conflicts are caught before they are written, and each edit is saved as you make it
 
 ## Quick start
 
@@ -38,7 +41,7 @@ pi install npm:pi-lazy-panel
 pi install git:github.com/JessieChan0730/pi-lazy-panel
 ```
 
-After installing, run `/lazy-panel` inside pi to open the panel; `?` shows all shortcuts for the current pane.
+After installing, run `/lazy-panel` inside pi to open the panel; `?` shows all shortcuts for the current pane, and `,` opens the settings page.
 
 ## Local development
 
@@ -95,10 +98,13 @@ The config file lives at `~/.pi/agent/lazy-panel.json`. Every field is optional 
 
 `keymap` is grouped by `scope` (`global` / `sessions` / `tree` / `content` / `tree-dialog`); the key is an action id and the value is one or more chords (e.g. `"ctrl+d"`, `["A", "ctrl+space"]`). A user-provided binding **replaces the action's default entirely**, and `null` unbinds it. See [docs/keybindings.md](./docs/keybindings.md) for the full list of action ids and keybindings.
 
-## Next steps
+The settings page (`,`) edits this same file: it patches only the fields you changed, leaves the rest of the file — including its indentation and line endings — as it was, and merges unrelated changes made in another window (a conflict on the same field stops the write and offers a retry).
 
-- Add a settings panel
-- Add multiple themes / custom themes
+## Roadmap
+
+0.2.0 adds the settings panel; the 0.2.x line is for fixes, polish and code cleanups rather than new features.
+
+Two display quirks are known and still open: closing `?` and switching panes right away can leave a one-frame ghost, and in pi's regular (main-screen) TUI mode a long session can clip the panel's top rows — `pi --tui-mode fullscreen` (or `"tuiMode": "fullscreen"` in pi's `settings.json`) avoids the latter.
 
 ## Contributing
 
