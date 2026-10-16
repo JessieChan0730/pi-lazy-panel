@@ -122,15 +122,18 @@ test("setting details show localized labels and descriptions without internal ke
 			const h = makeDialog();
 			h.state.category = "layout";
 			assert.doesNotMatch(h.text(), /leftColumnRatio/);
-			assert.ok(h.text().includes(`${t("settings.leftWidth")}: 25%`));
+			// 说明框只写说明：列表行上的名字和值不再抄一遍。
+			assert.ok(!h.text().includes(`${t("settings.leftWidth")}: 25%`));
 			assert.ok(h.text().includes(t("settings.widthDescription").slice(0, 25)));
 			h.state.category = "keybindings";
 			assert.doesNotMatch(h.text(), /keyScope/);
 			assert.ok(h.text().includes(t("settings.keyScope")));
-			assert.ok(h.text().includes(t("settings.scopeDescription").slice(0, 25)));
+			assert.ok(h.text().includes(t("settings.scopeDescription", { scope: t("scopeTitle.global") }).slice(0, 25)));
 			h.state.positions.global = { cursor: 1, scroll: 0, detailScroll: 0 };
 			assert.doesNotMatch(h.text(), /move-down/);
-			assert.ok(h.text().includes(t("settings.layerDescription").slice(0, 25)));
+			// 动作行同理：光标行的动作名和绑定值都不出现在说明框里。
+			assert.ok(!h.text().includes(`${t("action.move-down")}: `));
+			assert.ok(h.text().includes(t("settings.layerDescription", { scope: t("scopeTitle.global") }).slice(0, 25)));
 		}
 	} finally {
 		initI18n("en");
@@ -200,7 +203,11 @@ test("feedback and existing descriptions share one bottom frame with a divider",
 		const bottom = lines.slice(boxes[1]);
 		assert.ok(bottom[1]!.includes(t("settings.themeApplied", { name: "orange" })));
 		assert.ok(bottom[2]!.startsWith("├"), "result and explanation are separated");
-		assert.ok(bottom.some((line) => line.includes(t(category === "layout" ? "settings.leftWidth" : "settings.keyScope"))));
+		// 说明框跟着光标下的条目走：里面是那一条的说明（不再重复它的名字和值）。
+		const description = category === "layout"
+			? t("settings.widthDescription")
+			: t("settings.scopeDescription", { scope: t("scopeTitle.global") });
+		assert.ok(bottom.some((line) => line.includes(description.slice(0, 20))));
 		assert.doesNotMatch(bottom.join("\n"), /leftColumnRatio|keyScope/);
 		h.state.notice = undefined;
 		const descriptionOnly = h.text().split("\n");
@@ -429,19 +436,20 @@ test("keybinding preview shows local overrides and unbinding, scroll preserves c
 	h.text(60, 15);
 	assert.deepEqual(h.state.positions.global, pos);
 });
-test("long values have scrollable detail without changing selected action", () => {
-	const h = makeDialog(resolveConfig({ keymap: { global: { "move-down": ["ctrl+w h", "ctrl+alt+shift+super+pageDown", "alt+pageUp", "ctrl+shift+f12"] } } }));
+test("a long description scrolls on its own without changing the selected action", () => {
+	const h = makeDialog(resolveConfig({ keymap: { global: { "move-down": ["ctrl+w h", "ctrl+alt+shift+super+pageDown"] } } }));
 	h.dialog.open();
 	h.state.category = "keybindings";
 	h.state.region = "list";
 	h.dialog.handleInput("j");
-	let all = h.text(42, 18);
+	// 说明比说明框高（矮终端）：给 PgDn 提示，滚到底才看得到最后一行。
+	let all = h.text(42, 13);
 	assert.match(all, /↓ PgDn/);
 	for (let i = 0; i < 10; i++) {
 		h.dialog.handleInput("\x1b[6~");
-		all += h.text(42, 18);
+		all += h.text(42, 13);
 	}
-	assert.match(all, /Ctrl\+Shift\+F12/);
+	assert.match(all, /what fires/);
 	assert.equal(h.state.positions.global?.cursor, 1);
 	h.dialog.handleInput("j");
 	assert.equal(h.state.positions.global?.detailScroll, 0);
