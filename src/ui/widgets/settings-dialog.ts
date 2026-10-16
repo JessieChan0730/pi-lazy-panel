@@ -23,6 +23,7 @@ interface SettingsItem {
 	/**
 	 * 只有容易被误会的设置才写说明（布局宽度、快捷键的层级语义、主题切换失败……）。
 	 * 说明是底部说明框存在的唯一理由：没有说明就不画那个框，其余设置靠行本身自解释。
+	 * 框里只画这段说明——名字和值列表行上已经有了，再抄一遍只是噪音（连带光标也看得见是哪一条）。
 	 */
 	description?: string;
 	/** True when the draft changes this item (shows the `*` marker). */
@@ -292,7 +293,7 @@ export class SettingsDialog {
 					{ id: "defaultSort", label: t("settings.defaultSort"), value: t(`settings.sort.${config.defaultSort}`), dirty: dirty("defaultSort") },
 				];
 			case "layout":
-				// 宽度是容易误会的一项（三个面板怎么分、范围是多少），保留说明。
+				// 宽度是容易误会的一项（谁跟谁共用、范围与默认值），保留说明。
 				return [{ id: "leftColumnRatio", label: t("settings.leftWidth"), value: `${Number((config.leftColumnRatio * 100).toFixed(2))}%`, description: t("settings.widthDescription"), dirty: dirty("leftColumnRatio") }];
 			case "theme":
 				return this.themeItems();
@@ -300,11 +301,13 @@ export class SettingsDialog {
 				// 本层合并结果，不使用会展开继承的 help/labelsForFocus；默认表只用于保留已解绑的动作行。
 				const actions = new Set([...Object.keys(DEFAULT_KEYMAP[state.keyScope]), ...Object.keys(config.keymap[state.keyScope])]);
 				// 快捷键保留说明：这里"只显示本层"和"实际还受继承 / 优先级 / 禁用影响"最容易看错。
-				return [{ id: "keyScope", label: t("settings.keyScope"), value: scopeTitle(state.keyScope), description: t("settings.scopeDescription") }, ...[...actions].map((id) => ({
+				// 说明框不再重复列表行，作用域名字要写进文案里（见 locales 的 scopeDescription / layerDescription）。
+				const scope = scopeTitle(state.keyScope);
+				return [{ id: "keyScope", label: t("settings.keyScope"), value: scope, description: t("settings.scopeDescription", { scope }) }, ...[...actions].map((id) => ({
 					id,
 					label: actionDescription(id as ActionId),
 					value: labelsFor(config.keymap, state.keyScope, id as ActionId).join(" / ") || t("settings.unbound"),
-					description: t("settings.layerDescription"),
+					description: t("settings.layerDescription", { scope }),
 					dirty: keymapActionDirty(state, state.keyScope, id as ActionId),
 				}))];
 			}
@@ -478,14 +481,9 @@ export class SettingsDialog {
 		const cursor = clamp(pos.cursor, 0, Math.max(0, items.length - 1));
 		const item = items[cursor];
 		const inner = width - 2;
+		// 说明框只画说明本身：所属的条目就在上面的列表里（光标那行），把名字和值再抄一遍是冗余。
 		const detail = height >= 11 && item?.description
-			? [
-					item.value ? `${item.label}: ${item.value}` : "",
-					item.description,
-				]
-					.filter((text) => text.length > 0)
-					.flatMap((text) => wrapTextWithAnsi(text, Math.max(1, inner - 2)))
-					.map((line) => theme.fg("muted", line))
+			? wrapTextWithAnsi(item.description, Math.max(1, inner - 2)).map((line) => theme.fg("muted", line))
 			: [];
 		const messages = feedback.flatMap((text) => wrapTextWithAnsi(text, Math.max(1, inner - 2)));
 		const content = [...messages, ...(messages.length && detail.length ? [FRAME_DIVIDER] : []), ...detail];
