@@ -168,7 +168,7 @@ test("settings opens immediately in all panes, owns keys and mouse, and preserve
 		h.panel.handleInput("d");
 		assert.match(h.text(120).join("\n"), /Settings/);
 		assert.doesNotMatch(h.text(120).join("\n"), /Preview only|Settings · Read-only/);
-		assert.match(h.text(120).at(-1)!, /Esc\/q close/);
+		assert.match(h.text(120).at(-1)!, /Esc close/);
 		h.panel.handleInput("\x1b");
 		assert.equal(h.panel.state.settings.phase, "closed");
 		assert.equal(h.panel.state.mode, "normal");

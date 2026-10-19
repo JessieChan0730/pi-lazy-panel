@@ -139,6 +139,15 @@ test("setting details show localized labels and descriptions without internal ke
 		initI18n("en");
 	}
 });
+test("footer hints keep navigation keys only; the action keys live on the button bar", () => {
+	const h = makeDialog();
+	const keys = h.dialog.hints.map(([key]) => key);
+	// 没有对应按钮的导航键留在 footer。
+	for (const key of ["Esc", "h/←", "l/→", "Tab", "j/k/↑↓", "Enter"]) assert.ok(keys.includes(key), `${key} is hinted in the footer`);
+	// 动作键在按钮行的标签上写着，footer 不再重复。
+	for (const key of ["q", "d", "r", "s"]) assert.ok(!keys.includes(key), `${key} is not repeated in the footer`);
+	assert.match(h.text(), /\[ q close \].*\[ d Restore defaults \].*\[ r Reload \]/);
+});
 test("the detail box only appears for items that carry a description", () => {
 	// 布局和快捷键本来就容易看错，底部说明框（第二个 ┌ 开头的方框）留着；
 	// 常规 / 主题行自己说得清，没有说明就不画框，把高度还给列表。
