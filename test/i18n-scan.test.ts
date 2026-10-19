@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { baseKey, isKeyPresent, isKeyUsed, usageFromText } from "../scripts/i18n-usage.mjs";
+import { baseKey, isKeyPresent, isKeyUsed, pluralBaseKeys, pluralCategories, usageFromText } from "../scripts/i18n-usage.mjs";
 
 test("usageFromText: static literals and dynamic prefixes", () => {
 	const { staticKeys, dynamicPrefixes } = usageFromText([
@@ -47,4 +47,24 @@ test("isKeyPresent counts plural / context variants already in the locale", () =
 	assert.equal(isKeyPresent("c.d", flat), true);
 	assert.equal(isKeyPresent("a.b", flat), true);
 	assert.equal(isKeyPresent("a.e", flat), false);
+});
+
+test("isKeyPresent treats scaffold placeholders (empty / blank) as missing", () => {
+	// 回归：空串是扫描脚本补的占位，不该算「已同步」，否则空译文能过 i18n:check。
+	const flat = { "a.b": "", "c.d": "   ", "e.f_other": "x", "e.f_one": "" };
+	assert.equal(isKeyPresent("a.b", flat), false);
+	assert.equal(isKeyPresent("c.d", flat), false);
+	assert.equal(isKeyPresent("e.f", flat), true, "_other is filled, so the base key counts as translated");
+	assert.equal(isKeyPresent("e.f_one", flat), false, "the explicitly named plural variant still has to be filled");
+	assert.equal(isKeyPresent("e.f_other", flat), true);
+});
+
+test("pluralCategories reports the CLDR categories i18next will look up", () => {
+	assert.deepEqual(pluralCategories("en"), ["one", "other"]);
+	assert.deepEqual(pluralCategories("zh"), ["other"]);
+});
+
+test("pluralBaseKeys finds the bases that carry plural variants", () => {
+	const flat = { "a.b": "x", "c.d_one": "1", "c.d_other": "n", "e.f_other": "n" };
+	assert.deepEqual([...pluralBaseKeys(flat)].sort(), ["c.d", "e.f"]);
 });

@@ -75,6 +75,9 @@ export function initI18n(lng?: Locale): Locale {
 		supportedLngs: [...SUPPORTED_LOCALES],
 		// 同步初始化：资源内联、没有异步 backend，init 返回时 t() 已可用。
 		initImmediate: false,
+		// 空串按「未翻译」处理，继续走 fallbackLng：扫描脚本给人补的占位就是空串，
+		// 默认值 true 会把空串当有效译文直接返回，zh 下未填的 key 就渲染成空白。
+		returnEmptyString: false,
 		// 终端不是 HTML，关掉 HTML 转义，否则 `'` / `<` 会被转义成实体。
 		interpolation: { escapeValue: false },
 		resources: {

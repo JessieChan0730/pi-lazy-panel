@@ -37,8 +37,8 @@ npm test               # node --import tsx --test "test/**/*.test.ts"
 npm run dev            # pi -e ./src/index.ts，临时把插件加载进一个 pi TUI，不写配置
 npm run install:pi     # pi install .，把本目录以本地路径注册到 ~/.pi/agent/settings.json（pi 会把 . 解析成绝对路径），只需执行一次
 npm run uninstall:pi   # pi remove .，从 pi 中移除
-npm run i18n:scan      # 扫描 src 里的 t("…") key，和 src/i18n/locales/{en,zh}.json 对齐（缺失的以空串补进去、按字母排序），报告缺失 / 需翻译 / 孤儿
-npm run i18n:check     # 同上但只读不写，有不一致时退出码非 0（CI 用）
+npm run i18n:scan      # 扫描 src 里的 t("…") key，和 src/i18n/locales/{en,zh}.json 对齐（缺失的以空串补进去、按字母排序），报告缺失 / 需翻译 / 复数 key 缺变体 / 孤儿；空串只算待翻译
+npm run i18n:check     # 同上但只读不写，有不一致（含空占位）时退出码非 0（CI 用）
 npm run lint           # ESLint（eslint.config.js）：@stylistic 预设（tab 缩进等）、命名规范、未使用变量 / import、顶级函数不用箭头函数、本地导入带 .ts、src 里不许写死非英文文案
 npm run lint:fix       # 自动修复能修的（缩进、引号、未使用的 import……）
 npm run ci             # CI 入口（.github/workflows/ci.yml 调用）：跑和 pre-push 同一套六项检查；PR_BASE_SHA / PR_HEAD_SHA 在时按 base..head 算提交消息和改动文件
@@ -115,7 +115,7 @@ src/
 │   ├── config.ts             # 唯一知道 ~/.pi/agent/lazy-panel.json 的模块，深合并用户配置（null 解绑）
 │   └── pi-settings.ts        # 唯一读 pi 自己 settings.json 的模块（SettingsManager.create 只读），目前取 branchSummary.skipPrompt 和 treeFilterMode（TREE 的初始过滤）
 ├── i18n/                     # 国际化：唯一知道 i18next 的层
-│   ├── index.ts              # initI18n(lng?)（同步、按系统语言、fallback en）、detectLocale / normalizeLocale、导出 t()。约定：不在模块顶层用 t() 算 const，文案一律写成函数、渲染时才 t()
+│   ├── index.ts              # initI18n(lng?)（同步、按系统语言、fallback en、returnEmptyString:false 让空占位回退英文）、detectLocale / normalizeLocale、导出 t()。约定：不在模块顶层用 t() 算 const，文案一律写成函数、渲染时才 t()
 │   └── locales/
 │       ├── en.json           # 基准语言（source of truth）
 │       └── zh.json           # 中文
@@ -125,8 +125,8 @@ src/
     └── paths.ts              # 用户输入的路径：去引号、~ 用 os.homedir() 展开（Windows 也能用）、相对路径按 cwd 解析
 
 scripts/
-├── i18n-scan.mjs             # 扫描 t("…") key 并和 locales 对齐（i18n:scan 写 / i18n:check 只读）
-├── i18n-usage.mjs            # i18n-scan 的纯函数：从源码文本提取静态 / 动态 key、判断 key 是否被用到 / 已存在（+ i18n-usage.d.mts 类型声明，供测试 type-only import）
+├── i18n-scan.mjs             # 扫描 t("…") key 并和 locales 对齐（i18n:scan 写 / i18n:check 只读）：缺失、空占位、复数 key 缺变体、孤儿
+├── i18n-usage.mjs            # i18n-scan 的纯函数：从源码文本提取静态 / 动态 key、判断 key 是否被用到 / 已翻译（空串算未翻译）、按 CLDR 类别找复数 key（+ i18n-usage.d.mts 类型声明，供测试 type-only import）
 ├── eslint-plugin-i18n.mjs    # 本地 ESLint 规则 i18n/no-hardcoded-text：src 里的字符串出现非拉丁字母 / 全角标点就报错（注释、console 日志、类型、键名、import 路径不算）
 ├── install-hooks.mjs         # npm prepare：装 husky hooks；没有 husky（pi 用 --omit=dev 安装 git 来源插件时）静默跳过
 ├── checks.mjs                # 共享的六项检查实现（commit messages / eslint / i18n text / i18n keys / typecheck / tests）；导出 git / changedCodeFiles / runChecks，pre-push 和 CI 复用，保证两边规则一致
@@ -176,7 +176,7 @@ AGENTS.md                     # 仅指向本文件，规则统一在这里维护
 10. 模块之间尽量低耦合
 11. 更新 design, progress, keybindings 这些文档，提交消息固定为 `chore(doc): update doc by $progress` 后面 $变量 根据实际修改的文档来定
 12. 新增功能一定要考虑跨平台，不要使用某些特定平台的特性，比如路径使用`~/` 这个在 windows下是会报错的。
-13. 所有 UI 文案走 `src/i18n` 的 `t()`，中英两份 `src/i18n/locales/{en,zh}.json` 同步维护（英文是基准）；**不要在模块顶层用 `t()` 计算 `export const`**（import 期求值会早于 `initI18n`），需要文案的地方写成函数、渲染时才调用。改完跑 `npm run i18n:check` 确认对齐。i18next 放 `dependencies`（第 6 条只约束那三个 pi 包，不影响新增普通依赖）。
+13. 所有 UI 文案走 `src/i18n` 的 `t()`，中英两份 `src/i18n/locales/{en,zh}.json` 同步维护（英文是基准）；**不要在模块顶层用 `t()` 计算 `export const`**（import 期求值会早于 `initI18n`），需要文案的地方写成函数、渲染时才调用。改完跑 `npm run i18n:check` 确认对齐（空串算未翻译、en 复数 key 必须凑齐 `_one`/`_other`）。i18next 放 `dependencies`（第 6 条只约束那三个 pi 包，不影响新增普通依赖）。
 14. 完成任务前跑 `npm run lint`、`npm run check`、`npm test`、`npm run i18n:check` 确认全过——push 时 pre-push 钩子会检查同样的内容，不过就推不上去；不要用 `--no-verify` 绕过。
 15. 发版只在 `main` 上打 tag：先把改动经 PR 合并进 `main`，切到 `main`（`git pull` 到最新）再打 `vX.Y.Z` 并推送。推 `v*.*.*` tag 会触发 `.github/workflows/release.yml` 自动 `npm publish` + 建 GitHub Release，所以严禁在功能分支上打 release tag；`scripts/pre-push.mjs` 会拦截指向非 main 提交的 release tag 推送。
 

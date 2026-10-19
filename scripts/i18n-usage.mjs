@@ -2,7 +2,8 @@
  * Pure helpers behind the i18n scan (`scripts/i18n-scan.mjs`).
  *
  * 拆出来是为了能单测：扫描脚本本身还要读写文件，这里只做纯计算
- * （从源码文本里提取静态 / 动态 key，以及判断某个 key 是否被用到）。
+ * （从源码文本里提取静态 / 动态 key，判断某个 key 是否被用到 / 已翻译，
+ * 以及按 CLDR 复数类别列出哪些 key 是复数 key）。
  * 类型声明在 `i18n-usage.d.mts`，供测试里的 type-only import 使用。
  */
 
@@ -75,6 +76,22 @@ export function baseKey(key) {
 	return key.replace(SUFFIX_RE, "");
 }
 
+/** CLDR plural categories a language actually uses ("en" -> one/other, "zh" -> other). */
+export function pluralCategories(locale) {
+	try {
+		return new Intl.PluralRules(locale).resolvedOptions().pluralCategories;
+	} catch {
+		return ["other"];
+	}
+}
+
+/** Base keys in `flat` that carry at least one plural variant ("k_one" -> "k"). */
+export function pluralBaseKeys(flat) {
+	const bases = new Set();
+	for (const key of Object.keys(flat)) if (SUFFIX_RE.test(key)) bases.add(baseKey(key));
+	return bases;
+}
+
 /** Is `key` referenced by a static literal, or covered by a dynamic prefix? */
 export function isKeyUsed(key, staticKeys, dynamicPrefixes) {
 	if (staticKeys.has(key) || staticKeys.has(baseKey(key))) return true;
@@ -82,8 +99,19 @@ export function isKeyUsed(key, staticKeys, dynamicPrefixes) {
 	return false;
 }
 
-/** Is `key` present in a flattened locale, counting any plural / context variant? */
+/**
+ * Is `key` present in a flattened locale with a usable (non-blank) value,
+ * counting any plural / context variant?
+ *
+ * 空串是扫描脚本补的占位（等于「还没翻译」），不算 present：否则 `i18n:check` 会把
+ * 一份空译文当成已同步放行，运行时又会因为它是「有效译文」而不回退英文，直接渲染成空白。
+ */
 export function isKeyPresent(key, flat) {
-	if (key in flat) return true;
-	return Object.keys(flat).some((k) => baseKey(k) === key);
+	if (isFilled(flat[key])) return true;
+	return Object.keys(flat).some((k) => baseKey(k) === key && isFilled(flat[k]));
+}
+
+/** A locale entry counts as translated only when it is a non-blank string. */
+function isFilled(value) {
+	return typeof value === "string" && value.trim() !== "";
 }

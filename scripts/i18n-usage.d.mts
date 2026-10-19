@@ -7,5 +7,7 @@ export interface Usage {
 
 export function usageFromText(text: string): Usage;
 export function baseKey(key: string): string;
+export function pluralCategories(locale: string): string[];
+export function pluralBaseKeys(flat: Record<string, unknown>): Set<string>;
 export function isKeyUsed(key: string, staticKeys: Set<string>, dynamicPrefixes: Set<string>): boolean;
 export function isKeyPresent(key: string, flat: Record<string, unknown>): boolean;
