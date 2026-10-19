@@ -10,21 +10,21 @@
  * 默认（无 --check）还会把缺失的 key 以空串占位补进两份 json 并按字母排序，
  * 保留已有译文；补完后由人 / AI 填空。--check 只报告不写，有问题时退出码非 0。
  *
- * 说明：像 `t(`action.${id}`)` 这种动态 key 无法静态提取，脚本记下它的前缀
- * （如 `action`），据此避免把该命名空间下的 key 误报成孤儿。
+ * 说明：像 `t(`settings.language.${code}`)` 这种动态 key 无法静态提取，脚本记下
+ * `${` 之前的完整前缀（如 `settings.language.`），据此避免把该前缀下的 key 误报成孤儿。
+ * 注意前缀必须精确到 `settings.language.`，只取首段（`settings`）会放行整个命名空间。
  */
 
 import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isKeyPresent, isKeyUsed, usageFromText } from "./i18n-usage.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const SRC_DIR = join(ROOT, "src");
 const LOCALES_DIR = join(ROOT, "src", "i18n", "locales");
 const LOCALES = ["en", "zh"];
 const BASE = "en";
-/** Plural / context suffixes i18next appends; a base key counts as present if any variant exists. */
-const SUFFIX_RE = /_(zero|one|two|few|many|other)$/;
 
 const CHECK_ONLY = process.argv.includes("--check");
 
@@ -43,20 +43,10 @@ function sourceFiles(dir) {
 function collectUsage(files) {
 	const staticKeys = new Set();
 	const dynamicPrefixes = new Set();
-	const re = /\bt\(\s*(["'`])([^"'`]*)\1?/g;
 	for (const file of files) {
-		const text = readFileSync(file, "utf8");
-		for (const m of text.matchAll(re)) {
-			const raw = m[2];
-			if (!raw) continue;
-			const dollar = raw.indexOf("${");
-			if (dollar >= 0) {
-				const prefix = raw.slice(0, dollar).split(".")[0];
-				if (prefix) dynamicPrefixes.add(prefix);
-			} else {
-				staticKeys.add(raw);
-			}
-		}
+		const { staticKeys: stats, dynamicPrefixes: prefixes } = usageFromText(readFileSync(file, "utf8"));
+		for (const key of stats) staticKeys.add(key);
+		for (const prefix of prefixes) dynamicPrefixes.add(prefix);
 	}
 	return { staticKeys, dynamicPrefixes };
 }
@@ -91,17 +81,6 @@ function sortDeep(value) {
 	return out;
 }
 
-/** Base key of a plural / context variant ("k_other" -> "k"). */
-function baseKey(key) {
-	return key.replace(SUFFIX_RE, "");
-}
-
-/** Is `key` present in `flat`, counting any plural / context variant of it? */
-function present(key, flat) {
-	if (key in flat) return true;
-	return Object.keys(flat).some((k) => baseKey(k) === key);
-}
-
 function main() {
 	const files = sourceFiles(SRC_DIR);
 	const { staticKeys, dynamicPrefixes } = collectUsage(files);
@@ -115,19 +94,18 @@ function main() {
 	const baseFlat = flat[BASE];
 
 	// 代码用到但 en.json 缺失的静态 key（需要补基准文案）。
-	const missingInBase = [...staticKeys].filter((k) => !present(k, baseFlat)).sort();
+	const missingInBase = [...staticKeys].filter((k) => !isKeyPresent(k, baseFlat)).sort();
 	// en 有、其它语言缺的 key（需要翻译）。
 	const missingByLocale = {};
 	for (const locale of LOCALES) {
 		if (locale === BASE) continue;
 		missingByLocale[locale] = Object.keys(baseFlat)
-			.filter((k) => !present(k, flat[locale]))
+			.filter((k) => !isKeyPresent(k, flat[locale]))
 			.sort();
 	}
 	// json 里有、但没被任何静态 key 或动态前缀用到的 key（可能是孤儿）。
-	const used = (key) => staticKeys.has(key) || staticKeys.has(baseKey(key)) || dynamicPrefixes.has(key.split(".")[0]);
 	const orphans = Object.keys(baseFlat)
-		.filter((k) => !used(k))
+		.filter((k) => !isKeyUsed(k, staticKeys, dynamicPrefixes))
 		.sort();
 
 	console.log(`i18n scan — ${files.length} source files, ${staticKeys.size} static keys, ${Object.keys(baseFlat).length} keys in ${BASE}.json`);

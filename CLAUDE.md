@@ -126,6 +126,7 @@ src/
 
 scripts/
 ├── i18n-scan.mjs             # 扫描 t("…") key 并和 locales 对齐（i18n:scan 写 / i18n:check 只读）
+├── i18n-usage.mjs            # i18n-scan 的纯函数：从源码文本提取静态 / 动态 key、判断 key 是否被用到 / 已存在（+ i18n-usage.d.mts 类型声明，供测试 type-only import）
 ├── eslint-plugin-i18n.mjs    # 本地 ESLint 规则 i18n/no-hardcoded-text：src 里的字符串出现非拉丁字母 / 全角标点就报错（注释、console 日志、类型、键名、import 路径不算）
 ├── install-hooks.mjs         # npm prepare：装 husky hooks；没有 husky（pi 用 --omit=dev 安装 git 来源插件时）静默跳过
 ├── checks.mjs                # 共享的六项检查实现（commit messages / eslint / i18n text / i18n keys / typecheck / tests）；导出 git / changedCodeFiles / runChecks，pre-push 和 CI 复用，保证两边规则一致
