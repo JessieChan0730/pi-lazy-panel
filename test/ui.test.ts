@@ -722,6 +722,22 @@ test("ContentViewport: scroll clamps to the last full page, zz may overscroll un
 	assert.deepEqual(view.matches(""), []);
 });
 
+test("ContentViewport: the layout cache follows the UI language (and a save no longer has to clear it)", () => {
+	const state = createInitialState();
+	const view = new ContentViewport({ theme: plainTheme as never, state, onChange: () => {} });
+	view.setBlocks([{ entryId: "e0", role: "user", timestamp: 0, markdown: "hi" }], undefined);
+	const layout = view.layoutFor(40, 9);
+	assert.match(layout.lines.join("\n"), /YOU/, "English header");
+	assert.equal(view.layoutFor(40, 9), layout, "same blocks / width / highlight / language: the cached layout is reused");
+	// 排版里嵌了 "YOU / 你" 这类本地化标题：语言算进缓存的键，换语言就得重排。
+	initI18n("zh");
+	const zh = view.layoutFor(40, 9);
+	assert.notEqual(zh, layout, "a language switch re-lays out");
+	assert.match(zh.lines.join("\n"), /你/);
+	initI18n("en");
+	assert.notEqual(view.layoutFor(40, 9), zh, "switching back re-lays out too");
+});
+
 test("TreeView: folds hide descendants; reveal, keepCursorOn and toggleFold; the dialog search suspends the folds", () => {
 	const state = createInitialState();
 	const view = new TreeView(state);

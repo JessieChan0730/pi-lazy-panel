@@ -1,6 +1,6 @@
 /**
  * The CONTENT pane's view of the loaded branch: its blocks, the layout cache
- * (per width and highlight), scrolling — including `zz`, which may scroll past
+ * (per width, highlight and UI language), scrolling — including `zz`, which may scroll past
  * the last full page so a message near the end can sit in the middle — the
  * highlighted message and the `/` matches among the rendered lines.
  *
@@ -16,6 +16,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import { matchesTokens, parseSearchQuery, searchTokens } from "../data/search.ts";
+import { currentLocale, type Locale } from "../i18n/index.ts";
 import type { ContentBlock } from "../types.ts";
 import { clamp, indicesWhere } from "../utils/indices.ts";
 import { type ContentLayout, layoutContent, maxScroll } from "./panes/content-pane.ts";
@@ -33,8 +34,8 @@ export class ContentViewport {
 	private _blocks: ContentBlock[] = [];
 	/** Leaf entry the current branch ends at (undefined = the session's own leaf). */
 	private _leaf: string | undefined;
-	/** Layout cache keyed by blocks identity / width / highlight. */
-	private cache: { blocks: ContentBlock[]; inner: number; highlight: string | undefined; layout: ContentLayout } | undefined;
+	/** Layout cache keyed by blocks identity / width / highlight / UI language. */
+	private cache: { blocks: ContentBlock[]; inner: number; highlight: string | undefined; locale: Locale; layout: ContentLayout } | undefined;
 	/** Viewport size as of the last render, used to clamp scrolling. */
 	private view = { inner: 60, visible: 10 };
 	/**
@@ -76,14 +77,22 @@ export class ContentViewport {
 		this.searchCache = undefined;
 	}
 
-	/** Cached layout of the blocks for the last rendered width. */
+	/**
+	 * Cached layout of the blocks for the last rendered width.
+	 *
+	 * The active UI language is part of the key because the layout bakes in
+	 * localized text (the YOU / ASSISTANT headers): switching the language has to
+	 * re-lay out, and leaving it alone must not (a settings save rebuilds nothing).
+	 * A theme switch moves no key at all, so it goes through `invalidate()`.
+	 */
 	layout(): ContentLayout {
 		const { inner } = this.view;
 		const highlight = this.o.state.contentHighlight;
+		const locale = currentLocale();
 		const c = this.cache;
-		if (c && c.blocks === this._blocks && c.inner === inner && c.highlight === highlight) return c.layout;
+		if (c && c.blocks === this._blocks && c.inner === inner && c.highlight === highlight && c.locale === locale) return c.layout;
 		const layout = layoutContent(this._blocks, inner, this.o.theme, highlight);
-		this.cache = { blocks: this._blocks, inner, highlight, layout };
+		this.cache = { blocks: this._blocks, inner, highlight, locale, layout };
 		return layout;
 	}
 
