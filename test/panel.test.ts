@@ -29,6 +29,7 @@ import type {
 	TreeRow,
 } from "../src/types.ts";
 import { LazyPanel } from "../src/ui/app.ts";
+import { ContentViewport } from "../src/ui/content-viewport.ts";
 import type { ActionSource, DataSource, SettingsSource, ThemeSource } from "../src/ui/ports.ts";
 import { settingsDirtyCount } from "../src/ui/settings-state.ts";
 import { cannotDeleteActiveTitle } from "../src/ui/widgets/alert-dialog.ts";
@@ -168,7 +169,7 @@ test("settings opens immediately in all panes, owns keys and mouse, and preserve
 		h.panel.handleInput("d");
 		assert.match(h.text(120).join("\n"), /Settings/);
 		assert.doesNotMatch(h.text(120).join("\n"), /Preview only|Settings · Read-only/);
-		assert.match(h.text(120).at(-1)!, /Esc\/q close/);
+		assert.match(h.text(120).at(-1)!, /Esc close/);
 		h.panel.handleInput("\x1b");
 		assert.equal(h.panel.state.settings.phase, "closed");
 		assert.equal(h.panel.state.mode, "normal");
@@ -4602,4 +4603,26 @@ test("saving settings keeps the startup config warning in the footer", async () 
 	clean.panel.handleInput("q");
 	assert.doesNotMatch(clean.text(120).join("\n"), /is not a plugin setting/);
 	clean.panel.dispose();
+});
+
+/**
+ * 回归：refreshConfig 曾经无条件 `contentViewport.setBlocks(blocks, leaf)` 来失效正文排版缓存
+ * （排版里有本地化标题）。于是保存任意一项设置——哪怕只是改键位——都会把整篇 Markdown 重排一遍。
+ * 现在语言算进了缓存的键（见 ContentViewport.layout），保存不再需要清缓存，会话和滚动位置照旧不动。
+ */
+test("saving settings no longer drops the CONTENT layout cache", async (ctx) => {
+	const setBlocks = ctx.mock.method(ContentViewport.prototype, "setBlocks");
+	const h = makePanel({ settingsSource: fakeSettingsSource() });
+	await h.panel.load();
+	h.text(120);
+	const before = setBlocks.mock.callCount();
+	h.panel.openSettings();
+	await settingsSettled(h.panel);
+	// 进列表（l）→ Enter 开菜单 → j 下移 → Enter 当场保存 → apply → refreshConfig。
+	for (const key of ["l", "\r", "j", "\r"]) h.panel.handleInput(key);
+	await settingsSettled(h.panel);
+	h.panel.handleInput("q");
+	assert.equal(h.panel.state.settings.phase, "closed");
+	assert.equal(setBlocks.mock.callCount(), before, "保存设置不再走 setBlocks 清正文排版缓存");
+	h.panel.dispose();
 });

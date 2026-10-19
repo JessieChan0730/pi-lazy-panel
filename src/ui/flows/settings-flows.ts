@@ -97,6 +97,24 @@ export function reloadSettings(h: SettingsFlowHost): void {
 		onCancel: () => h.closeDialogs(),
 	}));
 }
+/** Title of a setting — explicit static keys so the whole `settings.*` namespace is not exempted from orphan detection. */
+function settingTitle(key: string): string {
+	if (key === "leftColumnRatio") return t("settings.leftWidth");
+	if (key === "locale") return t("settings.locale");
+	if (key === "defaultScope") return t("settings.defaultScope");
+	return t("settings.defaultSort");
+}
+
+/** Label of one option in a setting's menu (locale / default scope / default sort). */
+function settingOptionLabel(key: string, value: string): string {
+	if (key === "locale") return t(value === "en" ? "settings.language.en" : "settings.language.zh");
+	if (key === "defaultScope") return t(value === "all" ? "settings.scope.all" : "settings.scope.current-folder");
+	if (value === "created") return t("settings.sort.created");
+	if (value === "title") return t("settings.sort.title");
+	if (value === "threaded") return t("settings.sort.threaded");
+	return t("settings.sort.recent");
+}
+
 export function editSetting(h: SettingsFlowHost, key: string): void {
 	const s = h.state.settings;
 	if (s.loading || s.saving)
@@ -157,9 +175,9 @@ export function editSetting(h: SettingsFlowHost, key: string): void {
 	if (!options)
 		return;
 	const field = key as EditableSetting;
-	const items = options.map((value) => value === null ? t("settings.system") : key === "locale" ? t(`settings.language.${value}`) : t(`settings.${key === "defaultScope" ? "scope" : "sort"}.${value}`));
+	const items = options.map((value) => value === null ? t("settings.system") : settingOptionLabel(key, value));
 	h.openMenu("settings", {
-		title: t(`settings.${key}`), items, initialIndex: options.findIndex((value) => value === (draft[field] ?? null)), hints: hints(),
+		title: settingTitle(key), items, initialIndex: options.findIndex((value) => value === (draft[field] ?? null)), hints: hints(),
 		onSelect: (index) => {
 			h.closeDialogs();
 			if (current(h, generation))
@@ -519,7 +537,7 @@ function appliedNotices(config: ResolvedConfig, patch: SettingsPatch): string[] 
 			}
 			continue;
 		}
-		const setting = t(key === "leftColumnRatio" ? "settings.leftWidth" : `settings.${key}`);
+		const setting = settingTitle(key);
 		const value = key === "locale"
 			? (config.locale ? t(`settings.language.${config.locale}`) : t("settings.system"))
 			: key === "leftColumnRatio"

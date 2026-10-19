@@ -37,7 +37,6 @@
     },
     "locale": "界面语言",
     "language": { "en": "English", "zh": "简体中文" },
-    "systemLanguage": "跟随系统（{{language}}）",
     "defaultScope": "默认会话范围",
     "defaultSort": "默认排序",
     "scope": { "current-folder": "当前目录", "all": "全部目录" },
@@ -73,9 +72,7 @@
     "themeApplied": "主题设置为：{{name}}",
     "themeApplyFailed": "切换主题失败：{{error}}",
     "switchRegion": "切区域",
-    "switchScope": "切作用域",
-    "scrollDetails": "滚动详情",
-    "close": "关闭"
+    "scrollDetails": "滚动详情"
   },
   "alert": {
     "cannotDeleteActive": "不能删除当前会话",

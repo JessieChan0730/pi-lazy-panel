@@ -1,7 +1,7 @@
 {
   "settings": {
     "title": "Settings",
-    "list": "Settings",
+    "list": "Items",
     "retry": "Retry",
     "restore": "Restore defaults",
     "reload": "Reload",
@@ -37,7 +37,6 @@
     },
     "locale": "Interface language",
     "language": { "en": "English", "zh": "Simplified Chinese" },
-    "systemLanguage": "System ({{language}})",
     "defaultScope": "Default session scope",
     "defaultSort": "Default sort order",
     "scope": { "current-folder": "Current folder", "all": "All folders" },
@@ -73,9 +72,7 @@
     "themeApplied": "Theme set to: {{name}}",
     "themeApplyFailed": "Cannot switch theme: {{error}}",
     "switchRegion": "switch region",
-    "switchScope": "switch scope",
-    "scrollDetails": "scroll details",
-    "close": "Close"
+    "scrollDetails": "scroll details"
   },
   "alert": {
     "cannotDeleteActive": "Can't delete the active session",

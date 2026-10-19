@@ -89,10 +89,10 @@ export class SettingsDialog {
 	}
 
 	get hints(): KeyHint[] {
-		// 正常路径上每一次改动都已经落盘，所以只有失败时才有"重试"这一项。
-		const retry: KeyHint[] = this.retryable() ? [["s", t("settings.retry")]] : [];
+		// 动作键（q 关闭 / d 恢复默认 / r 重新读取 / s 重试）由主框最下面的按钮行负责，标签上就带着直连键；
+		// footer 只留没有按钮的导航键，同一套键不写两遍，也不会因为太长被从后面截掉。
 		const scroll: KeyHint[] = this.detailItem()?.description || this.feedback().length ? [["PgUp/PgDn", t("settings.scrollDetails")]] : [];
-		return [["Esc/q", t("hint.close")], ["h/←", t("settings.categories")], ["l/→", t("settings.list")], ["Tab", t("settings.switchRegion")], ["j/k/↑↓", t("hint.move")], ["Enter", t("hint.choose")], ...retry, ["d", t("settings.restore")], ["r", t("settings.reload")], ...scroll];
+		return [["Esc", t("hint.close")], ["h/←", t("settings.categories")], ["l/→", t("settings.list")], ["Tab", t("settings.switchRegion")], ["j/k/↑↓", t("hint.move")], ["Enter", t("hint.choose")], ...scroll];
 	}
 
 	/** Is there a failed write / read for `s` to redo? */

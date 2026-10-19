@@ -380,8 +380,9 @@ export class LazyPanel implements Component, Focusable {
 				this.bindings = compileKeymap(this.keymap);
 				this.keys = new KeySequencer(this.bindings, () => this.o.requestRender());
 				this.ratio = config.leftColumnRatio;
-				// 正文排版含角色等本地化标题；仅清缓存，不重载会话或重置滚动位置。
-				this.contentViewport.setBlocks(this.contentViewport.blocks, this.contentViewport.leaf);
+				// 正文排版含角色等本地化标题，但 ContentViewport 把当前语言算进了排版缓存的键里：
+				// 换语言下次渲染会自己重排；这里不再无条件清缓存，否则改键位、保存任意一项都会
+				// 把整篇 Markdown 重排一遍（长会话不划算）。会话和滚动位置照旧不动。
 				// footer 的 status 不能无条件清掉：启动时它就是 config.warnings[0]（index.ts），
 				// 这里是配置刚被重读后的警告，清掉等于"改任意一项设置，配置里的问题就不提示了"；
 				// 没有警告时仍然是 undefined，保存前的临时提示照旧被顶掉。

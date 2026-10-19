@@ -92,7 +92,7 @@ export default defineConfig([
 			// 本地导入必须带 .ts 扩展名（CLAUDE.md 第 5 条）
 			"no-restricted-imports": [
 				"error",
-				{ patterns: [{ regex: "^\\.{1,2}/(?!.*\\.ts$)", message: "Local imports spell out the .ts extension." }] },
+				{ patterns: [{ regex: "^\\.{1,2}/(?!.*\\.(ts|mjs)$)", message: "Local imports spell out the .ts (or .mjs for scripts) extension." }] },
 			],
 			// 命名：函数 / 变量 / 参数 camelCase（常量可以 UPPER_CASE），类型 PascalCase；
 			// 对象 / 类型里的属性名不限（键位表的 "session-resume"、pi 数据里的字段名等）
