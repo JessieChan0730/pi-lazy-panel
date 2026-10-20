@@ -174,7 +174,7 @@ test("settings opens immediately in all panes, owns keys and mouse, and preserve
 		h.panel.handleInput("d");
 		assert.match(h.text(120).join("\n"), /Settings/);
 		assert.doesNotMatch(h.text(120).join("\n"), /Preview only|Settings · Read-only/);
-		assert.match(h.text(120).at(-1)!, /Esc close/);
+		assert.match(h.text(120).at(-1)!, /Esc\/q close/);
 		h.panel.handleInput("\x1b");
 		assert.equal(h.panel.state.settings.phase, "closed");
 		assert.equal(h.panel.state.mode, "normal");
@@ -1193,11 +1193,11 @@ test("/ opens the search bar in the tree pane (footer lists it), and a opens the
 	assert.ok(lines[top + 4]!.includes("› ") && lines[top + 4]!.includes("assistant: msg 1"), lines[top + 4]);
 	// the box starts at column 2, so its bottom border is the first "└" found there (the pane borders sit at column 0)
 	const bottom = lines.findIndex((l, i) => i > top && l.slice(2).startsWith("└"));
-	assert.ok(lines[bottom - 1]!.includes("/ search") && lines[bottom - 1]!.includes("q close"), lines[bottom - 1]);
+	assert.ok(lines[bottom - 1]!.includes("/ search") && lines[bottom - 1]!.includes("Esc/q close"), lines[bottom - 1]);
 	assert.ok(lines[bottom - 2]!.includes("├──"), lines[bottom - 2]);
 	// the box spans the terminal minus a 2-column margin and the footer shows its hints
 	assert.equal(lines[top]!.indexOf("┌"), 2);
-	assert.ok(lines.at(-1)!.includes("TREE") && lines.at(-1)!.includes("q close"), lines.at(-1));
+	assert.ok(lines.at(-1)!.includes("TREE") && lines.at(-1)!.includes("Esc/q close"), lines.at(-1));
 	for (const l of h.panel.render(100)) assert.equal(visibleWidth(l), 100);
 
 	// j moves the dialog's own cursor (the pane's stays put until the dialog closes); y copies the dialog's row
@@ -3068,14 +3068,14 @@ test("i opens the Session Info box (what /session shows); y copies its text, Esc
 	const lines = h.text();
 	const dlg = dialogAt(lines, SESSION_INFO_TITLE);
 	assert.ok(dlg, "the info box should be drawn");
-	assert.ok(dlg.title.includes("alpha · Esc close"), dlg.title);
+	assert.ok(dlg.title.includes("alpha · Esc/q close"), dlg.title);
 	const body = dlg.body.join("\n");
 	const infoObj: SessionInfo = { name: "alpha", model: "claude-opus-4", messages: 12, tokens: 84_213, cost: 1.4211, createdAt: new Date(2026, 8, 20, 22, 18).getTime(), updatedAt: new Date(2026, 8, 20, 22, 21).getTime(), path: "/tmp/s1.jsonl", id: "id-1" };
 	// 每一行的标签 / 值排版和 sessionInfoText 一致（含 "Session path" 标签、12 列的标签列对齐）。
 	for (const expected of sessionInfoText(infoObj).split("\n")) {
 		assert.ok(body.includes(expected), `${expected}\n${body}`);
 	}
-	assert.ok(h.footer().includes("INFO") && h.footer().includes("y copy") && h.footer().includes("Esc close"), h.footer());
+	assert.ok(h.footer().includes("INFO") && h.footer().includes("y copy") && h.footer().includes("Esc/q close"), h.footer());
 	for (const l of h.panel.render(120)) assert.equal(visibleWidth(l), 120);
 
 	// y copies the whole text (full path) and keeps the box open; other keys are swallowed
@@ -3100,7 +3100,7 @@ test("i opens the Session Info box (what /session shows); y copies its text, Esc
 	await flush();
 	const noName = dialogAt(h.text(), SESSION_INFO_TITLE)!;
 	assert.ok(noName.body[0]!.includes("(none)"), noName.body[0]);
-	assert.ok(noName.title.includes("Esc close"), noName.title);
+	assert.ok(noName.title.includes("Esc/q close"), noName.title);
 	h.panel.handleInput("q");
 	assert.equal(h.panel.state.mode, "normal");
 
@@ -3130,8 +3130,8 @@ test("u opens the context-usage box for the cursor session; y copies its text, E
 	assert.ok(body.includes("84.2k") && body.includes("200k"), body);
 	assert.ok(body.includes("System prompt") && body.includes("Tool results"), body);
 	assert.ok(body.includes("Context") && body.includes("Free space"), body);
-	for (const hint of ["j/k/↑↓ select", "Enter preview", "y copy", "Esc close"]) assert.ok(!body.includes(hint), `the box should not repeat the footer hint: ${hint}`);
-	assert.ok(h.footer().includes("USAGE") && h.footer().includes("y copy") && h.footer().includes("Esc close"), h.footer());
+	for (const hint of ["j/k/↑↓ select", "Enter preview", "y copy", "Esc/q close"]) assert.ok(!body.includes(hint), `the box should not repeat the footer hint: ${hint}`);
+	assert.ok(h.footer().includes("USAGE") && h.footer().includes("y copy") && h.footer().includes("Esc/q close"), h.footer());
 	for (const l of h.panel.render(120)) assert.equal(visibleWidth(l), 120);
 
 	// y copies the whole text and keeps the box open; navigation never reaches the panel
@@ -3181,12 +3181,12 @@ test("context prompt preview: Enter opens the selected category, Esc returns wit
 	assert.equal(h.panel.state.mode, "usage");
 	assert.ok(dialogAt(h.text(), "Prompt · Tool results"));
 	assert.ok(h.text().join("\n").includes("TOOL_RESULT_SOURCE"));
-	assert.ok(h.footer().includes("Esc back"));
+	assert.ok(h.footer().includes("Esc/q back"));
 	h.panel.handleInput("y");
 	await flush();
 	assert.equal(h.copies.at(-1), "TOOL_RESULT_SOURCE");
 	const promptBody = dialogAt(h.text(), "Prompt · Tool results")!.body.join("\n");
-	for (const hint of ["j/k/↑↓ scroll", "y copy", "Esc back"]) assert.ok(!promptBody.includes(hint), `the box should not repeat the footer hint: ${hint}`);
+	for (const hint of ["j/k/↑↓ scroll", "y copy", "Esc/q back"]) assert.ok(!promptBody.includes(hint), `the box should not repeat the footer hint: ${hint}`);
 	// Esc closes only the child; the selection and panel cursor are untouched.
 	h.panel.handleInput("\x1b");
 	assert.equal(h.panel.state.mode, "usage");
@@ -3641,6 +3641,7 @@ test("S: pick Auto / Gist / Radius in a menu (Esc cancels), then upload, copy th
 	assert.ok(menu.body[1]!.includes("GitHub Gist"), menu.body[1]);
 	assert.ok(menu.body[2]!.includes("Radius"), menu.body[2]);
 	assert.ok(h.footer().includes("SHARE"), h.footer());
+	assert.ok(h.footer().includes("Esc/q cancel"), h.footer());
 	// Esc cancels: nothing leaves the machine
 	h.panel.handleInput("\x1b");
 	assert.equal(h.panel.state.mode, "normal");
@@ -3698,7 +3699,7 @@ test("a long footer result (share link) does not hide the shortcut hints of a di
 	await flush();
 	assert.equal(h.panel.state.mode, "usage");
 	assert.ok(!h.footer().includes(url), h.footer());
-	assert.ok(h.footer().includes("USAGE") && h.footer().includes("y copy") && h.footer().includes("Esc close"), h.footer());
+	assert.ok(h.footer().includes("USAGE") && h.footer().includes("y copy") && h.footer().includes("Esc/q close"), h.footer());
 	h.panel.handleInput("\x1b");
 
 	// i: same for the Session Info box
@@ -3706,7 +3707,7 @@ test("a long footer result (share link) does not hide the shortcut hints of a di
 	await flush();
 	assert.equal(h.panel.state.mode, "info");
 	assert.ok(!h.footer().includes(url), h.footer());
-	assert.ok(h.footer().includes("INFO") && h.footer().includes("y copy") && h.footer().includes("Esc close"), h.footer());
+	assert.ok(h.footer().includes("INFO") && h.footer().includes("y copy") && h.footer().includes("Esc/q close"), h.footer());
 	h.panel.dispose();
 });
 
@@ -3996,7 +3997,7 @@ test("@ opens pi's changelog in a big box: j/k/arrows scroll, G / g jump, Esc / 
 	assert.equal(panel.state.mode, "changelog");
 	// first the loading box shows (the whole changelog is slow to render): a spinner + hint, no content yet
 	let lines = text();
-	assert.ok(dialogAt(lines, "What's New")?.title.includes("Esc close"), "the loading box shows how to close it");
+	assert.ok(dialogAt(lines, "What's New")?.title.includes("Esc/q close"), "the loading box shows how to close it");
 	assert.ok(
 		lines.some((l) => l.includes("Loading changelog")),
 		`a loading hint shows: ${lines.join("\n")}`,
@@ -4007,7 +4008,7 @@ test("@ opens pi's changelog in a big box: j/k/arrows scroll, G / g jump, Esc / 
 	lines = text();
 	const dlg = dialogAt(lines, "What's New");
 	assert.ok(dlg, "the dialog is drawn");
-	assert.ok(dlg.title.includes("Esc close"), dlg.title);
+	assert.ok(dlg.title.includes("Esc/q close"), dlg.title);
 	assert.ok(dlg.body.some((l) => l.includes("line 1 ")), dlg.body.join("\n"));
 	assert.ok(lines.at(-1)!.includes("j/k scroll"), lines.at(-1));
 	for (const l of panel.render(100)) assert.equal(visibleWidth(l), 100);

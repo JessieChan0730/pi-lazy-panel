@@ -24,7 +24,7 @@ import { matchesKeyId } from "../../config/keys.ts";
 import { t } from "../../i18n/index.ts";
 import type { KeyHint } from "../../types.ts";
 import { boxContains, centeredRect, frame, overlayCentered, type BoxRect } from "../frame.ts";
-import { dialogHeader } from "./dialog-header.ts";
+import { DIALOG_CLOSE_KEYS, dialogHeader } from "./dialog-header.ts";
 
 /** Title on the top border (pi's own heading for /changelog, localised). */
 export function changelogTitle(): string {
@@ -42,7 +42,7 @@ export function changelogHints(): KeyHint[] {
 		["j/k", t("hint.scroll")],
 		["ctrl+d/u", t("hint.page")],
 		["g/G", t("hint.topBottom")],
-		["Esc", t("hint.close")],
+		[DIALOG_CLOSE_KEYS, t("hint.close")],
 	];
 }
 

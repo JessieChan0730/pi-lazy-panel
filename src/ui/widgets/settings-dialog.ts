@@ -10,7 +10,7 @@ import type { ActionId, KeyHint } from "../../types.ts";
 import { clamp } from "../../utils/indices.ts";
 import { boxCell, centeredRect, fit, frame, FRAME_DIVIDER, overlayCentered, type BoxRect } from "../frame.ts";
 import { keymapActionDirty, settingsDirtyCount, settingsDraft, settingsRetryKind, SETTINGS_CATEGORIES, type SettingsPosition, type SettingsRegion, type SettingsState } from "../settings-state.ts";
-import { dialogHeader } from "./dialog-header.ts";
+import { DIALOG_CLOSE_KEYS, dialogHeader } from "./dialog-header.ts";
 
 const REGIONS: SettingsRegion[] = ["categories", "list", "buttons"];
 
@@ -92,7 +92,7 @@ export class SettingsDialog {
 		// 动作键（q 关闭 / d 恢复默认 / r 重新读取 / s 重试）由主框最下面的按钮行负责，标签上就带着直连键；
 		// footer 只留没有按钮的导航键，同一套键不写两遍，也不会因为太长被从后面截掉。
 		const scroll: KeyHint[] = this.detailItem()?.description || this.feedback().length ? [["PgUp/PgDn", t("settings.scrollDetails")]] : [];
-		return [["Esc", t("hint.close")], ["h/←", t("settings.categories")], ["l/→", t("settings.list")], ["Tab", t("settings.switchRegion")], ["j/k/↑↓", t("hint.move")], ["Enter", t("hint.choose")], ...scroll];
+		return [[DIALOG_CLOSE_KEYS, t("hint.close")], ["h/←", t("settings.categories")], ["l/→", t("settings.list")], ["Tab", t("settings.switchRegion")], ["j/k/↑↓", t("hint.move")], ["Enter", t("hint.choose")], ...scroll];
 	}
 
 	/** Is there a failed write / read for `s` to redo? */
@@ -346,7 +346,7 @@ export class SettingsDialog {
 		// 每次重绘都重记一遍可点的格子（下面边画边填），鼠标命中和这一刻的画面严格对齐。
 		this.clickables = [];
 		if (width < 16 || height < 7) {
-			return Array.from({ length: Math.max(0, height) }, (_, i) => fit(i === 0 ? `Esc ${t("hint.close")}` : i === 1 ? t("settings.title") : "", width));
+			return Array.from({ length: Math.max(0, height) }, (_, i) => fit(i === 0 ? `${DIALOG_CLOSE_KEYS} ${t("hint.close")}` : i === 1 ? t("settings.title") : "", width));
 		}
 		const auxiliaryBox = this.auxiliaryBox(width, height);
 		const mainHeight = height - auxiliaryBox.length;

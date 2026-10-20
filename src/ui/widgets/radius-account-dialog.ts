@@ -19,6 +19,7 @@
 
 import { t } from "../../i18n/index.ts";
 import type { KeyHint } from "../../types.ts";
+import { DIALOG_CLOSE_KEYS } from "./dialog-header.ts";
 
 /** What the account menu can do. */
 export type RadiusAccountAction = "share" | "logout";
@@ -41,6 +42,6 @@ export function radiusAccountHints(): KeyHint[] {
 	return [
 		["j/k", t("hint.move")],
 		["Enter", t("hint.select")],
-		["Esc", t("hint.cancel")],
+		[DIALOG_CLOSE_KEYS, t("hint.cancel")],
 	];
 }

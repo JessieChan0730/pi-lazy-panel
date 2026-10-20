@@ -26,6 +26,7 @@
 
 import { t } from "../../i18n/index.ts";
 import type { KeyHint, SessionShareDestination } from "../../types.ts";
+import { DIALOG_CLOSE_KEYS } from "./dialog-header.ts";
 
 /** Title on the top border (localised). */
 export function shareTitle(): string {
@@ -49,7 +50,7 @@ export function shareHints(): KeyHint[] {
 	return [
 		["j/k", t("hint.move")],
 		["Enter", t("hint.select")],
-		["Esc", t("hint.cancel")],
+		[DIALOG_CLOSE_KEYS, t("hint.cancel")],
 	];
 }
 

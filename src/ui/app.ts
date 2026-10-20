@@ -1758,9 +1758,11 @@ export class LazyPanel implements Component, Focusable {
 		const out: KeyHint[] = [];
 		for (const group of TREE_DIALOG_FOOTER) {
 			const keys = group.flatMap((a) => labelsForFocus(this.keymap, TREE_DIALOG_SCOPE, a).slice(0, 1));
+			// Esc 关对话框是写死在 handleTreeDialogInput 里的（关闭键改绑 / 解绑也仍然生效），所以一并提示。
+			const shown = group.includes("tree-dialog-close") ? [...new Set(["Esc", ...keys])] : keys;
 			// 组里只要还有一个动作绑了键就显示，文字取组里第一个动作的。
-			if (keys.length === 0) continue;
-			out.push([compactKeys(keys), treeDialogHintText(group[0]!)]);
+			if (shown.length === 0) continue;
+			out.push([compactKeys(shown), treeDialogHintText(group[0]!)]);
 		}
 		return out;
 	}

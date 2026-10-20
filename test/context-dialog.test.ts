@@ -65,7 +65,7 @@ test("empty prompts open a preview; nested Esc/q returns without closing the par
 	const preview = dialog.overlay(base, 80).map(stripTerminalSequences).join("\n");
 	assert.match(preview, /Prompt · Memory/);
 	assert.match(preview, /No prompt content in this category/);
-	assert.ok(dialog.hints.some(([key, label]) => key === "Esc" && label === "back"));
+	assert.ok(dialog.hints.some(([key, label]) => key === "Esc/q" && label === "back"));
 	dialog.handleInput("\x1b");
 	assert.equal(closed, 0);
 	assert.match(selected(dialog), /Memory/);
@@ -90,7 +90,7 @@ test("statistics-only and empty context lists swallow Enter and navigation safel
 		dialog.open({ info: { used: 100, messages: 0, categories }, onCopy: () => {}, onClose: () => {} });
 		for (const key of ["j", "k", "\x1b[A", "\x1b[B", "\r"]) dialog.handleInput(key);
 		assert.equal(selected(dialog), "");
-		assert.ok(dialog.hints.some(([key, label]) => key === "Esc" && label === "close"));
+		assert.ok(dialog.hints.some(([key, label]) => key === "Esc/q" && label === "close"));
 	}
 });
 
@@ -150,8 +150,8 @@ test("context and prompt dialogs leave the shortcuts to the footer instead of re
 			usage.open({ info: info(), onCopy: () => {}, onClose: () => {} });
 			const prompt = new PromptDetailDialog(theme);
 			prompt.open({ category: "Context", prompt: "Source\n\n".repeat(60), onCopy: () => {} });
-			const usageHints = [`j/k/↑↓ ${t("hint.select")}`, `Enter ${t("hint.preview")}`, `y ${t("hint.copy")}`, `Esc ${t("hint.close")}`];
-			const promptHints = [`j/k/↑↓ ${t("hint.scroll")}`, `d/u ${t("hint.page")}`, `g/G ${t("hint.topBottom")}`, `y ${t("hint.copy")}`, `Esc ${t("hint.back")}`];
+			const usageHints = [`j/k/↑↓ ${t("hint.select")}`, `Enter ${t("hint.preview")}`, `y ${t("hint.copy")}`, `Esc/q ${t("hint.close")}`];
+			const promptHints = [`j/k/↑↓ ${t("hint.scroll")}`, `d/u ${t("hint.page")}`, `g/G ${t("hint.topBottom")}`, `y ${t("hint.copy")}`, `Esc/q ${t("hint.back")}`];
 			for (const width of [24, 40, 60, 100]) {
 				const usageRows = usage.render(width, 18);
 				const usageText = usageRows.map(stripTerminalSequences).join("\n");

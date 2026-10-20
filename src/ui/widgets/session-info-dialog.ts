@@ -34,7 +34,7 @@ import { t } from "../../i18n/index.ts";
 import type { KeyHint, SessionInfo } from "../../types.ts";
 import { formatCost, formatDateTime, formatTokens, shortenPath } from "../../utils/format.ts";
 import { dialogWidth, frame, overlayCentered } from "../frame.ts";
-import { dialogHeader } from "./dialog-header.ts";
+import { DIALOG_CLOSE_KEYS, dialogHeader } from "./dialog-header.ts";
 
 /** Title on the top border (localised). */
 export function sessionInfoTitle(): string {
@@ -45,7 +45,7 @@ export function sessionInfoTitle(): string {
 export function sessionInfoHints(): KeyHint[] {
 	return [
 		["y", t("hint.copy")],
-		["Esc", t("hint.close")],
+		[DIALOG_CLOSE_KEYS, t("hint.close")],
 	];
 }
 

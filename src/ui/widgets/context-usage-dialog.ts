@@ -36,7 +36,7 @@ import { t } from "../../i18n/index.ts";
 import type { ContextUsageCategory, ContextUsageInfo, KeyHint } from "../../types.ts";
 import { formatCost, formatTokens } from "../../utils/format.ts";
 import { boxCell, boxContains, centeredRect, dialogWidth, fit, FRAME_DIVIDER, frame, metaBudget, overlayCentered, type BoxRect } from "../frame.ts";
-
+import { DIALOG_CLOSE_KEYS } from "./dialog-header.ts";
 import { PromptDetailDialog } from "./prompt-detail-dialog.ts";
 
 /** Title on the top border (localised). */
@@ -50,7 +50,7 @@ export function contextUsageHints(): KeyHint[] {
 		["j/k/↑↓", t("hint.select")],
 		["Enter", t("hint.preview")],
 		["y", t("hint.copy")],
-		["Esc", t("hint.close")],
+		[DIALOG_CLOSE_KEYS, t("hint.close")],
 	];
 }
 
