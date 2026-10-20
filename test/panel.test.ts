@@ -3125,7 +3125,7 @@ test("u opens the context-usage box for the cursor session; y copies its text, E
 	assert.ok(body.includes("84.2k") && body.includes("200k"), body);
 	assert.ok(body.includes("System prompt") && body.includes("Tool results"), body);
 	assert.ok(body.includes("Context") && body.includes("Free space"), body);
-	for (const hint of ["j/k/↑↓ select", "Enter preview", "y copy", "Esc close"]) assert.ok(body.includes(hint), `local hint missing: ${hint}`);
+	for (const hint of ["j/k/↑↓ select", "Enter preview", "y copy", "Esc close"]) assert.ok(!body.includes(hint), `the box should not repeat the footer hint: ${hint}`);
 	assert.ok(h.footer().includes("USAGE") && h.footer().includes("y copy") && h.footer().includes("Esc close"), h.footer());
 	for (const l of h.panel.render(120)) assert.equal(visibleWidth(l), 120);
 
@@ -3181,7 +3181,7 @@ test("context prompt preview: Enter opens the selected category, Esc returns wit
 	await flush();
 	assert.equal(h.copies.at(-1), "TOOL_RESULT_SOURCE");
 	const promptBody = dialogAt(h.text(), "Prompt · Tool results")!.body.join("\n");
-	for (const hint of ["j/k/↑↓ scroll", "y copy", "Esc back"]) assert.ok(promptBody.includes(hint), `local hint missing after copying: ${hint}`);
+	for (const hint of ["j/k/↑↓ scroll", "y copy", "Esc back"]) assert.ok(!promptBody.includes(hint), `the box should not repeat the footer hint: ${hint}`);
 	// Esc closes only the child; the selection and panel cursor are untouched.
 	h.panel.handleInput("\x1b");
 	assert.equal(h.panel.state.mode, "usage");

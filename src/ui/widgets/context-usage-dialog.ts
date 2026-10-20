@@ -19,11 +19,13 @@
  *   │ Model     claude-opus-4                                │
  *   │ Messages  12                                           │
  *   └────────────────────────────────────────────────────────┘
- *    USAGE │ j/k/↑↓ select   Enter preview   y copy   Esc close
  *
  * j/k or arrows select a category; Enter previews its prompt in a nested
  * Markdown dialog. Esc returns to this list without losing the selection.
  * y copies the current view; statistics-only rows have no prompt to preview.
+ *
+ * The shortcuts live only in the footer (`hints`), not inside the box: the
+ * panel footer already shows the dialog's keys while it owns the keyboard.
  */
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
@@ -35,7 +37,6 @@ import type { ContextUsageCategory, ContextUsageInfo, KeyHint } from "../../type
 import { formatCost, formatTokens } from "../../utils/format.ts";
 import { boxCell, boxContains, centeredRect, dialogWidth, fit, FRAME_DIVIDER, frame, metaBudget, overlayCentered, type BoxRect } from "../frame.ts";
 
-import { renderDialogHints } from "./dialog-hints.ts";
 import { PromptDetailDialog } from "./prompt-detail-dialog.ts";
 
 /** Title on the top border (localised). */
@@ -242,13 +243,11 @@ export class ContextUsageDialog {
 	render(width: number, height?: number): string[] {
 		const info = this.spec?.info;
 		const inner = width - 2;
-		const hints = renderDialogHints(contextUsageHints(), this.o.theme, inner, height === undefined ? Infinity : Math.max(0, height - 4));
-		const hintHeight = hints.length ? hints.length + 1 : 0;
 		let body = info ? this.renderBody(info, inner) : [];
 		// 分类前面还有：窗口行、可选的自动压缩行、可选的分量条、一个空行。
 		const firstCategory = 2 + (info && autoCompactHint(info) ? 1 : 0) + (info?.contextWindow && inner > 2 ? 1 : 0);
 		if (height !== undefined) {
-			const visible = Math.max(1, height - 2 - hintHeight);
+			const visible = Math.max(1, height - 2);
 			const selectedLine = firstCategory + Math.max(0, this.selected);
 			this.scroll = Math.max(0, Math.min(this.scroll, selectedLine, body.length - visible));
 			if (selectedLine >= this.scroll + visible) this.scroll = selectedLine - visible + 1;
@@ -257,8 +256,6 @@ export class ContextUsageDialog {
 		// 每个分类落在正文的第几行：画到屏幕上的那一次（`overlay` 总是带高度调用）记下来，
 		// 鼠标命中（categoryAt）照着查，免得两边各算一套。
 		if (height !== undefined) this.categoryRows = info ? info.categories.map((_, i) => firstCategory + i - this.scroll) : [];
-		// 提示固定在弹窗底部，不随分类列表滚动，也不受主面板状态文字挤占。
-		if (hints.length) body.push(FRAME_DIVIDER, ...hints);
 		const { theme } = this.o;
 		const subject = info?.model ?? "";
 		const meta = truncateToWidth(subject, metaBudget(width, contextUsageTitle()) - 3, "…", false);
