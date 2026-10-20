@@ -113,11 +113,11 @@ export function actionDescription(action: ActionId): string {
 /**
  * Actions of outer scopes that do nothing while `scope` has the keys.
  * Inside the tree dialog, pane switching, list scope, n / N, quitting the
- * panel, `?` (every key is on the dialog's own hint row), `a` (the dialog
+ * panel, `?` (every key is on the footer), `a` (the dialog
  * is already open) and `@` (the changelog) are switched off.
  *
  * 外层 scope 里在这里关掉的动作：对话框里 h/1/2/3/Tab 等不再切换面板（l 被对话框自己的
- * labeled 过滤遮住了），? 也不开帮助——对话框底部一行已经列全了它的键。
+ * labeled 过滤遮住了），? 也不开帮助——footer 已经列全了它的键。
  */
 export const DISABLED_ACTIONS: Partial<Record<KeyScope, ActionId[]>> = {
 	[TREE_DIALOG_SCOPE]: [
@@ -157,7 +157,7 @@ export const FOOTER_HINTS: Record<PaneId, ActionId[]> = {
 };
 
 /**
- * Hint rows of the tree dialog (its bottom row and the footer), in display
+ * Hint rows of the tree dialog in the footer, in display
  * order — the first ones survive a narrow terminal, so `q close` comes before
  * the filters; an inner array is one merged hint such as `d/t/u/l/a filter`.
  * Keys come from the resolved keymap (`tree-dialog` scope, then `tree`, then

@@ -1753,7 +1753,7 @@ export class LazyPanel implements Component, Focusable {
 		void this.syncContentToTree();
 	}
 
-	/** Bottom row / footer hints of the dialog, from the resolved keymap (`/ search`, `d/t/u/l/a filter`…). */
+	/** Footer hints of the dialog, from the resolved keymap (`/ search`, `d/t/u/l/a filter`…). */
 	private treeDialogHints(): KeyHint[] {
 		const out: KeyHint[] = [];
 		for (const group of TREE_DIALOG_FOOTER) {

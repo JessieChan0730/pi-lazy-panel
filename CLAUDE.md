@@ -92,7 +92,7 @@ src/
 │       ├── select-dialog.ts  # 通用的居中选择菜单（j/k/方向键移动、Enter 确认、Esc 取消，高度 = 选项数 + 2；spec.shortcuts 让某个键直接选中某一项）：标题 / 选项 / 回调在 open 时传入
 │       ├── restore-dialog.ts # TREE Enter 的预设：Summarize branch? 三选菜单的标题 / 选项 / 提示 + 自定义摘要指令输入框的标题 / 提示
 │       ├── rename-dialog.ts  # r 给会话改名：InputDialog 的预设（标题 Rename + footer 提示，空值清除名字）
-│       ├── tree-dialog.ts    # a 打开的完整树对话框：顶部搜索行（PromptBar，实时搜索，Esc 退出搜索框但关键字保留、Enter 无含义；没焦点时只显示关键字或 `/ to search`）、中间画树线的树（和面板共用折叠状态，折叠的段头画 ⊞）、底部提示（来自 keymap，对话框里不做 ? 帮助），几乎占满终端。只管画、搜索框和自己的光标；行的搜索 / 过滤 / 折叠由 app.ts 算好 setRows，按键也由 app.ts 按 tree-dialog scope 解析后调用它的方法
+│       ├── tree-dialog.ts    # a 打开的完整树对话框：顶部搜索行（PromptBar，实时搜索，Esc 退出搜索框但关键字保留、Enter 无含义；没焦点时只显示关键字或 `/ to search`）、中间画树线的树（和面板共用折叠状态，折叠的段头画 ⊞），几乎占满终端；快捷键只在面板底部 footer 显示（对话框里不做 ? 帮助）。只管画、搜索框和自己的光标；行的搜索 / 过滤 / 折叠由 app.ts 算好 setRows，按键也由 app.ts 按 tree-dialog scope 解析后调用它的方法
 │       ├── confirm-dialog.ts # 删除 / fork / clone / 导入 / 覆盖导出文件前的确认框：SelectDialog 的预设（confirmDialogSpec：Yes / No，默认停在 No，y / n 直接选，Enter 确认，Esc 取消）
 │       ├── share-dialog.ts   # S 分享：目的地菜单（Auto / GitHub Gist / Radius）的标题 / 选项 / 提示；Auto 是 Gist 优先，初始光标来自 pi 的 sessionShareDestination
 │       ├── radius-account-dialog.ts # S → Radius 已登录时的账号菜单（分享到 Radius / 退出登录）的标题 / 选项 / 提示

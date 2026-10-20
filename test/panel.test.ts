@@ -1179,7 +1179,7 @@ test("/ opens the search bar in the tree pane (footer lists it), and a opens the
 	assert.equal(h.panel.state.treeFilter, "default");
 	assert.equal(h.text().at(-1)!.includes("not implemented"), false, h.text().at(-1));
 
-	// a: big box with a search row, a divider, the rows (cursor on the pane's node) and a hint row
+	// a: big box with a search row, a divider and the rows (cursor on the pane's node); the hints stay in the footer
 	h.panel.handleInput("a");
 	assert.equal(h.panel.state.mode, "tree");
 	const lines = h.text(100);
@@ -1193,8 +1193,8 @@ test("/ opens the search bar in the tree pane (footer lists it), and a opens the
 	assert.ok(lines[top + 4]!.includes("› ") && lines[top + 4]!.includes("assistant: msg 1"), lines[top + 4]);
 	// the box starts at column 2, so its bottom border is the first "└" found there (the pane borders sit at column 0)
 	const bottom = lines.findIndex((l, i) => i > top && l.slice(2).startsWith("└"));
-	assert.ok(lines[bottom - 1]!.includes("/ search") && lines[bottom - 1]!.includes("Esc/q close"), lines[bottom - 1]);
-	assert.ok(lines[bottom - 2]!.includes("├──"), lines[bottom - 2]);
+	// the box does not repeat the footer hints
+	assert.ok(!lines.slice(top, bottom).some((l) => l.includes("Esc/q close")), lines.slice(top, bottom).join("\n"));
 	// the box spans the terminal minus a 2-column margin and the footer shows its hints
 	assert.equal(lines[top]!.indexOf("┌"), 2);
 	assert.ok(lines.at(-1)!.includes("TREE") && lines.at(-1)!.includes("Esc/q close"), lines.at(-1));
@@ -1529,7 +1529,7 @@ test("tree dialog z folds / unfolds on the shared fold state; h switches nothing
 	h.panel.dispose();
 });
 
-test("? does nothing inside the tree dialog: every key it has is on its bottom row", async () => {
+test("? does nothing inside the tree dialog: its keys live in the footer, not in the box", async () => {
 	const h = makeTreeActionPanel();
 	await h.panel.load();
 	h.panel.handleInput("2");
@@ -1538,14 +1538,15 @@ test("? does nothing inside the tree dialog: every key it has is on its bottom r
 	assert.equal(h.panel.state.helpOpen, false);
 	assert.equal(h.panel.state.mode, "tree");
 	const lines = h.text(160);
-	const bottom = lines.findIndex((l, i) => i > 0 && l.slice(2).startsWith("└"));
-	const hintRow = lines[bottom - 1]!;
+	const footer = lines.at(-1)!;
 	for (const hint of ["/ search", "j/k move", "Enter restore", "q close", "z fold", "d/t/u/l/a filter", "y copy", "T label"]) {
-		assert.ok(hintRow.includes(hint), `${hint} missing from: ${hintRow}`);
+		assert.ok(footer.includes(hint), `${hint} missing from: ${footer}`);
 	}
-	assert.equal(hintRow.includes("? help"), false, hintRow);
-	assert.equal(hintRow.includes("h/l"), false, hintRow);
-	assert.ok(lines.at(-1)!.includes("d/t/u/l/a filter"), `the footer repeats the hints: ${lines.at(-1)}`);
+	assert.equal(footer.includes("? help"), false, footer);
+	assert.equal(footer.includes("h/l"), false, footer);
+	const top = lines.findIndex((l) => l.includes("┌─ TREE "));
+	const bottom = lines.findIndex((l, i) => i > top && l.slice(2).startsWith("└"));
+	assert.ok(!lines.slice(top, bottom).some((l) => l.includes("d/t/u/l/a filter")), "the box should not repeat the footer hints");
 	h.panel.handleInput("q");
 	assert.equal(h.panel.state.mode, "normal");
 	h.panel.dispose();
