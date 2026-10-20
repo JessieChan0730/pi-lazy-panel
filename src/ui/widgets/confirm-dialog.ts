@@ -67,6 +67,11 @@ export function overwriteFileTitle(): string {
 	return t("confirm.overwrite");
 }
 
+/** Title of the confirmation that clears the Radius credential (`S` → Sign out of Radius). */
+export function radiusSignOutTitle(): string {
+	return t("confirm.radiusSignOut");
+}
+
 export interface ConfirmSpecOptions {
 	/** Title on the top border, e.g. "Delete session?". */
 	title: string;

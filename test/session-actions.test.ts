@@ -38,7 +38,7 @@ import {
 	shareViewerUrl,
 } from "../src/actions/session-actions.ts";
 import { type RestoreContext, restoreNode } from "../src/actions/tree-actions.ts";
-import { loginRadius } from "../src/actions/radius-auth.ts";
+import { loginRadius, logoutRadius } from "../src/actions/radius-auth.ts";
 import { EXTENSION_ID, SPINNER_FRAMES } from "../src/constants.ts";
 import { loadForkPoints, loadLastReply, loadSessionInfo } from "../src/data/content.ts";
 import { isEffectiveLeaf } from "../src/data/tree.ts";
@@ -1003,6 +1003,38 @@ test("loginRadius: drives pi's Radius login with the picked method; only a post-
 			},
 		}),
 		CredentialSynchronizationError,
+	);
+});
+
+test("logoutRadius: deletes the Radius credential; only a post-delete sync error is swallowed", async () => {
+	const calls: string[] = [];
+	await logoutRadius({
+		runtime: {
+			logout: async (providerId: string) => {
+				calls.push(providerId);
+			},
+		},
+	});
+	assert.deepEqual(calls, ["radius"]);
+
+	// The credential is gone; failing to refresh the local catalog does not make it a failed sign-out.
+	await logoutRadius({
+		runtime: {
+			logout: async () => {
+				throw new CredentialSynchronizationError("radius", "logout", undefined, { cause: new Error("catalog") });
+			},
+		},
+	});
+
+	await assert.rejects(
+		logoutRadius({
+			runtime: {
+				logout: async () => {
+					throw new Error("credential store is read-only");
+				},
+			},
+		}),
+		/read-only/,
 	);
 });
 

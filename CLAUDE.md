@@ -95,6 +95,7 @@ src/
 │       ├── tree-dialog.ts    # a 打开的完整树对话框：顶部搜索行（PromptBar，实时搜索，Esc 退出搜索框但关键字保留、Enter 无含义；没焦点时只显示关键字或 `/ to search`）、中间画树线的树（和面板共用折叠状态，折叠的段头画 ⊞）、底部提示（来自 keymap，对话框里不做 ? 帮助），几乎占满终端。只管画、搜索框和自己的光标；行的搜索 / 过滤 / 折叠由 app.ts 算好 setRows，按键也由 app.ts 按 tree-dialog scope 解析后调用它的方法
 │       ├── confirm-dialog.ts # 删除 / fork / clone / 导入 / 覆盖导出文件前的确认框：SelectDialog 的预设（confirmDialogSpec：Yes / No，默认停在 No，y / n 直接选，Enter 确认，Esc 取消）
 │       ├── share-dialog.ts   # S 分享：目的地菜单（Auto / GitHub Gist / Radius）的标题 / 选项 / 提示；Auto 是 Gist 优先，初始光标来自 pi 的 sessionShareDestination
+│       ├── radius-account-dialog.ts # S → Radius 已登录时的账号菜单（分享到 Radius / 退出登录）的标题 / 选项 / 提示
 │       ├── radius-login-dialog.ts # S → Radius 未登录时接管 `/login radius`：账号 / API Key 菜单，以及 pi 浏览器 / 设备码选择菜单的标题 / 选项（i18n 后的文案）
 │       ├── notice-dialog.ts  # 通用只读提示框（URL 自动换行、y 复制、Esc / q 关闭）：Radius 登录的设备码 / 信息提示用它（浏览器登录不弹框，链接直接进剪贴板）
 │       ├── export-dialog.ts  # e 导出：格式菜单（HTML / JSONL）+ 输出路径输入框的标题 / 选项 / 提示
@@ -104,7 +105,7 @@ src/
 │       └── session-info-dialog.ts  # i 会话信息弹窗：一行一个字段（Name / Model / Messages / Tokens / Cost / Created / Updated / Path / ID），y 把 sessionInfoText 交给面板复制，Esc / q 关闭
 ├── actions/                  # 副作用层：每个函数包装一个 pi 命令/API，不弹窗，由调用方先确认
 │   ├── session-actions.ts    # resume / delete（先 trash 再 unlink，当前会话拒绝）/ rename / new / fork / clone / copy-reply / copyText；export（HTML 调正在运行的 pi 的 `pi --export`，JSONL 照搬 pi 的活动分支导出）/ import（复制进会话目录再 switchSession）/ share（目的地由 S 菜单传入：Auto 优先 Gist、其次 Radius；Radius 走 `/v1/artifacts`，Gist 走 `gh gist create --public=false`）/ radiusAuthenticated（分享前查 Radius 凭据）。外部命令用 CommandSpec 注入，测试传 node 假脚本
-│   ├── radius-auth.ts        # Radius 登录：用同一个 auth.json 新建 ModelRuntime，走 pi-ai 的 `/login radius` OAuth / API key 流程；另含 openExternalUrl。扩展没有 /login API，凭据落盘后运行中的 modelRegistry 按文件版本自动读到
+│   ├── radius-auth.ts        # Radius 登录 / 退出：用同一个 auth.json 新建 ModelRuntime，走 pi-ai 的 `/login radius` OAuth / API key 流程，`logout` 删除本地凭据；另含 openExternalUrl。扩展没有 /login API，凭据落盘后运行中的 modelRegistry 按文件版本自动读到
 │   └── tree-actions.ts       # restore / label / copy（已完成；restore 把 No summary / Summarize / custom prompt 透传给 navigateTree）
 ├── data/                     # 数据层：只读适配 pi 的 SessionManager，产出纯数据行，无 UI
 │   ├── sessions.ts           # SessionManager.list/listAll -> SessionRow[]；sortSessions

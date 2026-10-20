@@ -512,7 +512,7 @@ test("share Radius: Esc in the method menu or the API-key prompt cancels without
 	assert.deepEqual(shares, []);
 });
 
-test("share Radius: an existing credential skips sign-in; auto never checks Radius", async () => {
+test("share Radius: an existing credential asks Share / Sign out before uploading; auto never checks Radius", async () => {
 	const shares: Array<{ file: string; destination: string }> = [];
 	let checks = 0;
 	let logins = 0;
@@ -536,9 +536,14 @@ test("share Radius: an existing credential skips sign-in; auto never checks Radi
 	confirmShareSession(h.host);
 	h.menu().onSelect(2);
 	await flush();
-	await flush();
 	assert.equal(checks, 1);
 	assert.equal(logins, 0);
+	assert.equal(h.menu().title, t("dialog.radiusAccountTitle"));
+	assert.deepEqual(shares, [], "nothing is uploaded before the account menu is answered");
+
+	h.menu().onSelect(0);
+	await flush();
+	await flush();
 	assert.deepEqual(shares, [{ file: "/tmp/s1.jsonl", destination: "radius" }]);
 
 	confirmShareSession(h.host);
@@ -587,4 +592,85 @@ test("share Radius: a device code opens in a notice, and closing it cancels the 
 	assert.equal(h.anyOpen(), false);
 	assert.ok(h.statuses.includes("Radius sign-in cancelled"), h.statuses.join(","));
 	assert.deepEqual(shares, []);
+});
+
+test("share Radius: a signed-in account asks Share / Sign out; sign-out confirms first", async () => {
+	let logouts = 0;
+	const shares: Array<{ file: string; destination: string }> = [];
+	const h = fakeHost({
+		actions: {
+			shareSession: async (file, destination) => {
+				shares.push({ file, destination });
+				return { url: "https://pi.dev/session/#radius", destination: "radius" };
+			},
+			radiusAuthenticated: async () => true,
+			logoutRadius: async () => {
+				logouts++;
+			},
+		},
+	});
+
+	// The outer menu still has three destinations; Radius opens the account menu.
+	confirmShareSession(h.host);
+	assert.equal(h.menu().items.length, 3);
+	h.menu().onSelect(2);
+	await flush();
+	assert.equal(h.menu().title, t("dialog.radiusAccountTitle"));
+	assert.deepEqual(h.menu().items, [t("dialog.radiusAccountShare"), t("dialog.radiusAccountSignOut")]);
+
+	// Share keeps the old explicit-Radius path.
+	h.menu().onSelect(0);
+	await flush();
+	assert.deepEqual(shares, [{ file: "/tmp/s1.jsonl", destination: "radius" }]);
+	assert.equal(h.anyOpen(), false);
+
+	// Sign out: No is the default and goes back to the account menu.
+	h.statuses.length = 0;
+	confirmShareSession(h.host);
+	h.menu().onSelect(2);
+	await flush();
+	h.menu().onSelect(1);
+	assert.equal(h.menu().title, t("confirm.radiusSignOut"));
+	h.menu().onSelect(CONFIRM_NO_INDEX);
+	assert.equal(h.menu().title, t("dialog.radiusAccountTitle"));
+	assert.equal(logouts, 0);
+
+	h.menu().onSelect(1);
+	h.menu().onSelect(CONFIRM_YES_INDEX);
+	await flush();
+	assert.equal(logouts, 1);
+	assert.equal(h.anyOpen(), false);
+	assert.deepEqual(h.statuses.slice(-2), [t("status.radiusSigningOut"), t("status.radiusSignedOut")]);
+
+	// A failing credential store is reported in the footer, not thrown at the panel.
+	const failing = fakeHost({
+		actions: {
+			shareSession: async () => ({ url: "https://pi.dev/session/#radius", destination: "radius" }),
+			radiusAuthenticated: async () => true,
+			logoutRadius: async () => {
+				throw new Error("credential store is read-only");
+			},
+		},
+	});
+	confirmShareSession(failing.host);
+	failing.menu().onSelect(2);
+	await flush();
+	failing.menu().onSelect(1);
+	failing.menu().onSelect(CONFIRM_YES_INDEX);
+	await flush();
+	assert.ok(failing.statuses.at(-1)?.includes("credential store is read-only"), failing.statuses.join(","));
+
+	// No port wired: footer only, no confirmation menu.
+	const bare = fakeHost({
+		actions: {
+			shareSession: async () => ({ url: "u", destination: "radius" }),
+			radiusAuthenticated: async () => true,
+		},
+	});
+	confirmShareSession(bare.host);
+	bare.menu().onSelect(2);
+	await flush();
+	bare.menu().onSelect(1);
+	assert.equal(bare.anyOpen(), false);
+	assert.ok(bare.statuses.includes(t("status.radiusSignOutUnavailable")), bare.statuses.join(","));
 });

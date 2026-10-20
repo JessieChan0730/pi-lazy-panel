@@ -32,7 +32,7 @@ import {
 	resumeSession,
 	shareSession,
 } from "./actions/session-actions.ts";
-import { loginRadius, openExternalUrl } from "./actions/radius-auth.ts";
+import { loginRadius, logoutRadius, openExternalUrl } from "./actions/radius-auth.ts";
 import { copyNodeText, labelNode, restoreNode } from "./actions/tree-actions.ts";
 import { loadConfig, readConfigSnapshot, saveConfigPatch } from "./config/config.ts";
 import { loadSessionFileState, updateSessionFileState } from "./config/archive.ts";
@@ -147,6 +147,7 @@ export default function (pi: ExtensionAPI) {
 				// S 选 Radius 时先查凭据；没有就走面板里的 `/login radius`，登录后继续分享。
 				radiusAuthenticated: () => radiusAuthenticated(ctx.modelRegistry),
 				loginRadius: (method, interaction) => loginRadius(method, interaction),
+				logoutRadius: () => logoutRadius(),
 				openUrl: openExternalUrl,
 				shareDestination: piSettings.shareDestination,
 			};

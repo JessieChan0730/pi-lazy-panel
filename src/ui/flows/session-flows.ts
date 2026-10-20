@@ -37,6 +37,7 @@ import {
 	forkSessionTitle,
 	importSessionTitle,
 	overwriteFileTitle,
+	radiusSignOutTitle,
 } from "../widgets/confirm-dialog.ts";
 import { EXPORT_FORMAT_ORDER, exportFormatHints, exportFormats, exportFormatTitle, exportPathHints, exportPathTitle } from "../widgets/export-dialog.ts";
 import { forkDialogHints, forkDialogTitle } from "../widgets/fork-dialog.ts";
@@ -54,6 +55,7 @@ import {
 	radiusPromptHints,
 } from "../widgets/radius-login-dialog.ts";
 import { renameDialogHints, renameDialogTitle } from "../widgets/rename-dialog.ts";
+import { radiusAccountActions, radiusAccountHints, radiusAccountTitle } from "../widgets/radius-account-dialog.ts";
 import { shareDestinations, shareHints, shareInitialIndex, shareTitle } from "../widgets/share-dialog.ts";
 import { forgetDeletedSessions } from "./archive-flows.ts";
 import type { FlowHost } from "./host.ts";
@@ -559,8 +561,9 @@ async function runImport(host: FlowHost, input: string): Promise<void> {
  * 菜单本身就是外发确认：Esc 什么都不发。初始光标是 pi 的 `sessionShareDestination`
  * （没配置为 auto）；Gist 缺工具 / Auto 两边都不可用由动作层按 pi 的原文报在 footer。
  *
- * Radius 没登录时不直接报错：先走 pi 的 `/login radius` 流程（账号 / API Key，
- * 账号再用同一个菜单选浏览器 / 设备码），登录成功后自动继续这次分享。
+ * Radius 单独处理：没登录时走 pi 的 `/login radius` 流程（账号 / API Key，
+ * 账号再用同一个菜单选浏览器 / 设备码），登录成功后自动继续这次分享；已登录时先弹
+ * "分享 / 退出登录"，退出会清除本机凭据（相当于 pi 的 `/logout radius`）。
  */
 export function confirmShareSession(host: FlowHost): void {
 	if (refuseMultiSelect(host, "share")) return;
@@ -570,14 +573,15 @@ export function confirmShareSession(host: FlowHost): void {
 		host.setStatus(t("status.shareUnavailable"));
 		return;
 	}
+	const entries = shareDestinations();
 	host.openMenu("share", {
 		title: shareTitle(),
-		items: shareDestinations().map((d) => d.label),
+		items: entries.map((e) => e.label),
 		initialIndex: shareInitialIndex(host.actions.shareDestination ?? "auto"),
 		subject: sessionTitle(row),
 		hints: shareHints(),
 		onSelect: (i) => {
-			const destination = shareDestinations()[i]?.destination;
+			const destination = entries[i]?.destination;
 			if (destination) void startShare(host, row, destination);
 		},
 		onCancel: () => host.closeDialogs(),
@@ -585,8 +589,49 @@ export function confirmShareSession(host: FlowHost): void {
 }
 
 /**
+ * "Sign out of Radius" in the account menu: ask first (it removes the stored
+ * credential), then delete it.
+ *
+ * 退出 Radius 登录前先确认（CLAUDE.md 第 7 条：删除类操作）；确认后只删本机
+ * auth.json 里的凭据，网页端已创建的会话不受影响。Esc / No 退回账号菜单。
+ */
+function confirmRadiusSignOut(host: FlowHost, row: SessionRow): void {
+	if (!host.actions?.logoutRadius) {
+		// 没接动作时把菜单收掉，只留 footer 提示，和别的"操作不可用"一致。
+		host.closeDialogs();
+		host.setStatus(t("status.radiusSignOutUnavailable"));
+		return;
+	}
+	host.openMenu(
+		"share",
+		confirmDialogSpec({
+			title: radiusSignOutTitle(),
+			onConfirm: () => void runRadiusSignOut(host),
+			onCancel: () => openRadiusAccount(host, row),
+		}),
+	);
+}
+
+/** Confirmed: remove the credential and report it in the footer. */
+async function runRadiusSignOut(host: FlowHost): Promise<void> {
+	const logout = host.actions?.logoutRadius;
+	host.closeDialogs();
+	if (!logout) return;
+	host.setStatus(t("status.radiusSigningOut"));
+	try {
+		await logout();
+		if (host.isDisposed()) return;
+		host.setStatus(t("status.radiusSignedOut"));
+	} catch (err) {
+		if (host.isDisposed()) return;
+		host.setStatus(t("status.radiusSignOutFailed", { error: (err as Error).message }));
+	}
+}
+
+/**
  * Upload to the picked destination, taking over Radius sign-in first when an
- * explicit Radius share finds no credential.
+ * explicit Radius share finds no credential; when one is stored, ask whether
+ * to share or sign out instead of uploading right away.
  */
 async function startShare(host: FlowHost, row: SessionRow, destination: SessionShareDestination): Promise<void> {
 	const actions = host.actions;
@@ -596,7 +641,7 @@ async function startShare(host: FlowHost, row: SessionRow, destination: SessionS
 		return;
 	}
 	host.closeDialogs();
-	if (destination === "radius" && actions.radiusAuthenticated && actions.loginRadius) {
+	if (destination === "radius" && actions.radiusAuthenticated) {
 		let ready: boolean;
 		try {
 			ready = await actions.radiusAuthenticated();
@@ -605,12 +650,34 @@ async function startShare(host: FlowHost, row: SessionRow, destination: SessionS
 			ready = false;
 		}
 		if (host.isDisposed()) return;
-		if (!ready) {
+		if (ready) {
+			openRadiusAccount(host, row);
+			return;
+		}
+		// 没接登录动作时继续走分享，让动作层按 pi 的原文报"未登录"。
+		if (actions.loginRadius) {
 			openRadiusLogin(host, row);
 			return;
 		}
 	}
 	await runShare(host, row.file, destination);
+}
+
+/** Signed in: share right away, or clear the credential after a confirmation. */
+function openRadiusAccount(host: FlowHost, row: SessionRow): void {
+	const actions = radiusAccountActions();
+	host.openMenu("share", {
+		title: radiusAccountTitle(),
+		items: actions.map((a) => a.label),
+		subject: sessionTitle(row),
+		hints: radiusAccountHints(),
+		onSelect: (i) => {
+			const action = actions[i]?.action;
+			if (action === "share") void runShare(host, row.file, "radius");
+			else if (action === "logout") confirmRadiusSignOut(host, row);
+		},
+		onCancel: () => host.closeDialogs(),
+	});
 }
 
 /** The account / API-key menu, same two choices as pi's `/login radius`. */

@@ -318,6 +318,9 @@
     "shareAuto": "自动（优先 Gist）",
     "shareGist": "GitHub Gist",
     "shareRadius": "Radius",
+    "radiusAccountTitle": "Radius",
+    "radiusAccountShare": "分享到 Radius",
+    "radiusAccountSignOut": "退出 Radius 登录",
     "radiusLoginTitle": "Radius 登录",
     "radiusLoginAccount": "使用账号登录",
     "radiusLoginApiKey": "使用 API Key 登录",
@@ -344,7 +347,8 @@
     "clone": "克隆会话？",
     "fork": "分叉会话？",
     "import": "导入并切换过去？",
-    "overwrite": "覆盖文件？"
+    "overwrite": "覆盖文件？",
+    "radiusSignOut": "退出 Radius 登录？"
   },
   "info": {
     "name": "名称",
@@ -494,6 +498,10 @@
     "copiedRadiusLink": "已复制 Radius 登录信息到剪贴板",
     "radiusBrowserLinkCopied": "已打开浏览器，登录链接已复制到剪贴板（Esc 取消）",
     "radiusBrowserLink": "已打开浏览器，请在浏览器中完成登录（Esc 取消）：{{url}}",
+    "radiusSigningOut": "正在退出 Radius 登录…",
+    "radiusSignedOut": "已退出 Radius 登录",
+    "radiusSignOutFailed": "退出 Radius 登录失败：{{error}}",
+    "radiusSignOutUnavailable": "退出 Radius 登录：操作不可用",
     "sort": "排序：{{sort}}",
     "sessionInfoUnavailable": "会话信息：不可用",
     "sessionInfoFailed": "加载会话信息失败：{{error}}",

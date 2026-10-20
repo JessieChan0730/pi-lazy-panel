@@ -41,6 +41,7 @@ import {
 	forkSessionTitle,
 	importSessionTitle,
 	overwriteFileTitle,
+	radiusSignOutTitle,
 } from "../src/ui/widgets/confirm-dialog.ts";
 import { exportFormatTitle, exportPathTitle } from "../src/ui/widgets/export-dialog.ts";
 import { forkDialogTitle } from "../src/ui/widgets/fork-dialog.ts";
@@ -50,6 +51,7 @@ import { InputDialog } from "../src/ui/widgets/input-dialog.ts";
 import { labelDialogTitle } from "../src/ui/widgets/label-dialog.ts";
 import { newSessionDialogTitle } from "../src/ui/widgets/new-session-dialog.ts";
 import { radiusLoginMethodLabel, radiusLoginMethodTitle } from "../src/ui/widgets/radius-login-dialog.ts";
+import { radiusAccountTitle } from "../src/ui/widgets/radius-account-dialog.ts";
 import { renameDialogTitle } from "../src/ui/widgets/rename-dialog.ts";
 import { customPromptTitle, summaryMenu as restoreSummaryMenu, summaryMenuTitle } from "../src/ui/widgets/restore-dialog.ts";
 import { searchLabel } from "../src/ui/widgets/search-bar.ts";
@@ -66,6 +68,7 @@ const FORK_SESSION_TITLE = forkSessionTitle();
 const IMPORT_SESSION_TITLE = importSessionTitle();
 const OVERWRITE_FILE_TITLE = overwriteFileTitle();
 const SHARE_SESSION_TITLE = shareTitle();
+const RADIUS_SIGN_OUT_TITLE = radiusSignOutTitle();
 const EXPORT_FORMAT_TITLE = exportFormatTitle();
 const EXPORT_PATH_TITLE = exportPathTitle();
 const FORK_DIALOG_TITLE = forkDialogTitle();
@@ -3746,6 +3749,49 @@ test("S: the menu cursor starts on pi's sessionShareDestination (auto when unset
 		assert.ok(menu?.body[row]?.includes(marker), `${destination}: ${menu?.body.join("\n")}`);
 		assert.equal(h.panel.state.mode, "share");
 	}
+});
+
+test("S: a signed-in Radius asks Share / Sign out; sign-out confirms first, then clears the credential", async () => {
+	let logouts = 0;
+	const h = makeSessionActionPanel({
+		actions: {
+			radiusAuthenticated: async () => true,
+			logoutRadius: async () => {
+				logouts++;
+			},
+		},
+	});
+	await h.panel.load();
+
+	// S → Radius while signed in: the account menu (not the sign-in menu).
+	h.panel.handleInput("S");
+	h.panel.handleInput("j");
+	h.panel.handleInput("j");
+	h.panel.handleInput("\r");
+	await flush();
+	assert.equal(h.panel.state.mode, "share");
+	const account = dialogAt(h.text(), radiusAccountTitle());
+	assert.ok(account, h.text().join("\n"));
+	assert.ok(account.body[0]!.includes("› Share to Radius"), account.body.join("\n"));
+	assert.ok(account.body[1]!.includes("Sign out of Radius"), account.body.join("\n"));
+
+	// Sign out asks Yes / No (default No); Enter on No comes back to the account menu.
+	h.panel.handleInput("j");
+	h.panel.handleInput("\r");
+	assert.ok(dialogAt(h.text(), RADIUS_SIGN_OUT_TITLE), h.text().join("\n"));
+	h.panel.handleInput("\r");
+	await flush();
+	assert.equal(logouts, 0, "Enter on the default No cancels");
+	assert.ok(dialogAt(h.text(), radiusAccountTitle()), h.text().join("\n"));
+
+	// y confirms: the credential is removed and the footer says so.
+	h.panel.handleInput("j");
+	h.panel.handleInput("\r");
+	h.panel.handleInput("y");
+	await flush();
+	assert.equal(logouts, 1);
+	assert.equal(h.panel.state.mode, "normal");
+	assert.ok(h.footer().includes("signed out of Radius"), h.footer());
 });
 
 test("S: failures are reported; the link is still shown when the clipboard fails", async () => {

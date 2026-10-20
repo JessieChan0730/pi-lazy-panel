@@ -31,6 +31,16 @@ export interface RadiusLoginOptions {
 	runtime?: RadiusLoginRuntime;
 }
 
+/** The slice of pi's runtime a logout needs (tests pass a fake). */
+export interface RadiusLogoutRuntime {
+	logout(providerId: string, options?: { signal?: AbortSignal }): Promise<unknown>;
+}
+
+export interface RadiusLogoutOptions {
+	/** Replaces the fresh `ModelRuntime` (tests). */
+	runtime?: RadiusLogoutRuntime;
+}
+
 /**
  * Sign in to Radius with an account (OAuth) or an API key, letting `interaction`
  * answer pi's prompts. Resolves once the credential is stored.
@@ -47,6 +57,37 @@ export async function loginRadius(method: RadiusLoginMethod, interaction: Radius
 		await runtime.login(RADIUS_PROVIDER_ID, method, interaction);
 	} catch (err) {
 		if (err instanceof CredentialSynchronizationError && !interaction.signal.aborted) return;
+		throw err;
+	}
+}
+
+/**
+ * Sign out of Radius: delete the credential pi stored for it (what
+ * `/logout radius` does). A fresh `ModelRuntime` on the same auth.json is
+ * enough — the running pi's `modelRegistry` notices the file change and
+ * forgets the token too.
+ *
+ * Like `loginRadius`, a `CredentialSynchronizationError` means the credential
+ * was already removed and only the local model catalog could not be refreshed,
+ * so the sign-out itself succeeded. This only clears the local token; Radius
+ * sessions in the web UI are not revoked.
+ *
+ * 清除本地 Radius 凭据（相当于 pi 的 `/logout radius`）：用同一个 auth.json 新建
+ * ModelRuntime 调 logout；删掉后运行中的 pi 也能读到。只删本机 token，网页端会话
+ * 不会失效。
+ *
+ * Throws when the credential store cannot be written or the signal aborts.
+ */
+/** pi's `/logout` gives credential removal 15 seconds; same here. */
+const RADIUS_LOGOUT_TIMEOUT_MS = 15_000;
+
+export async function logoutRadius(options: RadiusLogoutOptions = {}): Promise<void> {
+	const runtime: RadiusLogoutRuntime = options.runtime ?? (await ModelRuntime.create({ refreshOnCreate: false }));
+	try {
+		await runtime.logout(RADIUS_PROVIDER_ID, { signal: AbortSignal.timeout(RADIUS_LOGOUT_TIMEOUT_MS) });
+	} catch (err) {
+		// 凭据已删除、只是本地模型状态没同步：对用户来说退出已经成功。
+		if (err instanceof CredentialSynchronizationError) return;
 		throw err;
 	}
 }

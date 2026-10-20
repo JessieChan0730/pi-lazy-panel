@@ -134,6 +134,8 @@ export interface ActionSource {
 	radiusAuthenticated?(): Promise<boolean>;
 	/** Sign in to Radius with pi's own `/login radius` flow; the interaction supplies the panel dialogs. */
 	loginRadius?(method: RadiusLoginMethod, interaction: RadiusLoginInteraction): Promise<void>;
+	/** S → Sign out of Radius (after confirmation): delete pi's stored Radius credential (what `/logout radius` does). */
+	logoutRadius?(): Promise<void>;
 	/** Open a URL in the platform browser (Radius sign-in). */
 	openUrl?(url: string): void;
 	/** pi's `sessionShareDestination`, the `S` menu's initial cursor (absent = `auto`). */

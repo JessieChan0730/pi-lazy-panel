@@ -318,6 +318,9 @@
     "shareAuto": "Auto (Gist first)",
     "shareGist": "GitHub Gist",
     "shareRadius": "Radius",
+    "radiusAccountTitle": "Radius",
+    "radiusAccountShare": "Share to Radius",
+    "radiusAccountSignOut": "Sign out of Radius",
     "radiusLoginTitle": "Radius sign-in",
     "radiusLoginAccount": "Sign in with an account",
     "radiusLoginApiKey": "Sign in with an API key",
@@ -344,7 +347,8 @@
     "clone": "Clone session?",
     "fork": "Fork session?",
     "import": "Import and switch to it?",
-    "overwrite": "Overwrite file?"
+    "overwrite": "Overwrite file?",
+    "radiusSignOut": "Sign out of Radius?"
   },
   "info": {
     "name": "Name",
@@ -494,6 +498,10 @@
     "copiedRadiusLink": "copied Radius sign-in details to clipboard",
     "radiusBrowserLinkCopied": "browser opened, sign-in link copied to the clipboard (Esc cancels)",
     "radiusBrowserLink": "browser opened, finish signing in in your browser (Esc cancels): {{url}}",
+    "radiusSigningOut": "signing out of Radius…",
+    "radiusSignedOut": "signed out of Radius",
+    "radiusSignOutFailed": "Radius sign-out failed: {{error}}",
+    "radiusSignOutUnavailable": "sign out: actions unavailable",
     "sort": "sort: {{sort}}",
     "sessionInfoUnavailable": "session info: unavailable",
     "sessionInfoFailed": "session info failed: {{error}}",
