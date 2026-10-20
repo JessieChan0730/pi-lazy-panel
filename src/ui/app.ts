@@ -609,6 +609,17 @@ export class LazyPanel implements Component, Focusable {
 		this.o.requestRender();
 	}
 
+	/**
+	 * A dialog is about to own the footer: forget the previous result / error
+	 * (e.g. a copied share URL) so it cannot push the dialog's own shortcut
+	 * hints out of the row.
+	 *
+	 * 弹窗接管键盘后 footer 只显示它的快捷键；旧的结果提示先清掉，别占位置。
+	 */
+	private clearStatus(): void {
+		this.status = undefined;
+	}
+
 	// -----------------------------------------------------------------------
 	// Input
 	// -----------------------------------------------------------------------
@@ -766,6 +777,7 @@ export class LazyPanel implements Component, Focusable {
 	private openPrompt(mode: PanelMode, spec: InputDialogSpec): void {
 		this.selectDialog.close();
 		this.noticeDialog.close();
+		this.clearStatus();
 		this.state.mode = mode;
 		this.inputDialog.open(spec);
 		this.inputDialog.focused = this._focused;
@@ -777,6 +789,7 @@ export class LazyPanel implements Component, Focusable {
 		this.inputDialog.close();
 		this.inputDialog.focused = false;
 		this.noticeDialog.close();
+		this.clearStatus();
 		this.state.mode = mode;
 		this.selectDialog.open(spec);
 		this.o.requestRender();
@@ -787,6 +800,7 @@ export class LazyPanel implements Component, Focusable {
 		this.selectDialog.close();
 		this.inputDialog.close();
 		this.inputDialog.focused = false;
+		this.clearStatus();
 		this.state.mode = mode;
 		this.noticeDialog.open(spec);
 		this.o.requestRender();
@@ -816,6 +830,7 @@ export class LazyPanel implements Component, Focusable {
 
 	private openHelp(): void {
 		this.keys.clear();
+		this.clearStatus();
 		this.state.helpOpen = true;
 		this.state.helpCursor = 0;
 		this.state.helpScroll = 0;
@@ -1962,6 +1977,7 @@ export class LazyPanel implements Component, Focusable {
 		if (this.disposed || this.entering || this.state.sessionStateBusy || this.state.mode === "search" || this.activeOverlay()) return;
 		this.keys.clear();
 		this.state.mode = "settings";
+		this.clearStatus();
 		this.settingsDialog.open();
 		void readSettings(this.flowHost);
 	}
@@ -2051,6 +2067,7 @@ export class LazyPanel implements Component, Focusable {
 
 	/** The read-only Session Info box (i): `onCopy` gets its text on y, Esc / q close it. */
 	private openInfo(info: SessionInfo, onCopy: (text: string) => void): void {
+		this.clearStatus();
 		this.state.mode = "info";
 		this.infoDialog.open({ info, onCopy, onClose: () => this.closeSessionInfo() });
 		this.o.requestRender();
@@ -2064,6 +2081,7 @@ export class LazyPanel implements Component, Focusable {
 
 	/** Context usage (u): y copies the current view; Enter previews a category, Esc returns one level. */
 	private openUsage(info: ContextUsageInfo, onCopy: (text: string) => void): void {
+		this.clearStatus();
 		this.state.mode = "usage";
 		this.usageDialog.open({ info, onCopy, onClose: () => this.closeUsage() });
 		this.o.requestRender();
