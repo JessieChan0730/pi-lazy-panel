@@ -10,7 +10,7 @@
 
 import { t } from "../../i18n/index.ts";
 import type { RestoreOptions, TreeRow } from "../../types.ts";
-import { labelDialogHints, labelDialogTitle } from "../widgets/label-dialog.ts";
+import { labelDialogHints, labelDialogSubject, labelDialogTitle } from "../widgets/label-dialog.ts";
 import {
 	customPromptHints,
 	CUSTOM_PROMPT_INDEX,
@@ -82,11 +82,11 @@ export function openLabelInput(host: FlowHost, target: TreeTarget | undefined): 
 		return;
 	}
 	const { file, row } = target;
-	// 弹窗标题右侧显示是给哪条消息打标签。
+	// 弹窗标题右侧只标出角色和时间：正文开头截断后信息量低，还容易误导。
 	host.openPrompt("label", {
 		title: labelDialogTitle(),
 		value: row.label ?? "",
-		subject: `${row.role}: ${row.text}`,
+		subject: labelDialogSubject(row),
 		hints: labelDialogHints(),
 		onSubmit: (v) => void submitLabel(host, file, row.entryId, v),
 		onCancel: () => host.closeDialogs(),

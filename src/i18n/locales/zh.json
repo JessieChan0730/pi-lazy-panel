@@ -128,7 +128,8 @@
   "role": {
     "user": "用户",
     "assistant": "助手",
-    "tool": "工具"
+    "tool": "工具",
+    "system": "系统"
   },
   "scope": {
     "currentLong": "当前",

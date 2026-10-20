@@ -1258,7 +1258,7 @@ test("tree dialog: gg/G move its cursor, L labels its row over the dialog, Enter
 	let lines = h.text();
 	const dlg = labelDialog(lines);
 	assert.ok(dlg, "the Label dialog should be drawn");
-	assert.ok(dlg.title.includes("assistant: msg 1"), dlg.title);
+	assert.ok(dlg.title.includes("assistant ·") && !dlg.title.includes("msg 1"), dlg.title);
 	assert.ok(lines.some((l) => l.includes("┌─ TREE ")), "the tree dialog stays underneath");
 	assert.ok(lines.at(-1)!.includes("LABEL"), lines.at(-1));
 	for (const ch of "ckpt") h.panel.handleInput(ch);
@@ -1661,7 +1661,7 @@ test("T opens a centered Label dialog; Enter saves and refreshes the row, empty 
 	assert.ok(dlg, "the Label dialog should be drawn");
 	// drawn over the middle of the panel (not in the footer row), naming the node; the footer carries the dialog's keys
 	assert.ok(dlg.top > 2 && dlg.top < lines.length - 6, `dialog row ${dlg.top} of ${lines.length}`);
-	assert.ok(dlg.title.includes("assistant: msg 1"), dlg.title);
+	assert.ok(dlg.title.includes("assistant ·") && !dlg.title.includes("msg 1"), dlg.title);
 	// 3 rows: border, input, border — the bottom border sits right under the input line
 	assert.ok(lines[dlg.top + 2]!.includes("└"), lines[dlg.top + 2]);
 	const footer = lines.at(-1)!;

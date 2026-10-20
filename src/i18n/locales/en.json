@@ -128,7 +128,8 @@
   "role": {
     "user": "user",
     "assistant": "assistant",
-    "tool": "tool"
+    "tool": "tool",
+    "system": "system"
   },
   "scope": {
     "currentLong": "Current",

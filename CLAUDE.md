@@ -88,7 +88,7 @@ src/
 │       ├── prompt-bar.ts     # 底部一行输入的通用组件（包装 pi-tui Input），搜索栏和树对话框的搜索行基于它
 │       ├── search-bar.ts     # 底部搜索输入：显示 `搜索:`；renderSearchStatus 是回车后的状态行（关键字 + 2/7 + n/N/Esc 提示 + 状态文字）
 │       ├── input-dialog.ts   # 通用的居中单行输入弹窗（包装 pi-tui Input，3 行高）：标题 / 预填值 / 提示 / 回调在 open 时传入
-│       ├── label-dialog.ts   # T 打标签：InputDialog 的预设（标题 + footer 提示）；给 session 起名等场景照此加预设
+│       ├── label-dialog.ts   # T 打标签：InputDialog 的预设（标题 + 右上角节点角色/时间 + footer 提示）；给 session 起名等场景照此加预设
 │       ├── select-dialog.ts  # 通用的居中选择菜单（j/k/方向键移动、Enter 确认、Esc 取消，高度 = 选项数 + 2；spec.shortcuts 让某个键直接选中某一项）：标题 / 选项 / 回调在 open 时传入
 │       ├── restore-dialog.ts # TREE Enter 的预设：Summarize branch? 三选菜单的标题 / 选项 / 提示 + 自定义摘要指令输入框的标题 / 提示
 │       ├── rename-dialog.ts  # r 给会话改名：InputDialog 的预设（标题 Rename + footer 提示，空值清除名字）
