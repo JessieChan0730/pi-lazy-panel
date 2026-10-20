@@ -3,7 +3,7 @@
 ## 这个项目是什么
 
 一个类似 lazygit 的 pi(<https://pi.dev/>) 插件，用来管理 pi 的历史对话，主要命令有三个 /resume（恢复会话，从历史会话中选择并恢复）  /tree  （会话树导航，跳转到对话树的任意节点继续对话，某个对话详情里面的某一个界面） /new （新建一个对话），然后还有围绕着对话进行操作的命令：/name（命名会话，为当前会话设置一个易读的名称） /session（会话信息，显示会话文件路径、ID、消息数、token 用量和费用） /fork（分叉会话，从之前的用户消息分叉出一个新会话文件）/clone（克隆会话复制当前活动分支到新会话文件）/copy （复制 AI 最后一条回复到剪贴板）/export（导出会话导出为 HTML 或 JSONL 文件）/import（导入会话从 JSONL 文件导入并恢复会话）
-/share（分享会话上传为私有 GitHub Gist，生成可分享的 HTML 链接）， 根据这些命令能够拿到信息，我觉得产品可以设计成为这样：
+/share（分享会话：选择 Auto / GitHub Gist / Radius 上传，Auto 优先 Gist、其次 Radius，生成可分享的链接）， 根据这些命令能够拿到信息，我觉得产品可以设计成为这样：
 
 - 左边第一个面板是显示历史对话, 也就是 /resume 里面的那些数据
 - 左边第二个面板（在第一个面板底部）是显示对话节点 也就是 /tree 里面的那些数据（根据上面选择的不同的 /resume 来确自动变化这里面的内容）
@@ -93,14 +93,19 @@ src/
 │       ├── restore-dialog.ts # TREE Enter 的预设：Summarize branch? 三选菜单的标题 / 选项 / 提示 + 自定义摘要指令输入框的标题 / 提示
 │       ├── rename-dialog.ts  # r 给会话改名：InputDialog 的预设（标题 Rename + footer 提示，空值清除名字）
 │       ├── tree-dialog.ts    # a 打开的完整树对话框：顶部搜索行（PromptBar，实时搜索，Esc 退出搜索框但关键字保留、Enter 无含义；没焦点时只显示关键字或 `/ to search`）、中间画树线的树（和面板共用折叠状态，折叠的段头画 ⊞）、底部提示（来自 keymap，对话框里不做 ? 帮助），几乎占满终端。只管画、搜索框和自己的光标；行的搜索 / 过滤 / 折叠由 app.ts 算好 setRows，按键也由 app.ts 按 tree-dialog scope 解析后调用它的方法
-│       ├── confirm-dialog.ts # 删除 / fork / clone / 分享 / 导入 / 覆盖导出文件前的确认框：SelectDialog 的预设（confirmDialogSpec：Yes / No，默认停在 No，y / n 直接选，Enter 确认，Esc 取消）
+│       ├── confirm-dialog.ts # 删除 / fork / clone / 导入 / 覆盖导出文件前的确认框：SelectDialog 的预设（confirmDialogSpec：Yes / No，默认停在 No，y / n 直接选，Enter 确认，Esc 取消）
+│       ├── share-dialog.ts   # S 分享：目的地菜单（Auto / GitHub Gist / Radius）的标题 / 选项 / 提示；Auto 是 Gist 优先，初始光标来自 pi 的 sessionShareDestination
+│       ├── radius-account-dialog.ts # S → Radius 已登录时的账号菜单（分享到 Radius / 退出登录）的标题 / 选项 / 提示
+│       ├── radius-login-dialog.ts # S → Radius 未登录时接管 `/login radius`：账号 / API Key 菜单，以及 pi 浏览器 / 设备码选择菜单的标题 / 选项（i18n 后的文案）
+│       ├── notice-dialog.ts  # 通用只读提示框（URL 自动换行、y 复制、Esc / q 关闭）：Radius 登录的设备码 / 信息提示用它（浏览器登录不弹框，链接直接进剪贴板）
 │       ├── export-dialog.ts  # e 导出：格式菜单（HTML / JSONL）+ 输出路径输入框的标题 / 选项 / 提示
 │       ├── import-dialog.ts  # I 导入：InputDialog 的预设（标题 / 说明 / 提示，输入 JSONL 路径）
 │       ├── help-overlay.ts   # ? 快捷键帮助：居中弹窗，内容来自最终 keymap
 │       ├── changelog-dialog.ts     # @ 查看 pi 的 changelog：几乎占满终端的弹窗，pi-tui Markdown 按宽度缓存，j/k/方向键/ctrl+d/u/g/G 滚动，Esc / q 关闭（再按 @ 由 app.ts 关闭）
 │       └── session-info-dialog.ts  # i 会话信息弹窗：一行一个字段（Name / Model / Messages / Tokens / Cost / Created / Updated / Path / ID），y 把 sessionInfoText 交给面板复制，Esc / q 关闭
 ├── actions/                  # 副作用层：每个函数包装一个 pi 命令/API，不弹窗，由调用方先确认
-│   ├── session-actions.ts    # resume / delete（先 trash 再 unlink，当前会话拒绝）/ rename / new / fork / clone / copy-reply / copyText；export（HTML 调正在运行的 pi 的 `pi --export`，JSONL 照搬 pi 的活动分支导出）/ import（复制进会话目录再 switchSession）/ share（`gh gist create --public=false`）。外部命令用 CommandSpec 注入，测试传 node 假脚本
+│   ├── session-actions.ts    # resume / delete（先 trash 再 unlink，当前会话拒绝）/ rename / new / fork / clone / copy-reply / copyText；export（HTML 调正在运行的 pi 的 `pi --export`，JSONL 照搬 pi 的活动分支导出）/ import（复制进会话目录再 switchSession）/ share（目的地由 S 菜单传入：Auto 优先 Gist、其次 Radius；Radius 走 `/v1/artifacts`，Gist 走 `gh gist create --public=false`）/ radiusAuthenticated（分享前查 Radius 凭据）。外部命令用 CommandSpec 注入，测试传 node 假脚本
+│   ├── radius-auth.ts        # Radius 登录 / 退出：用同一个 auth.json 新建 ModelRuntime，走 pi-ai 的 `/login radius` OAuth / API key 流程，`logout` 删除本地凭据；另含 openExternalUrl。扩展没有 /login API，凭据落盘后运行中的 modelRegistry 按文件版本自动读到
 │   └── tree-actions.ts       # restore / label / copy（已完成；restore 把 No summary / Summarize / custom prompt 透传给 navigateTree）
 ├── data/                     # 数据层：只读适配 pi 的 SessionManager，产出纯数据行，无 UI
 │   ├── sessions.ts           # SessionManager.list/listAll -> SessionRow[]；sortSessions
@@ -113,7 +118,7 @@ src/
 │   ├── keymap.ts             # 默认键位 + 动作描述 + footer 提示顺序（纯数据），含 tree-dialog scope（d/t/u/l/a 过滤、q 关闭）；DISABLED_ACTIONS 列出在某个 scope 里关掉的外层动作（对话框里的切面板 / C A / n N / quit / help / tree-open / changelog）；TREE_DIALOG_FOOTER 是对话框提示的顺序
 │   ├── keys.ts               # 纯函数：chord 解析（ctrl+d / G / gg）、按键匹配、按 scope 解析 ActionId；scopeChain 定义查找顺序（对话框 → tree → global，面板 → global）
 │   ├── config.ts             # 唯一知道 ~/.pi/agent/lazy-panel.json 的模块，深合并用户配置（null 解绑）
-│   └── pi-settings.ts        # 唯一读 pi 自己 settings.json 的模块（SettingsManager.create 只读），目前取 branchSummary.skipPrompt 和 treeFilterMode（TREE 的初始过滤）
+│   └── pi-settings.ts        # 唯一读 pi 自己 settings.json 的模块（SettingsManager.create 只读），目前取 branchSummary.skipPrompt、treeFilterMode（TREE 的初始过滤）和 sessionShareDestination（S 目的地菜单的初始光标）
 ├── i18n/                     # 国际化：唯一知道 i18next 的层
 │   ├── index.ts              # initI18n(lng?)（同步、按系统语言、fallback en、returnEmptyString:false 让空占位回退英文）、detectLocale / normalizeLocale、导出 t()。约定：不在模块顶层用 t() 算 const，文案一律写成函数、渲染时才 t()
 │   └── locales/
@@ -142,10 +147,10 @@ test/
 ├── smoke.test.ts             # 键位表、搜索解析的冒烟测试
 ├── keymap.test.ts            # chord 解析、多键序列、scope 链（tree-dialog → tree → global）、用户配置合并、KeySequencer（前缀缓冲 / 超时）
 ├── panel.test.ts             # LazyPanel 行为：焦点切换、C/A、? 帮助、/ 搜索（三个面板的实时跳转 / Enter / Esc / n N 回绕 / 标题计数 / 折叠展开 / 高亮 / 切面板保留关键字）、自定义键位、y/T/Enter（含摘要菜单）、树对话框（移动、搜索、过滤、z 折叠、y/T/Enter、关闭后面板光标跟随）、SESSIONS 的 space 多选 / 批量删除 / d 确认删除 / r 改名 / s 排序 / i 信息弹窗 / n o y Y / e I S、@ changelog 弹窗、InputDialog / SelectDialog；拆分 app.ts 时补的行为锁定：输入法光标（CURSOR_MARKER）跟着各输入框走、多键超时、弹窗打开时屏蔽鼠标、各流程的失败分支、绑错 scope / 写错名字的动作只在 footer 提示
-├── flows.test.ts             # 假 FlowHost 驱动 ui/flows：导出 格式 → 路径 → 覆盖确认（每一步 Esc / No 退回上一步）、fork 选择器 ↔ 确认、恢复菜单 ↔ 自定义指令、批量删除跳过当前会话、面板关掉后不再写 footer
+├── flows.test.ts             # 假 FlowHost 驱动 ui/flows：导出 格式 → 路径 → 覆盖确认（每一步 Esc / No 退回上一步）、fork 选择器 ↔ 确认、恢复菜单 ↔ 自定义指令、批量删除跳过当前会话、Radius 未登录的登录菜单（i18n）/ 浏览器链接复制与无弹窗等待 / API Key / 设备码 / 取消后继续分享、面板关掉后不再写 footer
 ├── tree-actions.test.ts      # 临时会话文件上验证 loadNodeText / labelNode 的分流、loadTree 的 isLeaf 标记
-├── session-actions.test.ts   # 临时会话文件上验证 isEffectiveLeaf / resumeSession / restoreNode 的分流与摘要选项透传、deleteSession（当前会话拒绝、trash → unlink 回退）、renameSession 的分流、new / fork / clone、export（默认路径 / JSONL 链 / 假 pi）/ import（复制 / 重名 / 清理副本）/ share（假 gh）、utils/paths
-├── pi-settings.test.ts       # 临时目录上验证 branchSummary.skipPrompt 的全局 / 项目两级读取、treeFilterMode 映射
+├── session-actions.test.ts   # 临时会话文件上验证 isEffectiveLeaf / resumeSession / restoreNode 的分流与摘要选项透传、deleteSession（当前会话拒绝、trash → unlink 回退）、renameSession 的分流、new / fork / clone、export（默认路径 / JSONL 链 / 假 pi）/ import（复制 / 重名 / 清理副本）/ share（假 gh、假 Radius fetch、auto 的 Gist 优先与 Radius 回退、radius 不回落、pi.share entry）/ radiusAuthenticated / loginRadius、utils/paths
+├── pi-settings.test.ts       # 临时目录上验证 branchSummary.skipPrompt 的全局 / 项目两级读取、treeFilterMode 映射、sessionShareDestination 的合并与非法值回落
 ├── changelog.test.ts         # parseChangelog 的切分 / 跳过无版本段、文件缺失
 ├── search.test.ts            # parseSearchQuery 的限定词解析、matchTreeRow / matchSessionRow / matchesTokens 的匹配规则、findMatchRanges、firstMatchFrom / stepMatch / cycleMatch
 ├── i18n.test.ts              # 语言检测 / 初始化 / 插值 / 复数 / 缺失回退（initI18n / detectLocale / normalizeLocale / t）
@@ -170,7 +175,7 @@ AGENTS.md                     # 仅指向本文件，规则统一在这里维护
 4. 完成一个任务后，自动帮我执行 `npm run install:pi` 我会去 pi 中进行验证
 5. 本地导入必须显式包含 `.ts` 扩展名（需配合 `allowImportingTsExtensions` 和 `verbatimModuleSyntax` 配置）；仅类型导入（type-only imports）必须使用 `import type` 语法。
 6. `@earendil-works/pi-coding-agent`、`@earendil-works/pi-tui` 和 `typebox` 需保留在 `peerDependencies` 中，版本号设为 `*`；严禁将其打包（bundle）或作为本地依赖（vendor）包含在内。
-7. 执行破坏性操作（如删除、fork）时，必须先通过 `ui/widgets/confirm-dialog.ts` 进行确认。
+7. 执行破坏性操作（如删除、fork）时，必须先通过 `ui/widgets/confirm-dialog.ts` 进行确认；外发的分享用 `ui/widgets/share-dialog.ts` 的目的地菜单确认（Esc 不上传）。显式选 Radius 但没登录时，先走面板里的 `/login radius`（账号 / API Key，浏览器登录把链接复制到剪贴板、Esc 取消，设备码用 `notice-dialog.ts`），登录成功才继续上传。
 8. 对话内容渲染必须使用 `@earendil-works/pi-tui` 提供的 `Markdown` 组件；禁止引入其他 Markdown 库。
 9. `/lazy-panel` 仅适用于 TUI 模式；请务必在 `src/index.ts` 中保留 `ctx.mode !== "tui"` 的条件判断。
 10. 模块之间尽量低耦合

@@ -52,3 +52,36 @@ test("loadPiSettings reads branchSummary.skipPrompt from the global and project 
 	writeFileSync(join(agentDir, "settings.json"), "{ not json");
 	assert.equal(loadPiSettings(cwd, agentDir, true).skipBranchSummaryPrompt, false);
 });
+
+test("loadPiSettings reads sessionShareDestination from the merged settings, defaulting to auto", (t) => {
+	const dir = tempDir(t);
+	const agentDir = join(dir, "agent");
+	const cwd = join(dir, "project");
+	mkdirSync(agentDir, { recursive: true });
+	mkdirSync(join(cwd, ".pi"), { recursive: true });
+
+	assert.equal(DEFAULT_PI_SETTINGS.shareDestination, "auto");
+	assert.equal(loadPiSettings(cwd, agentDir).shareDestination, "auto");
+
+	// global file
+	writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ sessionShareDestination: "radius" }));
+	assert.equal(loadPiSettings(cwd, agentDir).shareDestination, "radius");
+
+	// the project file wins, but only when the project is trusted
+	writeFileSync(join(cwd, ".pi", "settings.json"), JSON.stringify({ sessionShareDestination: "gist" }));
+	assert.equal(loadPiSettings(cwd, agentDir, true).shareDestination, "gist");
+	assert.equal(loadPiSettings(cwd, agentDir, false).shareDestination, "radius");
+
+	// an invalid project value falls back to pi's auto, not to the global value
+	writeFileSync(join(cwd, ".pi", "settings.json"), JSON.stringify({ sessionShareDestination: "bogus" }));
+	assert.equal(loadPiSettings(cwd, agentDir, true).shareDestination, "auto");
+
+	// an explicit null also wins over global and falls back to auto
+	writeFileSync(join(cwd, ".pi", "settings.json"), JSON.stringify({ sessionShareDestination: null }));
+	assert.equal(loadPiSettings(cwd, agentDir, true).shareDestination, "auto");
+
+	// so does an invalid global value
+	writeFileSync(join(cwd, ".pi", "settings.json"), JSON.stringify({}));
+	writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ sessionShareDestination: "bogus" }));
+	assert.equal(loadPiSettings(cwd, agentDir).shareDestination, "auto");
+});

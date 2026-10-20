@@ -54,6 +54,8 @@ import type {
 	ExportTarget,
 	ForkPoint,
 	ListScope,
+	RadiusLoginInteraction,
+	RadiusLoginMethod,
 	RestoreOptions,
 	SessionFileChange,
 	SessionFileState,
@@ -61,6 +63,7 @@ import type {
 	SessionListFilter,
 	SessionInfo,
 	SessionRow,
+	SessionShareDestination,
 	SessionSortMode,
 	ShareResult,
 	TreeFilter,
@@ -125,6 +128,16 @@ export interface ActionSource {
 	exportSession?(sessionFile: string, format: ExportFormat, outputPath: string): Promise<string>;
 	/** I in SESSIONS (after confirmation): copy a session JSONL into the session folder and switch to it (/import). */
 	importSession?(input: string): Promise<EnterOutcome>;
-	/** S in SESSIONS (after confirmation): upload as a secret GitHub gist (/share). */
-	shareSession?(sessionFile: string): Promise<ShareResult>;
+	/** S in SESSIONS (after the destination menu): upload to Radius or a private GitHub gist (/share). */
+	shareSession?(sessionFile: string, destination: SessionShareDestination): Promise<ShareResult>;
+	/** Does Radius have a credential right now? `S` → Radius asks before uploading; false = sign in first. */
+	radiusAuthenticated?(): Promise<boolean>;
+	/** Sign in to Radius with pi's own `/login radius` flow; the interaction supplies the panel dialogs. */
+	loginRadius?(method: RadiusLoginMethod, interaction: RadiusLoginInteraction): Promise<void>;
+	/** S → Sign out of Radius (after confirmation): delete pi's stored Radius credential (what `/logout radius` does). */
+	logoutRadius?(): Promise<void>;
+	/** Open a URL in the platform browser (Radius sign-in). */
+	openUrl?(url: string): void;
+	/** pi's `sessionShareDestination`, the `S` menu's initial cursor (absent = `auto`). */
+	shareDestination?: SessionShareDestination;
 }

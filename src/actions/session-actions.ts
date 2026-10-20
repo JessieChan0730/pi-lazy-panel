@@ -13,7 +13,7 @@
  *   compact -> ctx.compact({ customInstructions }) on the current session (done)
  *   export  -> HTML: `pi --export <file> <out>`; JSONL: header + active branch (done)
  *   import  -> copy into the session dir + ctx.switchSession       (done)
- *   share   -> `pi --export` + `gh gist create --public=false`      (done)
+ *   share   -> Radius (`POST /v1/artifacts`) or `pi --export` + `gh gist create` (done)
  *
  * Destructive / branching / outbound actions (delete, fork, clone, share,
  * overwriting an export) must be confirmed by the caller first (see
@@ -21,7 +21,8 @@
  */
 
 import { spawn, spawnSync } from "node:child_process";
-import { constants, copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { constants, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, parse, resolve } from "node:path";
@@ -32,10 +33,11 @@ import {
 	type ExtensionCommandContext,
 	SessionManager,
 } from "@earendil-works/pi-coding-agent";
-import { EXTENSION_ID, SPINNER_FRAMES, SPINNER_INTERVAL_MS } from "../constants.ts";
+import { EXTENSION_ID, RADIUS_GATEWAY, SPINNER_FRAMES, SPINNER_INTERVAL_MS } from "../constants.ts";
 import { loadLastReply } from "../data/content.ts";
+import { RADIUS_PROVIDER_ID } from "./radius-auth.ts";
 import { t } from "../i18n/index.ts";
-import type { DeleteMethod, EnterOutcome, ExportFormat, ExportTarget, ShareResult } from "../types.ts";
+import type { DeleteMethod, EnterOutcome, ExportFormat, ExportTarget, SessionShareDestination, ShareResult } from "../types.ts";
 import { resolveUserPath, stripQuotes } from "../utils/paths.ts";
 
 /** The slice of the command context `resumeSession` needs (tests pass plain objects). */
@@ -475,13 +477,21 @@ export async function exportSession(
 	return outputPath;
 }
 
+/** Extra serialized entries appended after the branch (pi's `createTrailingEntries`). */
+type TrailingEntries = (parentId: string | null, timestamp: string) => object[];
+
 /** pi's exportSessionToJsonl, line for line: a fresh header, then the active branch re-chained. */
-function writeJsonlExport(manager: Pick<SessionManager, "getSessionId" | "getCwd" | "getBranch">, outputPath: string): void {
+function writeJsonlExport(
+	manager: Pick<SessionManager, "getSessionId" | "getCwd" | "getBranch">,
+	outputPath: string,
+	createTrailingEntries?: TrailingEntries,
+): void {
+	const timestamp = new Date().toISOString();
 	const header = {
 		type: "session",
 		version: CURRENT_SESSION_VERSION,
 		id: manager.getSessionId(),
-		timestamp: new Date().toISOString(),
+		timestamp,
 		cwd: manager.getCwd(),
 	};
 	const lines = [JSON.stringify(header)];
@@ -490,6 +500,7 @@ function writeJsonlExport(manager: Pick<SessionManager, "getSessionId" | "getCwd
 		lines.push(JSON.stringify({ ...entry, parentId }));
 		parentId = entry.id;
 	}
+	for (const entry of createTrailingEntries?.(parentId, timestamp) ?? []) lines.push(JSON.stringify(entry));
 	writeFileSync(outputPath, `${lines.join("\n")}\n`);
 }
 
@@ -545,6 +556,9 @@ export async function importSession(ctx: ImportContext, input: string): Promise<
 export const GH_NOT_INSTALLED = "GitHub CLI (gh) is not installed. Install it from https://cli.github.com/";
 export const GH_NOT_LOGGED_IN = "GitHub CLI is not logged in. Run 'gh auth login' first.";
 
+/** pi's wording when `sessionShareDestination` is `radius` but there is no Radius credential. */
+export const RADIUS_NOT_AUTHENTICATED = "Radius authentication is not configured. Run '/login radius' first.";
+
 const DEFAULT_SHARE_VIEWER_URL = "https://pi.dev/session/";
 
 /** pi's getShareViewerUrl: the pi.dev viewer (or `PI_SHARE_VIEWER_URL`) pointed at a gist. */
@@ -552,21 +566,193 @@ export function shareViewerUrl(gistId: string): string {
 	return `${process.env.PI_SHARE_VIEWER_URL || DEFAULT_SHARE_VIEWER_URL}#${gistId}`;
 }
 
+// ---------------------------------------------------------------------------
+// Radius sharing (pi 1.3.0's sessionShareDestination)
+// ---------------------------------------------------------------------------
+
+/** Uploading a long session can take a while; pi aborts through its loader instead. */
+const RADIUS_TIMEOUT_MS = 120_000;
+
+/** The slice of `ctx.modelRegistry` the Radius path needs. */
+export interface ShareAuthSource {
+	getProviderAuth(provider: string): Promise<ShareAuth | undefined>;
+}
+
+/** The shape of pi's `AuthResult` that carries the bearer token. */
+export interface ShareAuth {
+	auth: {
+		apiKey?: string;
+		headers?: Record<string, string | null>;
+	};
+}
+
 /**
- * Upload `sessionFile` as a secret GitHub gist and return the viewer link (what `/share` does).
+ * The current session's in-memory state.
  *
- * 照搬 pi 的 gist 路径：`gh auth status` 检查登录 → 导出 HTML 到临时目录 → `gh gist create
- * --public=false` → 从输出的 gist 地址取 id 拼 pi.dev 的查看链接；临时目录最后删掉。pi 会先试
- * Radius（需要 pi 的 modelRuntime，扩展拿不到），这里只走 gist。外发操作，调用方必须先确认。
+ * pi 的 `/share` 用当前 SessionManager 导出（还没落盘的最后一条也在），插件对光标下的会话分享时
+ * 只知道文件；当前会话就把内存里的 manager 传进来。`systemPrompt` / `tools` 是 Radius 查看器要的
+ * 展示信息（pi.share entry），历史会话没有当时的这两个值，只能省略。
  */
-export async function shareSession(sessionFile: string, commands: ExternalCommands = {}): Promise<ShareResult> {
+export interface ShareLiveSession {
+	manager: Pick<SessionManager, "getSessionId" | "getCwd" | "getBranch">;
+	systemPrompt: string;
+	tools: readonly { name: string; description: string; parameters: unknown }[];
+}
+
+/** Overrides for the share action (tests pass fake auth / fetch). */
+export interface ShareOptions extends ExternalCommands {
+	/**
+	 * Destination picked in the `S` menu (default `auto`).
+	 *
+	 * 面板的 `auto` 和 pi 内置 /share 的 auto 相反：**Gist 优先**（gh 已登录就上传 Gist，
+	 * 否则用 Radius 凭据），这是按用户要求定的；pi 的 auto 是 Radius 优先。
+	 */
+	destination?: SessionShareDestination;
+	/** Radius credential lookup; normally `ctx.modelRegistry`. Absent = no Radius attempt. */
+	auth?: ShareAuthSource;
+	/** Live state of the session pi has open (only when the shared file *is* that session). */
+	live?: ShareLiveSession;
+	/** Replaces `globalThis.fetch` (tests). */
+	fetch?: typeof fetch;
+}
+
+/** pi's `getAuthCredential`: apiKey first, then an `Authorization: Bearer` header. */
+export function shareBearerToken(auth: ShareAuth | undefined): string | undefined {
+	if (!auth) return undefined;
+	if (auth.auth.apiKey) return auth.auth.apiKey;
+	const header = Object.entries(auth.auth.headers ?? {}).find(([name]) => name.toLowerCase() === "authorization")?.[1];
+	if (typeof header !== "string") return undefined;
+	return /^Bearer\s+(.+)$/iu.exec(header)?.[1];
+}
+
+/**
+ * Is Radius signed in (would an upload find a bearer token)?
+ *
+ * `S` checks this before uploading to Radius so a missing credential starts
+ * pi's `/login radius` flow instead of failing. A refresh error counts as not
+ * signed in, matching `shareViaRadius`.
+ *
+ * 分享到 Radius 前先看有没有可用凭据；没有就由面板接管 `/login radius` 的流程。
+ */
+export async function radiusAuthenticated(auth: ShareAuthSource | undefined): Promise<boolean> {
+	if (!auth) return false;
+	try {
+		return shareBearerToken(await auth.getProviderAuth(RADIUS_PROVIDER_ID)) !== undefined;
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Upload the session to the destination picked in the `S` menu, and return the viewer link.
+ *
+ * - `gist`：只走 Gist（`gh` 不存在 / 没登录时报 pi 的原话）。
+ * - `radius`：只走 Radius（没有凭据时报 pi 的原话），绝不回落 Gist。
+ * - `auto`：Gist 优先——`gh auth status` 通过就上传 Gist；否则有 Radius 凭据就上传 Radius；
+ *   两边都没有时报出 Gist 与 Radius 两条提示。
+ *
+ * 外发操作，调用方必须先确认（`S` 的菜单本身就是确认）。Throws when the file is missing
+ * or the chosen upload fails.
+ */
+export async function shareSession(sessionFile: string, options: ShareOptions = {}): Promise<ShareResult> {
 	if (!existsSync(sessionFile)) throw new Error(`session file not found: ${sessionFile}`);
+	const destination = options.destination ?? "auto";
+	if (destination === "gist") return shareViaGist(sessionFile, options);
+	if (destination === "radius") {
+		const uploaded = await shareViaRadius(sessionFile, options);
+		if (uploaded) return uploaded;
+		throw new Error(RADIUS_NOT_AUTHENTICATED);
+	}
+	// auto: Gist 优先。gh 已登录就不再碰 Radius（也不会多取一次凭据）。
+	const gist = await gistStatus(options);
+	if (gist.ok) return uploadGist(sessionFile, options);
+	const uploaded = await shareViaRadius(sessionFile, options);
+	if (uploaded) return uploaded;
+	throw new Error(`${gist.error.message} ${RADIUS_NOT_AUTHENTICATED}`);
+}
+
+/** Radius upload; undefined when there is no usable credential (the caller decides about the fallback). */
+async function shareViaRadius(sessionFile: string, options: ShareOptions): Promise<ShareResult | undefined> {
+	let token: string | undefined;
+	try {
+		token = shareBearerToken(await options.auth?.getProviderAuth("radius"));
+	} catch {
+		// 取凭据失败（比如 OAuth 刷新出错）当作没有凭据：auto 继续看另一条路，radius 由调用方报“未登录”。
+		return undefined;
+	}
+	if (!token) return undefined;
+	const tempDir = mkdtempSync(join(tmpdir(), "pi-share-"));
+	try {
+		const jsonlFile = join(tempDir, "session.jsonl");
+		const manager = options.live?.manager ?? openSessionFile(sessionFile);
+		writeJsonlExport(manager, jsonlFile, options.live ? shareTrailingEntries(options.live) : undefined);
+		return { url: await uploadRadiusArtifact(jsonlFile, token, options.fetch ?? fetch), destination: "radius" };
+	} finally {
+		rmSync(tempDir, { recursive: true, force: true });
+	}
+}
+
+/** pi's `createShareTrailingEntries`: the system prompt and tool schemas the Radius viewer renders. */
+function shareTrailingEntries(live: ShareLiveSession): TrailingEntries {
+	return (parentId, timestamp) => [
+		{
+			type: "custom",
+			customType: "pi.share",
+			id: randomUUID().slice(0, 8),
+			parentId,
+			timestamp,
+			data: { systemPrompt: live.systemPrompt, tools: live.tools },
+		},
+	];
+}
+
+/** `POST /v1/artifacts`, exactly like pi's `tryShareViaRadius`; returns the canonical artifact URL. */
+async function uploadRadiusArtifact(jsonlFile: string, token: string, fetcher: typeof fetch): Promise<string> {
+	const body = readFileSync(jsonlFile);
+	const url = new URL("/v1/artifacts", RADIUS_GATEWAY);
+	url.searchParams.set("visibility", "organization");
+	url.searchParams.set("title", "Pi session");
+	const response = await fetcher(url, {
+		method: "POST",
+		headers: {
+			Authorization: `Bearer ${token}`,
+			"Content-Type": "application/x-ndjson",
+			"Content-Length": String(body.byteLength),
+		},
+		body,
+		signal: AbortSignal.timeout(RADIUS_TIMEOUT_MS),
+	});
+	const json = (await response.json().catch(() => null)) as { artifact?: { canonical_url?: unknown }; error?: unknown } | null;
+	const canonicalUrl = json?.artifact?.canonical_url;
+	if (!response.ok || typeof canonicalUrl !== "string" || !canonicalUrl) {
+		const reason = typeof json?.error === "string" ? json.error : response.statusText || String(response.status);
+		throw new Error(`Failed to upload Radius artifact: ${reason}`);
+	}
+	return canonicalUrl;
+}
+
+/** `gh` installed and logged in? (pi's gist path checks this before exporting anything.) */
+async function gistStatus(commands: ExternalCommands): Promise<{ ok: true } | { ok: false; error: Error }> {
 	const gh = commands.gh ?? { command: "gh", args: [] };
 	const auth = await runCommand(gh, ["auth", "status"], GH_TIMEOUT_MS);
 	if (auth.error) {
-		throw new Error((auth.error as NodeJS.ErrnoException).code === "ENOENT" ? GH_NOT_INSTALLED : `gh auth status: ${auth.error.message}`);
+		const error = new Error((auth.error as NodeJS.ErrnoException).code === "ENOENT" ? GH_NOT_INSTALLED : `gh auth status: ${auth.error.message}`);
+		return { ok: false, error };
 	}
-	if (auth.code !== 0) throw new Error(GH_NOT_LOGGED_IN);
+	if (auth.code !== 0) return { ok: false, error: new Error(GH_NOT_LOGGED_IN) };
+	return { ok: true };
+}
+
+/** The private-gist path: check `gh`, render HTML, then `gh gist create --public=false`. */
+async function shareViaGist(sessionFile: string, commands: ExternalCommands): Promise<ShareResult> {
+	const status = await gistStatus(commands);
+	if (!status.ok) throw status.error;
+	return uploadGist(sessionFile, commands);
+}
+
+/** The upload half of the gist path (the caller has already checked `gh`). */
+async function uploadGist(sessionFile: string, commands: ExternalCommands): Promise<ShareResult> {
+	const gh = commands.gh ?? { command: "gh", args: [] };
 	const tempDir = mkdtempSync(join(tmpdir(), "pi-share-"));
 	try {
 		const htmlFile = join(tempDir, "session.html");
@@ -578,7 +764,7 @@ export async function shareSession(sessionFile: string, commands: ExternalComman
 		const gistUrl = result.stdout.trim().split(/\r?\n/).pop()?.trim() ?? "";
 		const gistId = gistUrl.split("/").pop();
 		if (!gistId) throw new Error("Failed to parse gist ID from gh output");
-		return { url: shareViewerUrl(gistId), gistUrl };
+		return { url: shareViewerUrl(gistId), gistUrl, destination: "gist" };
 	} finally {
 		rmSync(tempDir, { recursive: true, force: true });
 	}

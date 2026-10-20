@@ -27,10 +27,12 @@ import {
 	importSession,
 	isCurrentSession,
 	newSession,
+	radiusAuthenticated,
 	renameSession,
 	resumeSession,
 	shareSession,
 } from "./actions/session-actions.ts";
+import { loginRadius, logoutRadius, openExternalUrl } from "./actions/radius-auth.ts";
 import { copyNodeText, labelNode, restoreNode } from "./actions/tree-actions.ts";
 import { loadConfig, readConfigSnapshot, saveConfigPatch } from "./config/config.ts";
 import { loadSessionFileState, updateSessionFileState } from "./config/archive.ts";
@@ -57,6 +59,15 @@ function extensionVersion(): string {
 	} catch {
 		return "";
 	}
+}
+
+/** The tool schemas pi's `pi.share` trailing entry carries: only the tools active in this session. */
+function activeToolSchemas(pi: ExtensionAPI): Array<{ name: string; description: string; parameters: unknown }> {
+	const active = new Set(pi.getActiveTools());
+	return pi
+		.getAllTools()
+		.filter((tool) => active.has(tool.name))
+		.map((tool) => ({ name: tool.name, description: tool.description, parameters: tool.parameters }));
 }
 
 export default function (pi: ExtensionAPI) {
@@ -115,7 +126,30 @@ export default function (pi: ExtensionAPI) {
 				exportTarget: (file, format, input) => exportTarget(ctx.cwd, file, format, input),
 				exportSession: (file, format, outputPath) => exportSession(ctx, file, format, outputPath),
 				importSession: (input) => importSession(ctx, input),
-				shareSession: (file) => shareSession(file),
+				// 目的地来自 S 菜单（auto / gist / radius；auto 优先 Gist）；凭据用 pi 同一个
+				// modelRegistry（Radius 的 OAuth 刷新由它负责）。当前会话的分享带上内存 manager 和
+				// 系统提示词 / 工具定义，让 Radius 查看器显示完整信息。
+				shareSession: (file, destination) =>
+					shareSession(file, {
+						destination,
+						auth: ctx.modelRegistry,
+						...(isCurrentSession(ctx, file)
+							? {
+									live: {
+										manager: ctx.sessionManager,
+										systemPrompt: ctx.getSystemPrompt(),
+										// pi 的 pi.share 只带当前启用的工具（session.state.tools），不是所有已配置工具。
+										tools: activeToolSchemas(pi),
+									},
+								}
+							: {}),
+					}),
+				// S 选 Radius 时先查凭据；没有就走面板里的 `/login radius`，登录后继续分享。
+				radiusAuthenticated: () => radiusAuthenticated(ctx.modelRegistry),
+				loginRadius: (method, interaction) => loginRadius(method, interaction),
+				logoutRadius: () => logoutRadius(),
+				openUrl: openExternalUrl,
+				shareDestination: piSettings.shareDestination,
 			};
 			// overlay 句柄在面板显示后才拿到；Enter 等待 pi 切换时用它暂时隐藏面板。
 			let setHidden: ((hidden: boolean) => void) | undefined;

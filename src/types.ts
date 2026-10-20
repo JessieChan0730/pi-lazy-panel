@@ -97,6 +97,16 @@ export type DeleteMethod = "trash" | "unlink";
 /** File format of SESSIONS `e` (pi's /export): the whole tree as HTML, or the active branch as JSONL. */
 export type ExportFormat = "html" | "jsonl";
 
+/**
+ * Where SESSIONS `S` uploads, from pi's `sessionShareDestination` (pi 1.3.0):
+ * `auto` = Radius when signed in, otherwise a private GitHub gist; `gist` /
+ * `radius` force one destination (an explicit `radius` never falls back).
+ */
+export type SessionShareDestination = "auto" | "gist" | "radius";
+
+/** The destination a share actually used (`auto` resolved to one of these). */
+export type ShareDestination = Exclude<SessionShareDestination, "auto">;
+
 /** Where an export would be written, resolved from what the user typed (blank = pi's default name in the cwd). */
 export interface ExportTarget {
 	/** Absolute output path. */
@@ -105,10 +115,59 @@ export interface ExportTarget {
 	exists: boolean;
 }
 
-/** What SESSIONS `S` (pi's /share) produced: the pi.dev viewer link and the gist behind it. */
+/** What SESSIONS `S` (pi's /share) produced: the viewer link and, for a gist, the gist behind it. */
 export interface ShareResult {
 	url: string;
-	gistUrl: string;
+	/** Only for `destination: "gist"`: the gist page itself. */
+	gistUrl?: string;
+	destination: ShareDestination;
+}
+
+/** How to sign in to Radius, the two choices pi's `/login radius` offers: an account (OAuth) or an API key. */
+export type RadiusLoginMethod = "oauth" | "api_key";
+
+/** One choice of a Radius sign-in menu (browser / device code, supplied by pi's OAuth provider). */
+export interface RadiusLoginOption {
+	id: string;
+	label: string;
+	description?: string;
+}
+
+/**
+ * A prompt pi's Radius sign-in asks for. Kept structurally equal to pi-ai's
+ * `AuthPrompt` so the UI layer never has to import pi-ai (not a dependency of
+ * this plugin); `ModelRuntime.login` accepts it as-is.
+ */
+export interface RadiusLoginPrompt {
+	type: "text" | "secret" | "select" | "manual_code";
+	message: string;
+	placeholder?: string;
+	options?: readonly RadiusLoginOption[];
+	signal?: AbortSignal;
+}
+
+/** A link in an informational sign-in event. */
+export interface RadiusLoginLink {
+	url: string;
+	label?: string;
+}
+
+/**
+ * What pi's Radius sign-in reports while it runs: the browser URL or device
+ * code to show, informational text, and progress. Structurally equal to
+ * pi-ai's `AuthEvent`.
+ */
+export type RadiusLoginEvent =
+	| { type: "info"; message: string; links?: readonly RadiusLoginLink[] }
+	| { type: "auth_url"; url: string; instructions?: string }
+	| { type: "device_code"; userCode: string; verificationUri: string; intervalSeconds?: number; expiresInSeconds?: number }
+	| { type: "progress"; message: string };
+
+/** The callbacks the panel gives pi's Radius sign-in; `signal` cancels the whole flow. */
+export interface RadiusLoginInteraction {
+	signal: AbortSignal;
+	prompt(prompt: RadiusLoginPrompt): Promise<string>;
+	notify(event: RadiusLoginEvent): void;
 }
 
 /**

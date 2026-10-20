@@ -10,7 +10,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { homedir, tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { test } from "node:test";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { SessionManager, CredentialSynchronizationError } from "@earendil-works/pi-coding-agent";
 import {
 	cloneSession,
 	type CommandSpec,
@@ -29,12 +29,16 @@ import {
 	importSession,
 	type NewSessionContext,
 	newSession,
+	RADIUS_NOT_AUTHENTICATED,
+	radiusAuthenticated,
 	renameSession,
 	resumeSession,
+	shareBearerToken,
 	shareSession,
 	shareViewerUrl,
 } from "../src/actions/session-actions.ts";
 import { type RestoreContext, restoreNode } from "../src/actions/tree-actions.ts";
+import { checkRadiusApiKey, loginRadius, logoutRadius } from "../src/actions/radius-auth.ts";
 import { EXTENSION_ID, SPINNER_FRAMES } from "../src/constants.ts";
 import { loadForkPoints, loadLastReply, loadSessionInfo } from "../src/data/content.ts";
 import { isEffectiveLeaf } from "../src/data/tree.ts";
@@ -736,6 +740,28 @@ if (args[0] === "gist") {
 process.exit(2);
 `;
 
+/** A `fetch` stand-in: records each request and answers with `body` at `status`. */
+function fakeFetch(status: number, body: unknown) {
+	const calls: Array<{ url: URL; init: RequestInit }> = [];
+	const fetcher = (async (input: string | URL | Request, init?: RequestInit) => {
+		calls.push({ url: new URL(input instanceof Request ? input.url : String(input)), init: init ?? {} });
+		return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+	}) as typeof fetch;
+	return { fetcher, calls };
+}
+
+/** Radius credential stand-in for `ShareAuthSource`. */
+function radiusAuth(token: string | undefined): { getProviderAuth: () => Promise<{ auth: { apiKey: string } } | undefined> } {
+	return { getProviderAuth: async () => (token ? { auth: { apiKey: token } } : undefined) };
+}
+
+function parseNdjson(body: RequestInit["body"]): Array<Record<string, unknown>> {
+	return String(body)
+		.trim()
+		.split("\n")
+		.map((line) => JSON.parse(line) as Record<string, unknown>);
+}
+
 test("paths: quotes stripped, ~ expanded on every platform, relative paths resolved against the cwd", () => {
 	assert.equal(stripQuotes('"C:\\My Files\\a.jsonl"'), "C:\\My Files\\a.jsonl");
 	assert.equal(stripQuotes("'a b'"), "a b");
@@ -883,7 +909,7 @@ test("shareSession: gh auth check, HTML via pi --export, a secret gist, and pi's
 	const pi = fakeProgram(dir, "pi", FAKE_PI);
 
 	const result = await shareSession(s.file, { pi, gh: fakeProgram(dir, "gh", FAKE_GH) });
-	assert.deepEqual(result, { url: shareViewerUrl("abc123def"), gistUrl: "https://gist.github.com/someone/abc123def" });
+	assert.deepEqual(result, { url: shareViewerUrl("abc123def"), gistUrl: "https://gist.github.com/someone/abc123def", destination: "gist" });
 	assert.equal(result.url, `${process.env.PI_SHARE_VIEWER_URL || "https://pi.dev/session/"}#abc123def`);
 	const call = JSON.parse(readFileSync(log, "utf-8")) as { args: string[]; html: string };
 	assert.deepEqual(call.args.slice(0, 3), ["gist", "create", "--public=false"]);
@@ -893,11 +919,295 @@ test("shareSession: gh auth check, HTML via pi --export, a secret gist, and pi's
 	assert.equal(existsSync(call.args[3] ?? ""), false);
 
 	const message = (expected: string) => (err: Error) => err.message === expected;
-	await assert.rejects(shareSession(s.file, { pi, gh: fakeProgram(dir, "gh-out", FAKE_GH, "logged-out") }), message(GH_NOT_LOGGED_IN));
-	await assert.rejects(shareSession(s.file, { pi, gh: { command: "lazy-panel-no-such-gh", args: [] } }), message(GH_NOT_INSTALLED));
 	await assert.rejects(
-		shareSession(s.file, { pi, gh: fakeProgram(dir, "gh-fail", FAKE_GH, "gist-fail") }),
+		shareSession(s.file, { destination: "gist", pi, gh: fakeProgram(dir, "gh-out", FAKE_GH, "logged-out") }),
+		message(GH_NOT_LOGGED_IN),
+	);
+	await assert.rejects(
+		shareSession(s.file, { destination: "gist", pi, gh: { command: "lazy-panel-no-such-gh", args: [] } }),
+		message(GH_NOT_INSTALLED),
+	);
+	await assert.rejects(
+		shareSession(s.file, { destination: "gist", pi, gh: fakeProgram(dir, "gh-fail", FAKE_GH, "gist-fail") }),
 		/Failed to create gist: HTTP 401: Bad credentials/,
 	);
 	await assert.rejects(shareSession(join(dir, "missing.jsonl"), { pi }), /session file not found/);
+});
+
+test("shareBearerToken: apiKey first, then an Authorization bearer header", () => {
+	assert.equal(shareBearerToken(undefined), undefined);
+	assert.equal(shareBearerToken({ auth: {} }), undefined);
+	assert.equal(shareBearerToken({ auth: { apiKey: "k" } }), "k");
+	assert.equal(shareBearerToken({ auth: { headers: { authorization: "Bearer t" } } }), "t");
+	assert.equal(shareBearerToken({ auth: { headers: { Authorization: "Bearer t2" } } }), "t2");
+	assert.equal(shareBearerToken({ auth: { headers: { authorization: "Basic x" } } }), undefined);
+	assert.equal(shareBearerToken({ auth: { headers: { authorization: null } } }), undefined);
+});
+
+test("radiusAuthenticated: true only when Radius resolves a bearer token; refresh errors count as signed out", async () => {
+	assert.equal(await radiusAuthenticated(undefined), false);
+	assert.equal(await radiusAuthenticated(radiusAuth(undefined)), false);
+	assert.equal(await radiusAuthenticated(radiusAuth("tok")), true);
+	assert.equal(await radiusAuthenticated({ getProviderAuth: async () => ({ auth: { headers: { authorization: "Bearer header" } } }) }), true);
+	assert.equal(
+		await radiusAuthenticated({
+			getProviderAuth: async () => {
+				throw new Error("refresh failed");
+			},
+		}),
+		false,
+	);
+});
+
+test("loginRadius: drives pi's Radius login with the picked method; only a post-save sync error is swallowed", async () => {
+	const calls: string[] = [];
+	const interaction = { signal: new AbortController().signal, prompt: async () => "", notify: () => {} };
+	const runtime = {
+		login: async (providerId: string, method: string) => {
+			calls.push(`${providerId}:${method}`);
+		},
+	};
+
+	await loginRadius("oauth", interaction, { runtime });
+	await loginRadius("api_key", interaction, { runtime });
+	assert.deepEqual(calls, ["radius:oauth", "radius:api_key"]);
+
+	// The credential was written; only the catalog sync failed, so the share can go on.
+	await loginRadius("oauth", interaction, {
+		runtime: {
+			login: async () => {
+				throw new CredentialSynchronizationError("radius", "login", undefined, { cause: new Error("catalog") });
+			},
+		},
+	});
+
+	// A real failure (and a sync error after the user cancelled) still rejects.
+	await assert.rejects(
+		loginRadius("oauth", interaction, {
+			runtime: {
+				login: async () => {
+					throw new Error("authorization denied");
+				},
+			},
+		}),
+		/authorization denied/,
+	);
+	const aborted = new AbortController();
+	aborted.abort();
+	await assert.rejects(
+		loginRadius("oauth", { ...interaction, signal: aborted.signal }, {
+			runtime: {
+				login: async () => {
+					throw new CredentialSynchronizationError("radius", "login", undefined, { cause: new Error("catalog") });
+				},
+			},
+		}),
+		CredentialSynchronizationError,
+	);
+});
+
+test("loginRadius: an API key is checked before it reaches pi; OAuth prompts are not checked", async () => {
+	const checked: string[] = [];
+	const interaction = { signal: new AbortController().signal, prompt: async () => "rds_typed", notify: () => {} };
+
+	// A rejected key throws from the prompt, so pi never writes a credential.
+	await assert.rejects(
+		loginRadius("api_key", interaction, {
+			runtime: {
+				login: async (_providerId, _method, i) => {
+					await i.prompt({ type: "secret", message: "Enter Radius API key" });
+				},
+			},
+			checkApiKey: async (key) => {
+				checked.push(key);
+				throw new Error("invalid API key");
+			},
+		}),
+		/invalid API key/,
+	);
+	assert.deepEqual(checked, ["rds_typed"]);
+
+	// OAuth text prompts pass through: only the API-key secret prompt is verified.
+	const oauthChecked: string[] = [];
+	await loginRadius("oauth", interaction, {
+		runtime: {
+			login: async (_providerId, _method, i) => {
+				await i.prompt({ type: "text", message: "Paste the authorization code" });
+			},
+		},
+		checkApiKey: async (key) => void oauthChecked.push(key),
+	});
+	assert.deepEqual(oauthChecked, []);
+});
+
+test("checkRadiusApiKey: 401/403 is an invalid key; other gateway failures keep their reason", async () => {
+	const urls: string[] = [];
+	const headers: Array<Record<string, string>> = [];
+	const respond = (status: number) => async (url: string | URL | Request, init?: RequestInit) => {
+		urls.push(String(url));
+		headers.push(init?.headers as Record<string, string>);
+		return new Response("{}", { status });
+	};
+
+	await checkRadiusApiKey("rds_ok", new AbortController().signal, respond(200));
+	await assert.rejects(checkRadiusApiKey("rds_bad", new AbortController().signal, respond(401)), /invalid API key/);
+	await assert.rejects(checkRadiusApiKey("rds_bad", new AbortController().signal, respond(500)), /Could not verify Radius API key: 500/);
+	assert.equal(urls[0], "https://radius.pi.dev/v1/config");
+	assert.equal(headers[0]?.authorization, "Bearer rds_ok");
+});
+
+test("logoutRadius: deletes the Radius credential; only a post-delete sync error is swallowed", async () => {
+	const calls: string[] = [];
+	await logoutRadius({
+		runtime: {
+			logout: async (providerId: string) => {
+				calls.push(providerId);
+			},
+		},
+	});
+	assert.deepEqual(calls, ["radius"]);
+
+	// The credential is gone; failing to refresh the local catalog does not make it a failed sign-out.
+	await logoutRadius({
+		runtime: {
+			logout: async () => {
+				throw new CredentialSynchronizationError("radius", "logout", undefined, { cause: new Error("catalog") });
+			},
+		},
+	});
+
+	await assert.rejects(
+		logoutRadius({
+			runtime: {
+				logout: async () => {
+					throw new Error("credential store is read-only");
+				},
+			},
+		}),
+		/read-only/,
+	);
+});
+
+test("shareSession: radius uploads the active branch as NDJSON and returns the canonical URL", async (t) => {
+	const dir = tempDir(t);
+	const s = makeSession(dir);
+	const { fetcher, calls } = fakeFetch(200, { artifact: { canonical_url: "https://radius.example/a/123" } });
+
+	const result = await shareSession(s.file, { destination: "radius", auth: radiusAuth("tok"), fetch: fetcher });
+	assert.deepEqual(result, { url: "https://radius.example/a/123", destination: "radius" });
+	assert.equal(calls.length, 1);
+	const call = calls[0]!;
+	assert.equal(call.url.origin + call.url.pathname, "https://radius.pi.dev/v1/artifacts");
+	assert.equal(call.url.searchParams.get("visibility"), "organization");
+	assert.equal(call.url.searchParams.get("title"), "Pi session");
+	assert.equal(call.init.method, "POST");
+	const headers = call.init.headers as Record<string, string>;
+	assert.equal(headers.Authorization, "Bearer tok");
+	assert.equal(headers["Content-Type"], "application/x-ndjson");
+	const body = String(call.init.body);
+	assert.equal(headers["Content-Length"], String(Buffer.byteLength(body)));
+	const entries = parseNdjson(call.init.body);
+	assert.equal(entries[0]?.type, "session");
+	assert.equal(entries.at(-1)?.id, s.labelId);
+	assert.equal(entries.at(-1)?.parentId, s.a1);
+	// a history session has no live system prompt / tools, so no pi.share metadata
+	assert.equal(entries.some((entry) => entry.customType === "pi.share"), false);
+});
+
+test("shareSession: the current session's Radius export carries pi.share (system prompt and tools)", async (t) => {
+	const dir = tempDir(t);
+	const s = makeSession(dir);
+	const { fetcher, calls } = fakeFetch(200, { artifact: { canonical_url: "https://radius.example/live" } });
+	const tools = [{ name: "bash", description: "run commands", parameters: { type: "object" } }];
+
+	const result = await shareSession(s.file, {
+		destination: "radius",
+		auth: radiusAuth("tok"),
+		fetch: fetcher,
+		live: { manager: SessionManager.open(s.file), systemPrompt: "be nice", tools },
+	});
+	assert.equal(result.url, "https://radius.example/live");
+	const trailing = parseNdjson(calls[0]!.init.body).at(-1)!;
+	assert.equal(trailing.customType, "pi.share");
+	assert.equal(trailing.parentId, s.labelId);
+	assert.deepEqual(trailing.data, { systemPrompt: "be nice", tools });
+});
+
+test("shareSession: auto prefers a gist when gh is logged in (Radius credentials are not touched)", async (t) => {
+	const dir = tempDir(t);
+	const s = makeSession(dir);
+	process.env.LAZY_PANEL_GH_LOG = join(dir, "gh-log.json");
+	t.after(() => delete process.env.LAZY_PANEL_GH_LOG);
+	const { fetcher, calls } = fakeFetch(200, { artifact: { canonical_url: "https://radius.example/nope" } });
+
+	const result = await shareSession(s.file, {
+		destination: "auto",
+		auth: radiusAuth("tok"),
+		fetch: fetcher,
+		pi: fakeProgram(dir, "pi", FAKE_PI),
+		gh: fakeProgram(dir, "gh", FAKE_GH),
+	});
+	assert.equal(result.destination, "gist");
+	assert.equal(calls.length, 0);
+
+	// an explicit gist choice never probes Radius either
+	const forced = await shareSession(s.file, {
+		destination: "gist",
+		auth: radiusAuth("tok"),
+		fetch: fetcher,
+		pi: fakeProgram(dir, "pi2", FAKE_PI),
+		gh: fakeProgram(dir, "gh2", FAKE_GH),
+	});
+	assert.equal(forced.destination, "gist");
+	assert.equal(calls.length, 0);
+});
+
+test("shareSession: auto falls back to Radius when gh is missing or logged out", async (t) => {
+	const dir = tempDir(t);
+	const s = makeSession(dir);
+	const { fetcher, calls } = fakeFetch(200, { artifact: { canonical_url: "https://radius.example/auto" } });
+
+	for (const gh of [fakeProgram(dir, "gh-out", FAKE_GH, "logged-out"), { command: join(dir, "missing-gh"), args: [] }]) {
+		const result = await shareSession(s.file, { destination: "auto", auth: radiusAuth("tok"), fetch: fetcher, gh });
+		assert.equal(result.destination, "radius");
+	}
+	assert.equal(calls.length, 2);
+
+	// neither destination is available: the error keeps both hints
+	await assert.rejects(
+		shareSession(s.file, { destination: "auto", auth: radiusAuth(undefined), gh: fakeProgram(dir, "gh-out2", FAKE_GH, "logged-out") }),
+		(err: Error) => err.message.includes(GH_NOT_LOGGED_IN) && err.message.includes(RADIUS_NOT_AUTHENTICATED),
+	);
+});
+
+test("shareSession: radius without credentials fails with pi's wording and never falls back to a gist", async (t) => {
+	const dir = tempDir(t);
+	const s = makeSession(dir);
+	const gh = fakeProgram(dir, "gh-fail", FAKE_GH, "logged-out");
+	const message = (err: Error) => err.message === RADIUS_NOT_AUTHENTICATED;
+
+	await assert.rejects(shareSession(s.file, { destination: "radius", auth: radiusAuth(undefined), gh }), message);
+	await assert.rejects(
+		shareSession(s.file, {
+			destination: "radius",
+			auth: {
+				getProviderAuth: async () => {
+					throw new Error("refresh failed");
+				},
+			},
+			gh,
+		}),
+		message,
+	);
+});
+
+test("shareSession: a Radius upload failure is reported, not retried as a gist", async (t) => {
+	const dir = tempDir(t);
+	const s = makeSession(dir);
+	const { fetcher, calls } = fakeFetch(500, { error: "nope" });
+	await assert.rejects(
+		shareSession(s.file, { destination: "radius", auth: radiusAuth("tok"), fetch: fetcher, gh: fakeProgram(dir, "gh", FAKE_GH, "logged-out") }),
+		/Failed to upload Radius artifact: nope/,
+	);
+	assert.equal(calls.length, 1);
 });

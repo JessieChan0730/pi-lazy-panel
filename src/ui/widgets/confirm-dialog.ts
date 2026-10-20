@@ -1,6 +1,7 @@
 /**
- * Confirm dialog: the Yes / No menu shown before every destructive or outbound
- * action (delete, fork, clone, share, import, overwriting an export — CLAUDE.md rule 7).
+ * Confirm dialog: the Yes / No menu shown before every destructive or outgoing
+ * action (delete, fork, clone, import, overwriting an export — CLAUDE.md rule 7).
+ * Sharing (`S`) has its own destination menu instead: ./share-dialog.ts.
  *
  *   ┌─ Delete session? ──────────── FilmRecall ─┐
  *   │   Yes                                      │
@@ -56,11 +57,6 @@ export function forkSessionTitle(): string {
 	return t("confirm.fork");
 }
 
-/** Title of the share confirmation (`S`): the session leaves the machine. */
-export function shareSessionTitle(): string {
-	return t("confirm.share");
-}
-
 /** Title of the import confirmation (`I`), pi's "Replace current session with …?". */
 export function importSessionTitle(): string {
 	return t("confirm.import");
@@ -69,6 +65,11 @@ export function importSessionTitle(): string {
 /** Title of the confirmation before an export overwrites an existing file (`e`). */
 export function overwriteFileTitle(): string {
 	return t("confirm.overwrite");
+}
+
+/** Title of the confirmation that clears the Radius credential (`S` → Sign out of Radius). */
+export function radiusSignOutTitle(): string {
+	return t("confirm.radiusSignOut");
 }
 
 export interface ConfirmSpecOptions {

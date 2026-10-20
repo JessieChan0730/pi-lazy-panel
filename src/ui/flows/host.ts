@@ -15,6 +15,7 @@ import type { ContextUsageInfo, EnterOutcome, PanelMode, SessionInfo, SessionRow
 import type { ActionSource, DataSource, SettingsSource, ThemeSource } from "../ports.ts";
 import type { PanelState } from "../state.ts";
 import type { InputDialogSpec } from "../widgets/input-dialog.ts";
+import type { NoticeDialogSpec } from "../widgets/notice-dialog.ts";
 import type { SelectDialogSpec } from "../widgets/select-dialog.ts";
 
 export interface SettingsFlowHost extends FlowHost {
@@ -50,6 +51,14 @@ export interface FlowHost {
 	openPrompt(mode: PanelMode, spec: InputDialogSpec): void;
 	/** Show the menu of a flow (a picker, a confirmation, an alert) in `mode` (the prompt, if up, closes first). */
 	openMenu(mode: PanelMode, spec: SelectDialogSpec): void;
+	/** Show a read-only notice in `mode` (Radius device code / info); Esc / q calls its `onClose`. */
+	openNotice(mode: PanelMode, spec: NoticeDialogSpec): void;
+	/**
+	 * While a flow waits on something outside the panel (the Radius browser
+	 * sign-in), Esc calls `cancel` instead of closing the panel; `undefined`
+	 * clears it. The footer status is the flow's job.
+	 */
+	setPendingCancel(cancel: (() => void) | undefined): void;
 	/** End a flow: close its prompt / menu and go back to the base mode. */
 	closeDialogs(): void;
 	/** Show the read-only Session Info box: `onCopy` gets its text on `y`, the panel closes it on Esc / q. */

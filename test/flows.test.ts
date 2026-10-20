@@ -11,12 +11,13 @@ import { test } from "node:test";
 import { initI18n, t } from "../src/i18n/index.ts";
 import type { ContextUsageInfo, RestoreOptions, SessionRow } from "../src/types.ts";
 import type { FlowHost } from "../src/ui/flows/host.ts";
-import { confirmDeleteSession, copyLastReply, openContextUsage, startExport, startFork } from "../src/ui/flows/session-flows.ts";
+import { confirmDeleteSession, confirmShareSession, copyLastReply, openContextUsage, startExport, startFork } from "../src/ui/flows/session-flows.ts";
 import { openTreeFilterMenu, restoreTreeNode, type TreeTarget } from "../src/ui/flows/tree-flows.ts";
 import type { ActionSource, DataSource } from "../src/ui/ports.ts";
 import { createInitialState } from "../src/ui/state.ts";
 import { CONFIRM_NO_INDEX, CONFIRM_YES_INDEX, deleteSessionsTitle, overwriteFileTitle } from "../src/ui/widgets/confirm-dialog.ts";
 import type { InputDialogSpec } from "../src/ui/widgets/input-dialog.ts";
+import type { NoticeDialogSpec } from "../src/ui/widgets/notice-dialog.ts";
 import { CUSTOM_PROMPT_INDEX } from "../src/ui/widgets/restore-dialog.ts";
 import type { SelectDialogSpec } from "../src/ui/widgets/select-dialog.ts";
 
@@ -42,9 +43,14 @@ interface FakeHostOptions {
 function fakeHost(opts: FakeHostOptions = {}) {
 	const state = createInitialState();
 	const rows = opts.rows ?? [row(1), row(2), row(3)];
-	const dialogs: { prompt: InputDialogSpec | undefined; menu: SelectDialogSpec | undefined } = { prompt: undefined, menu: undefined };
+	const dialogs: { prompt: InputDialogSpec | undefined; menu: SelectDialogSpec | undefined; notice: NoticeDialogSpec | undefined } = {
+		prompt: undefined,
+		menu: undefined,
+		notice: undefined,
+	};
 	const statuses: string[] = [];
 	const entered: string[] = [];
+	let pendingCancel: (() => void) | undefined;
 	let usageOpened: { info: ContextUsageInfo; onCopy: (text: string) => void } | undefined;
 	const host: FlowHost = {
 		state,
@@ -69,16 +75,28 @@ function fakeHost(opts: FakeHostOptions = {}) {
 			state.mode = mode;
 			dialogs.prompt = spec;
 			dialogs.menu = undefined;
+			dialogs.notice = undefined;
 		},
 		openMenu: (mode, spec) => {
 			state.mode = mode;
 			dialogs.menu = spec;
+			dialogs.prompt = undefined;
+			dialogs.notice = undefined;
+		},
+		openNotice: (mode, spec) => {
+			state.mode = mode;
+			dialogs.notice = spec;
+			dialogs.menu = undefined;
 			dialogs.prompt = undefined;
 		},
 		closeDialogs: () => {
 			state.mode = "normal";
 			dialogs.prompt = undefined;
 			dialogs.menu = undefined;
+			dialogs.notice = undefined;
+		},
+		setPendingCancel: (cancel) => {
+			pendingCancel = cancel;
 		},
 		openInfo: () => {},
 		openUsage: (info, onCopy) => {
@@ -108,7 +126,12 @@ function fakeHost(opts: FakeHostOptions = {}) {
 			assert.ok(dialogs.prompt, "a prompt is open");
 			return dialogs.prompt;
 		},
-		anyOpen: () => dialogs.menu !== undefined || dialogs.prompt !== undefined,
+		notice: (): NoticeDialogSpec => {
+			assert.ok(dialogs.notice, "a notice is open");
+			return dialogs.notice;
+		},
+		anyOpen: () => dialogs.menu !== undefined || dialogs.prompt !== undefined || dialogs.notice !== undefined,
+		pendingCancel: () => pendingCancel,
 		usageOpened: () => usageOpened,
 	};
 }
@@ -307,4 +330,385 @@ test("context usage: loads the cursor session, opens the box, and y copies its t
 	await openContextUsage(bare.host);
 	assert.equal(bare.usageOpened(), undefined);
 	assert.ok(bare.statuses.includes(t("status.usageUnavailable")), bare.statuses.join(","));
+});
+
+test("share Radius: a missing credential runs pi's sign-in (account → browser), copies the link, then shares", async () => {
+	const shares: Array<{ file: string; destination: string }> = [];
+	const copies: string[] = [];
+	const opened: string[] = [];
+	const steps: string[] = [];
+	let finish: () => void = () => {};
+	const h = fakeHost({
+		actions: {
+			radiusAuthenticated: async () => false,
+			shareSession: async (file, destination) => {
+				shares.push({ file, destination });
+				return { url: "https://pi.dev/session/#radius", destination: "radius" };
+			},
+			copyText: async (text) => void copies.push(text),
+			openUrl: (url) => void opened.push(url),
+			loginRadius: async (method, interaction) => {
+				steps.push(method);
+				const choice = await interaction.prompt({
+					type: "select",
+					message: "Sign in to Radius:",
+					options: [
+						{ id: "browser", label: "Sign in with browser (recommended)" },
+						{ id: "device-code", label: "Sign in with device code (when signing in from another device)" },
+					],
+				});
+				steps.push(choice);
+				interaction.notify({ type: "auth_url", url: "https://radius.test/authorize?state=x", instructions: "Continue in your browser." });
+				await new Promise<void>((resolve) => {
+					finish = resolve;
+				});
+			},
+		},
+	});
+
+	confirmShareSession(h.host);
+	h.menu().onSelect(2);
+	await flush();
+	assert.equal(h.menu().title, "Radius sign-in");
+	assert.deepEqual(h.menu().items, ["Sign in with an account", "Sign in with an API key"]);
+	assert.equal(h.menu().subject, "Esc/q close");
+	h.menu().onSelect(0);
+	await flush();
+
+	// pi's OAuth question, translated by the panel: both choices, pi's parentheticals dropped.
+	assert.equal(h.menu().title, t("dialog.radiusLoginMethodTitle"));
+	assert.deepEqual(h.menu().items, [t("dialog.radiusLoginBrowser"), t("dialog.radiusLoginDeviceCode")]);
+	assert.equal(h.menu().subject, "Esc/q close");
+	h.menu().onSelect(0);
+	await flush();
+
+	// Browser sign-in does not cover the panel: the link goes to the clipboard, Esc stays available.
+	assert.deepEqual(opened, ["https://radius.test/authorize?state=x"]);
+	assert.equal(h.anyOpen(), false);
+	assert.deepEqual(copies, ["https://radius.test/authorize?state=x"]);
+	assert.equal(h.statuses.at(-1), t("status.radiusBrowserLinkCopied"));
+	assert.ok(h.pendingCancel(), "Esc can still cancel the browser wait");
+
+	finish();
+	await flush();
+	await flush();
+	assert.deepEqual(steps, ["oauth", "browser"]);
+	assert.deepEqual(shares, [{ file: "/tmp/s1.jsonl", destination: "radius" }]);
+	assert.ok(h.statuses.includes("signed in to Radius"), h.statuses.join(","));
+	assert.equal(copies.at(-1), "https://pi.dev/session/#radius");
+	assert.equal(h.anyOpen(), false);
+	assert.equal(h.pendingCancel(), undefined, "the cancel hook is cleared once the sign-in ends");
+});
+
+test("share Radius: the browser link stays in the footer when the clipboard fails; cancelling does not share", async () => {
+	const shares: unknown[] = [];
+	const h = fakeHost({
+		actions: {
+			radiusAuthenticated: async () => false,
+			shareSession: async (file, destination) => {
+				shares.push({ file, destination });
+				return { url: "https://pi.dev/session/#radius", destination: "radius" };
+			},
+			copyText: async () => {
+				throw new Error("no clipboard");
+			},
+			loginRadius: async (_method, interaction) => {
+				interaction.notify({ type: "auth_url", url: "https://radius.test/authorize?state=x" });
+				await new Promise((_resolve, reject) => {
+					interaction.signal.addEventListener("abort", () => reject(new Error("Login cancelled")), { once: true });
+				});
+			},
+		},
+	});
+
+	confirmShareSession(h.host);
+	h.menu().onSelect(2);
+	await flush();
+	h.menu().onSelect(0);
+	await flush();
+	await flush();
+	assert.equal(h.statuses.at(-1), t("status.radiusBrowserLink", { url: "https://radius.test/authorize?state=x" }));
+	assert.equal(h.anyOpen(), false);
+
+	// Esc (through the panel's cancel hook) aborts the wait; nothing is uploaded.
+	h.pendingCancel()?.();
+	await flush();
+	await flush();
+	assert.ok(h.statuses.includes(t("status.radiusLoginCancelled")), h.statuses.join(","));
+	assert.deepEqual(shares, []);
+});
+
+test("share Radius: the API key uses the input dialog and an empty key stays open", async () => {
+	const shares: Array<{ file: string; destination: string }> = [];
+	let key: string | undefined;
+	const h = fakeHost({
+		actions: {
+			radiusAuthenticated: async () => false,
+			shareSession: async (file, destination) => {
+				shares.push({ file, destination });
+				return { url: "https://pi.dev/session/#radius", destination: "radius" };
+			},
+			copyText: async () => {},
+			loginRadius: async (method, interaction) => {
+				assert.equal(method, "api_key");
+				key = await interaction.prompt({ type: "secret", message: "Enter your Radius API key:", placeholder: "rds_…" });
+			},
+		},
+	});
+
+	confirmShareSession(h.host);
+	h.menu().onSelect(2);
+	await flush();
+	h.menu().onSelect(1);
+	await flush();
+	const prompt = h.prompt();
+	assert.equal(prompt.title, t("dialog.radiusApiKeyTitle"));
+	assert.equal(prompt.placeholder, "rds_…");
+	assert.equal(prompt.validate?.("  "), "API key cannot be empty");
+	assert.equal(prompt.validate?.("rds_key"), undefined);
+	prompt.onSubmit("rds_key");
+	await flush();
+	await flush();
+	assert.equal(key, "rds_key");
+	assert.deepEqual(shares, [{ file: "/tmp/s1.jsonl", destination: "radius" }]);
+	assert.equal(h.anyOpen(), false);
+});
+
+test("share Radius: a rejected API key is reported and the next S still asks for sign-in, not the account menu", async () => {
+	const shares: unknown[] = [];
+	const h = fakeHost({
+		actions: {
+			radiusAuthenticated: async () => false,
+			shareSession: async (file, destination) => {
+				shares.push({ file, destination });
+				return { url: "https://pi.dev/session/#radius", destination: "radius" };
+			},
+			loginRadius: async (_method, interaction) => {
+				await interaction.prompt({ type: "secret", message: "Enter Radius API key" });
+				throw new Error("invalid API key");
+			},
+		},
+	});
+
+	confirmShareSession(h.host);
+	h.menu().onSelect(2);
+	await flush();
+	h.menu().onSelect(1);
+	await flush();
+	h.prompt().onSubmit("rds_bad");
+	await flush();
+	await flush();
+	assert.equal(h.anyOpen(), false);
+	assert.equal(h.statuses.at(-1), t("status.radiusLoginFailed", { error: "invalid API key" }));
+	assert.deepEqual(shares, []);
+
+	// The key was never stored, so Radius starts the sign-in menus again.
+	confirmShareSession(h.host);
+	h.menu().onSelect(2);
+	await flush();
+	assert.equal(h.menu().title, t("dialog.radiusLoginTitle"));
+	assert.ok(!h.menu().items.includes(t("dialog.radiusAccountShare")));
+});
+
+test("share Radius: Esc in the method menu or the API-key prompt cancels without sharing", async () => {
+	const shares: unknown[] = [];
+	let logins = 0;
+	const h = fakeHost({
+		actions: {
+			radiusAuthenticated: async () => false,
+			shareSession: async (file, destination) => {
+				shares.push({ file, destination });
+				return { url: "https://pi.dev/session/#radius", destination: "radius" };
+			},
+			loginRadius: async (_method, interaction) => {
+				logins++;
+				await interaction.prompt({ type: "secret", message: "Enter your Radius API key:" });
+			},
+		},
+	});
+
+	confirmShareSession(h.host);
+	h.menu().onSelect(2);
+	await flush();
+	h.menu().onCancel();
+	await flush();
+	assert.equal(logins, 0);
+	assert.deepEqual(shares, []);
+	assert.equal(h.anyOpen(), false);
+
+	confirmShareSession(h.host);
+	h.menu().onSelect(2);
+	await flush();
+	h.menu().onSelect(1);
+	await flush();
+	assert.equal(logins, 1);
+	h.prompt().onCancel();
+	await flush();
+	await flush();
+	assert.equal(h.anyOpen(), false);
+	assert.ok(h.statuses.includes("Radius sign-in cancelled"), h.statuses.join(","));
+	assert.deepEqual(shares, []);
+});
+
+test("share Radius: an existing credential asks Share / Sign out before uploading; auto never checks Radius", async () => {
+	const shares: Array<{ file: string; destination: string }> = [];
+	let checks = 0;
+	let logins = 0;
+	const h = fakeHost({
+		actions: {
+			radiusAuthenticated: async () => {
+				checks++;
+				return true;
+			},
+			loginRadius: async () => {
+				logins++;
+			},
+			shareSession: async (file, destination) => {
+				shares.push({ file, destination });
+				return { url: "https://pi.dev/session/#radius", destination: "radius" };
+			},
+			copyText: async () => {},
+		},
+	});
+
+	confirmShareSession(h.host);
+	h.menu().onSelect(2);
+	await flush();
+	assert.equal(checks, 1);
+	assert.equal(logins, 0);
+	assert.equal(h.menu().title, t("dialog.radiusAccountTitle"));
+	assert.deepEqual(shares, [], "nothing is uploaded before the account menu is answered");
+
+	h.menu().onSelect(0);
+	await flush();
+	await flush();
+	assert.deepEqual(shares, [{ file: "/tmp/s1.jsonl", destination: "radius" }]);
+
+	confirmShareSession(h.host);
+	h.menu().onSelect(0);
+	await flush();
+	await flush();
+	assert.equal(checks, 1);
+	assert.deepEqual(shares.at(-1), { file: "/tmp/s1.jsonl", destination: "auto" });
+});
+
+test("share Radius: a device code opens in a notice, and closing it cancels the sign-in", async () => {
+	const shares: unknown[] = [];
+	const opened: string[] = [];
+	const h = fakeHost({
+		actions: {
+			radiusAuthenticated: async () => false,
+			shareSession: async (file, destination) => {
+				shares.push({ file, destination });
+				return { url: "https://pi.dev/session/#radius", destination: "radius" };
+			},
+			openUrl: (url) => void opened.push(url),
+			loginRadius: async (_method, interaction) => {
+				interaction.notify({ type: "progress", message: "Waiting for device authorization…" });
+				interaction.notify({ type: "device_code", userCode: "ABCD-EFGH", verificationUri: "https://radius.test/device" });
+				await new Promise((_resolve, reject) => {
+					interaction.signal.addEventListener("abort", () => reject(new Error("Login cancelled")), { once: true });
+				});
+			},
+		},
+	});
+
+	confirmShareSession(h.host);
+	h.menu().onSelect(2);
+	await flush();
+	h.menu().onSelect(0);
+	await flush();
+	assert.ok(h.statuses.includes("Waiting for device authorization…"), h.statuses.join(","));
+	const notice = h.notice();
+	assert.equal(notice.title, "Sign in on another device");
+	assert.deepEqual(notice.lines, ["Enter code ABCD-EFGH", "https://radius.test/device"]);
+	assert.deepEqual(opened, ["https://radius.test/device"]);
+
+	notice.onClose();
+	await flush();
+	await flush();
+	assert.equal(h.anyOpen(), false);
+	assert.ok(h.statuses.includes("Radius sign-in cancelled"), h.statuses.join(","));
+	assert.deepEqual(shares, []);
+});
+
+test("share Radius: a signed-in account asks Share / Sign out; sign-out confirms first", async () => {
+	let logouts = 0;
+	const shares: Array<{ file: string; destination: string }> = [];
+	const h = fakeHost({
+		actions: {
+			shareSession: async (file, destination) => {
+				shares.push({ file, destination });
+				return { url: "https://pi.dev/session/#radius", destination: "radius" };
+			},
+			radiusAuthenticated: async () => true,
+			logoutRadius: async () => {
+				logouts++;
+			},
+		},
+	});
+
+	// The outer menu still has three destinations; Radius opens the account menu.
+	confirmShareSession(h.host);
+	assert.equal(h.menu().items.length, 3);
+	h.menu().onSelect(2);
+	await flush();
+	assert.equal(h.menu().title, t("dialog.radiusAccountTitle"));
+	assert.deepEqual(h.menu().items, [t("dialog.radiusAccountShare"), t("dialog.radiusAccountSignOut")]);
+
+	// Share keeps the old explicit-Radius path.
+	h.menu().onSelect(0);
+	await flush();
+	assert.deepEqual(shares, [{ file: "/tmp/s1.jsonl", destination: "radius" }]);
+	assert.equal(h.anyOpen(), false);
+
+	// Sign out: No is the default and goes back to the account menu.
+	h.statuses.length = 0;
+	confirmShareSession(h.host);
+	h.menu().onSelect(2);
+	await flush();
+	h.menu().onSelect(1);
+	assert.equal(h.menu().title, t("confirm.radiusSignOut"));
+	h.menu().onSelect(CONFIRM_NO_INDEX);
+	assert.equal(h.menu().title, t("dialog.radiusAccountTitle"));
+	assert.equal(logouts, 0);
+
+	h.menu().onSelect(1);
+	h.menu().onSelect(CONFIRM_YES_INDEX);
+	await flush();
+	assert.equal(logouts, 1);
+	assert.equal(h.anyOpen(), false);
+	assert.deepEqual(h.statuses.slice(-2), [t("status.radiusSigningOut"), t("status.radiusSignedOut")]);
+
+	// A failing credential store is reported in the footer, not thrown at the panel.
+	const failing = fakeHost({
+		actions: {
+			shareSession: async () => ({ url: "https://pi.dev/session/#radius", destination: "radius" }),
+			radiusAuthenticated: async () => true,
+			logoutRadius: async () => {
+				throw new Error("credential store is read-only");
+			},
+		},
+	});
+	confirmShareSession(failing.host);
+	failing.menu().onSelect(2);
+	await flush();
+	failing.menu().onSelect(1);
+	failing.menu().onSelect(CONFIRM_YES_INDEX);
+	await flush();
+	assert.ok(failing.statuses.at(-1)?.includes("credential store is read-only"), failing.statuses.join(","));
+
+	// No port wired: footer only, no confirmation menu.
+	const bare = fakeHost({
+		actions: {
+			shareSession: async () => ({ url: "u", destination: "radius" }),
+			radiusAuthenticated: async () => true,
+		},
+	});
+	confirmShareSession(bare.host);
+	bare.menu().onSelect(2);
+	await flush();
+	bare.menu().onSelect(1);
+	assert.equal(bare.anyOpen(), false);
+	assert.ok(bare.statuses.includes(t("status.radiusSignOutUnavailable")), bare.statuses.join(","));
 });
