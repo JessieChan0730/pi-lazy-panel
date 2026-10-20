@@ -24,6 +24,7 @@ import type {
 	RestoreOptions,
 	SessionInfo,
 	SessionRow,
+	SessionShareDestination,
 	SessionSortMode,
 	TreeFilter,
 	TreeRow,
@@ -40,7 +41,6 @@ import {
 	forkSessionTitle,
 	importSessionTitle,
 	overwriteFileTitle,
-	shareSessionTitle,
 } from "../src/ui/widgets/confirm-dialog.ts";
 import { exportFormatTitle, exportPathTitle } from "../src/ui/widgets/export-dialog.ts";
 import { forkDialogTitle } from "../src/ui/widgets/fork-dialog.ts";
@@ -54,6 +54,7 @@ import { customPromptTitle, summaryMenu as restoreSummaryMenu, summaryMenuTitle 
 import { searchLabel } from "../src/ui/widgets/search-bar.ts";
 import { SelectDialog } from "../src/ui/widgets/select-dialog.ts";
 import { sessionInfoText, sessionInfoTitle } from "../src/ui/widgets/session-info-dialog.ts";
+import { shareTitle } from "../src/ui/widgets/share-dialog.ts";
 import { contextUsageTitle } from "../src/ui/widgets/context-usage-dialog.ts";
 
 // i18n 已在文件顶部固定为 en；这些别名让下面的断言仍然引用固定的英文文案（所见即所测）。
@@ -63,7 +64,7 @@ const DELETE_SESSION_TITLE = deleteSessionTitle();
 const FORK_SESSION_TITLE = forkSessionTitle();
 const IMPORT_SESSION_TITLE = importSessionTitle();
 const OVERWRITE_FILE_TITLE = overwriteFileTitle();
-const SHARE_SESSION_TITLE = shareSessionTitle();
+const SHARE_SESSION_TITLE = shareTitle();
 const EXPORT_FORMAT_TITLE = exportFormatTitle();
 const EXPORT_PATH_TITLE = exportPathTitle();
 const FORK_DIALOG_TITLE = forkDialogTitle();
@@ -2524,7 +2525,7 @@ function makeSessionActionPanel(
 	const forkPointCalls: string[] = [];
 	const exports: Array<{ file: string; format: ExportFormat; path: string }> = [];
 	const imports: string[] = [];
-	const shares: string[] = [];
+	const shares: Array<{ file: string; destination: SessionShareDestination }> = [];
 	const pins: string[][] = [];
 	let closed = false;
 	const hidden: boolean[] = [];
@@ -2651,9 +2652,9 @@ function makeSessionActionPanel(
 			imports.push(input);
 			return "switched";
 		},
-		shareSession: async (file) => {
-			shares.push(file);
-			return { url: "https://pi.dev/session/#abc", gistUrl: "https://gist.github.com/me/abc" };
+		shareSession: async (file, destination) => {
+			shares.push({ file, destination });
+			return { url: "https://pi.dev/session/#abc", gistUrl: "https://gist.github.com/me/abc", destination: "gist" };
 		},
 		updateSessionState: async ({ type, files }) => {
 			const prev = pins.at(-1) ?? [];
@@ -3622,29 +3623,64 @@ test("I: an empty path is reported; a failed import shows the panel again with t
 	assert.ok(h.footer().includes("import failed: file not found: /work/gone.jsonl"), h.footer());
 });
 
-test("S: confirm first (cursor on No), then upload, copy the link and show it; the panel stays open", async () => {
+test("S: pick Auto / Gist / Radius in a menu (Esc cancels), then upload, copy the link and show it; the panel stays open", async () => {
 	const h = makeSessionActionPanel();
 	await h.panel.load();
 
 	h.panel.handleInput("S");
 	assert.equal(h.panel.state.mode, "share");
-	const confirm = dialogAt(h.text(), SHARE_SESSION_TITLE);
-	assert.ok(confirm && confirm.title.includes("alpha"), confirm?.title);
-	assert.ok(confirm.body[1]!.includes("› No"), "cursor starts on No");
+	const menu = dialogAt(h.text(), SHARE_SESSION_TITLE);
+	assert.ok(menu && menu.title.includes("alpha"), menu?.title);
+	assert.equal(menu.body.length, 3);
+	assert.ok(menu.body[0]!.includes("› Auto"), menu.body[0]);
+	assert.ok(menu.body[1]!.includes("GitHub Gist"), menu.body[1]);
+	assert.ok(menu.body[2]!.includes("Radius"), menu.body[2]);
 	assert.ok(h.footer().includes("SHARE"), h.footer());
-	// Enter on No cancels: nothing leaves the machine
-	h.panel.handleInput("\r");
+	// Esc cancels: nothing leaves the machine
+	h.panel.handleInput("\x1b");
 	assert.equal(h.panel.state.mode, "normal");
 	assert.deepEqual(h.shares, []);
 
 	h.panel.handleInput("S");
-	h.panel.handleInput("y");
+	h.panel.handleInput("\r");
 	await flush();
-	assert.deepEqual(h.shares, ["/tmp/s1.jsonl"]);
+	assert.deepEqual(h.shares, [{ file: "/tmp/s1.jsonl", destination: "auto" }]);
 	assert.deepEqual(h.copies, ["https://pi.dev/session/#abc"]);
 	assert.ok(h.footer().includes("share URL copied: https://pi.dev/session/#abc"), h.footer());
 	assert.equal(h.closed(), false);
 	assert.deepEqual(h.hidden, []);
+
+	// j moves the cursor: the second / third entries pick Gist / Radius explicitly
+	h.panel.handleInput("S");
+	h.panel.handleInput("j");
+	h.panel.handleInput("\r");
+	await flush();
+	h.panel.handleInput("S");
+	h.panel.handleInput("j");
+	h.panel.handleInput("j");
+	h.panel.handleInput("\r");
+	await flush();
+	assert.deepEqual(h.shares, [
+		{ file: "/tmp/s1.jsonl", destination: "auto" },
+		{ file: "/tmp/s1.jsonl", destination: "gist" },
+		{ file: "/tmp/s1.jsonl", destination: "radius" },
+	]);
+});
+
+test("S: the menu cursor starts on pi's sessionShareDestination (auto when unset)", async () => {
+	const cases = [
+		{ destination: "gist", marker: "› GitHub Gist", row: 1 },
+		{ destination: "radius", marker: "› Radius", row: 2 },
+		{ destination: "auto", marker: "› Auto", row: 0 },
+	] as const;
+	for (const { destination, marker, row } of cases) {
+		const h = makeSessionActionPanel({ actions: { shareDestination: destination } });
+		await h.panel.load();
+		h.panel.handleInput("S");
+		const menu = dialogAt(h.text(), SHARE_SESSION_TITLE);
+		assert.ok(menu?.body[row]?.includes(marker), `${destination}: ${menu?.body.join("\n")}`);
+		assert.equal(h.panel.state.mode, "share");
+	}
 });
 
 test("S: failures are reported; the link is still shown when the clipboard fails", async () => {
@@ -3657,7 +3693,7 @@ test("S: failures are reported; the link is still shown when the clipboard fails
 	});
 	await failing.panel.load();
 	failing.panel.handleInput("S");
-	failing.panel.handleInput("y");
+	failing.panel.handleInput("\r");
 	await flush();
 	assert.ok(failing.footer().includes("share failed: GitHub CLI is not logged in"), failing.footer());
 
@@ -3670,7 +3706,7 @@ test("S: failures are reported; the link is still shown when the clipboard fails
 	});
 	await noClipboard.panel.load();
 	noClipboard.panel.handleInput("S");
-	noClipboard.panel.handleInput("y");
+	noClipboard.panel.handleInput("\r");
 	await flush();
 	assert.ok(noClipboard.footer().includes("shared: https://pi.dev/session/#abc"), noClipboard.footer());
 });

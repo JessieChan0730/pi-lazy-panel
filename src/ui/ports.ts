@@ -61,6 +61,7 @@ import type {
 	SessionListFilter,
 	SessionInfo,
 	SessionRow,
+	SessionShareDestination,
 	SessionSortMode,
 	ShareResult,
 	TreeFilter,
@@ -125,6 +126,8 @@ export interface ActionSource {
 	exportSession?(sessionFile: string, format: ExportFormat, outputPath: string): Promise<string>;
 	/** I in SESSIONS (after confirmation): copy a session JSONL into the session folder and switch to it (/import). */
 	importSession?(input: string): Promise<EnterOutcome>;
-	/** S in SESSIONS (after confirmation): upload as a secret GitHub gist (/share). */
-	shareSession?(sessionFile: string): Promise<ShareResult>;
+	/** S in SESSIONS (after the destination menu): upload to Radius or a private GitHub gist (/share). */
+	shareSession?(sessionFile: string, destination: SessionShareDestination): Promise<ShareResult>;
+	/** pi's `sessionShareDestination`, the `S` menu's initial cursor (absent = `auto`). */
+	shareDestination?: SessionShareDestination;
 }

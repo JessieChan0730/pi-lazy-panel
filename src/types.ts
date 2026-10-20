@@ -97,6 +97,16 @@ export type DeleteMethod = "trash" | "unlink";
 /** File format of SESSIONS `e` (pi's /export): the whole tree as HTML, or the active branch as JSONL. */
 export type ExportFormat = "html" | "jsonl";
 
+/**
+ * Where SESSIONS `S` uploads, from pi's `sessionShareDestination` (pi 1.3.0):
+ * `auto` = Radius when signed in, otherwise a private GitHub gist; `gist` /
+ * `radius` force one destination (an explicit `radius` never falls back).
+ */
+export type SessionShareDestination = "auto" | "gist" | "radius";
+
+/** The destination a share actually used (`auto` resolved to one of these). */
+export type ShareDestination = Exclude<SessionShareDestination, "auto">;
+
 /** Where an export would be written, resolved from what the user typed (blank = pi's default name in the cwd). */
 export interface ExportTarget {
 	/** Absolute output path. */
@@ -105,10 +115,12 @@ export interface ExportTarget {
 	exists: boolean;
 }
 
-/** What SESSIONS `S` (pi's /share) produced: the pi.dev viewer link and the gist behind it. */
+/** What SESSIONS `S` (pi's /share) produced: the viewer link and, for a gist, the gist behind it. */
 export interface ShareResult {
 	url: string;
-	gistUrl: string;
+	/** Only for `destination: "gist"`: the gist page itself. */
+	gistUrl?: string;
+	destination: ShareDestination;
 }
 
 /**

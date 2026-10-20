@@ -13,7 +13,7 @@
 
 import { t } from "../../i18n/index.ts";
 import { findSessionIndex } from "../../data/sessions.ts";
-import type { ContextUsageInfo, DeleteMethod, ExportFormat, ForkPoint, SessionInfo, SessionRow, ShareResult } from "../../types.ts";
+import type { ContextUsageInfo, DeleteMethod, ExportFormat, ForkPoint, SessionInfo, SessionRow, SessionShareDestination, ShareResult } from "../../types.ts";
 import { alertDialogSpec, cannotDeleteActiveTitle } from "../widgets/alert-dialog.ts";
 import { compactDialogHints, compactDialogTitle } from "../widgets/compact-dialog.ts";
 import {
@@ -24,13 +24,13 @@ import {
 	forkSessionTitle,
 	importSessionTitle,
 	overwriteFileTitle,
-	shareSessionTitle,
 } from "../widgets/confirm-dialog.ts";
 import { EXPORT_FORMAT_ORDER, exportFormatHints, exportFormats, exportFormatTitle, exportPathHints, exportPathTitle } from "../widgets/export-dialog.ts";
 import { forkDialogHints, forkDialogTitle } from "../widgets/fork-dialog.ts";
 import { importDialogHints, importDialogSubject, importDialogTitle } from "../widgets/import-dialog.ts";
 import { newSessionDialogHints, newSessionDialogTitle } from "../widgets/new-session-dialog.ts";
 import { renameDialogHints, renameDialogTitle } from "../widgets/rename-dialog.ts";
+import { shareDestinations, shareHints, shareInitialIndex, shareTitle } from "../widgets/share-dialog.ts";
 import { forgetDeletedSessions } from "./archive-flows.ts";
 import type { FlowHost } from "./host.ts";
 
@@ -529,7 +529,12 @@ async function runImport(host: FlowHost, input: string): Promise<void> {
 	await host.enter("import", () => load(input));
 }
 
-/** S: confirm (the session leaves the machine), then upload it as a secret gist (/share). */
+/**
+ * S: pick the destination (Auto / GitHub Gist / Radius) and upload (/share).
+ *
+ * 菜单本身就是外发确认：Esc 什么都不发。初始光标是 pi 的 `sessionShareDestination`
+ * （没配置为 auto）；缺凭据 / 缺工具由动作层按 pi 的原文报在 footer。
+ */
 export function confirmShareSession(host: FlowHost): void {
 	if (refuseMultiSelect(host, "share")) return;
 	const row = host.currentSessionRow();
@@ -538,26 +543,29 @@ export function confirmShareSession(host: FlowHost): void {
 		host.setStatus(t("status.shareUnavailable"));
 		return;
 	}
-	host.openMenu(
-		"share",
-		confirmDialogSpec({
-			title: shareSessionTitle(),
-			subject: sessionTitle(row),
-			onConfirm: () => void runShare(host, row.file),
-			onCancel: () => host.closeDialogs(),
-		}),
-	);
+	host.openMenu("share", {
+		title: shareTitle(),
+		items: shareDestinations().map((d) => d.label),
+		initialIndex: shareInitialIndex(host.actions.shareDestination ?? "auto"),
+		subject: sessionTitle(row),
+		hints: shareHints(),
+		onSelect: (i) => {
+			const destination = shareDestinations()[i]?.destination;
+			if (destination) void runShare(host, row.file, destination);
+		},
+		onCancel: () => host.closeDialogs(),
+	});
 }
 
 /** Upload, then put the viewer link on the clipboard (a long link may not fit the footer) and show it. */
-async function runShare(host: FlowHost, file: string): Promise<void> {
+async function runShare(host: FlowHost, file: string, destination: SessionShareDestination): Promise<void> {
 	const share = host.actions?.shareSession;
 	host.closeDialogs();
 	if (!share) return;
 	host.setStatus(t("status.sharing"));
 	let result: ShareResult;
 	try {
-		result = await share(file);
+		result = await share(file, destination);
 		if (host.isDisposed()) return;
 	} catch (err) {
 		if (host.isDisposed()) return;

@@ -1,6 +1,7 @@
 /**
- * Confirm dialog: the Yes / No menu shown before every destructive or outbound
- * action (delete, fork, clone, share, import, overwriting an export — CLAUDE.md rule 7).
+ * Confirm dialog: the Yes / No menu shown before every destructive or outgoing
+ * action (delete, fork, clone, import, overwriting an export — CLAUDE.md rule 7).
+ * Sharing (`S`) has its own destination menu instead: ./share-dialog.ts.
  *
  *   ┌─ Delete session? ──────────── FilmRecall ─┐
  *   │   Yes                                      │
@@ -54,11 +55,6 @@ export function cloneSessionTitle(): string {
 /** Title of the fork confirmation, shown after a message is picked (`o`). */
 export function forkSessionTitle(): string {
 	return t("confirm.fork");
-}
-
-/** Title of the share confirmation (`S`): the session leaves the machine. */
-export function shareSessionTitle(): string {
-	return t("confirm.share");
 }
 
 /** Title of the import confirmation (`I`), pi's "Replace current session with …?". */
