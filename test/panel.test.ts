@@ -3634,7 +3634,8 @@ test("S: pick Auto / Gist / Radius in a menu (Esc cancels), then upload, copy th
 	h.panel.handleInput("S");
 	assert.equal(h.panel.state.mode, "share");
 	const menu = dialogAt(h.text(), SHARE_SESSION_TITLE);
-	assert.ok(menu && menu.title.includes("alpha"), menu?.title);
+	assert.ok(menu && menu.title.includes("Esc/q close"), menu?.title);
+	assert.ok(!menu.title.includes("alpha"), "no session title in the header");
 	assert.equal(menu.body.length, 3);
 	assert.ok(menu.body[0]!.includes("› Auto"), menu.body[0]);
 	assert.ok(menu.body[1]!.includes("GitHub Gist"), menu.body[1]);
@@ -3642,6 +3643,12 @@ test("S: pick Auto / Gist / Radius in a menu (Esc cancels), then upload, copy th
 	assert.ok(h.footer().includes("SHARE"), h.footer());
 	// Esc cancels: nothing leaves the machine
 	h.panel.handleInput("\x1b");
+	assert.equal(h.panel.state.mode, "normal");
+	assert.deepEqual(h.shares, []);
+
+	// q cancels too (the header advertises Esc/q close)
+	h.panel.handleInput("S");
+	h.panel.handleInput("q");
 	assert.equal(h.panel.state.mode, "normal");
 	assert.deepEqual(h.shares, []);
 

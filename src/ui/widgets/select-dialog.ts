@@ -12,8 +12,9 @@
  * Generic like ./input-dialog.ts: title, items, initial cursor, subject and
  * the callbacks arrive with `open(spec)`, so the same widget serves the
  * summary menu now and delete confirmations, sort pickers and so on later.
- * Keys: j / k / ↑ / ↓ move, Enter confirms, Esc cancels; everything else is
- * swallowed. Key hints go to the footer (see `hints`).
+ * Keys: j / k / ↑ / ↓ move, Enter confirms, Esc cancels (plus q when the spec
+ * asks for it); everything else is swallowed. Key hints go to the footer (see
+ * `hints`).
  *
  * 通用的居中选择菜单：标题 / 选项 / 初始光标 / 回调都在 open 时传入，本身不做 I/O；
  * 快捷键提示由 app.ts 放在底部 footer。
@@ -57,6 +58,12 @@ export interface SelectDialogSpec {
 	/** Enter (or a shortcut): the index of the picked entry. */
 	onSelect: (index: number) => void;
 	onCancel: () => void;
+	/**
+	 * Also cancel on `q` (the share dialogs show an `Esc/q close` hint in the
+	 * title bar). Other menus keep swallowing `q`, so a stray key cannot close
+	 * a confirmation.
+	 */
+	closeOnQ?: boolean;
 }
 
 export interface SelectDialogOptions {
@@ -108,7 +115,7 @@ export class SelectDialog {
 	handleInput(data: string): void {
 		const spec = this.spec;
 		if (!spec) return;
-		if (matchesKeyId(data, "escape")) {
+		if (matchesKeyId(data, "escape") || (spec.closeOnQ && matchesKeyId(data, "q"))) {
 			spec.onCancel();
 			return;
 		}

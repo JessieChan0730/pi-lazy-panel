@@ -38,7 +38,7 @@ import {
 	shareViewerUrl,
 } from "../src/actions/session-actions.ts";
 import { type RestoreContext, restoreNode } from "../src/actions/tree-actions.ts";
-import { loginRadius, logoutRadius } from "../src/actions/radius-auth.ts";
+import { checkRadiusApiKey, loginRadius, logoutRadius } from "../src/actions/radius-auth.ts";
 import { EXTENSION_ID, SPINNER_FRAMES } from "../src/constants.ts";
 import { loadForkPoints, loadLastReply, loadSessionInfo } from "../src/data/content.ts";
 import { isEffectiveLeaf } from "../src/data/tree.ts";
@@ -1004,6 +1004,56 @@ test("loginRadius: drives pi's Radius login with the picked method; only a post-
 		}),
 		CredentialSynchronizationError,
 	);
+});
+
+test("loginRadius: an API key is checked before it reaches pi; OAuth prompts are not checked", async () => {
+	const checked: string[] = [];
+	const interaction = { signal: new AbortController().signal, prompt: async () => "rds_typed", notify: () => {} };
+
+	// A rejected key throws from the prompt, so pi never writes a credential.
+	await assert.rejects(
+		loginRadius("api_key", interaction, {
+			runtime: {
+				login: async (_providerId, _method, i) => {
+					await i.prompt({ type: "secret", message: "Enter Radius API key" });
+				},
+			},
+			checkApiKey: async (key) => {
+				checked.push(key);
+				throw new Error("invalid API key");
+			},
+		}),
+		/invalid API key/,
+	);
+	assert.deepEqual(checked, ["rds_typed"]);
+
+	// OAuth text prompts pass through: only the API-key secret prompt is verified.
+	const oauthChecked: string[] = [];
+	await loginRadius("oauth", interaction, {
+		runtime: {
+			login: async (_providerId, _method, i) => {
+				await i.prompt({ type: "text", message: "Paste the authorization code" });
+			},
+		},
+		checkApiKey: async (key) => void oauthChecked.push(key),
+	});
+	assert.deepEqual(oauthChecked, []);
+});
+
+test("checkRadiusApiKey: 401/403 is an invalid key; other gateway failures keep their reason", async () => {
+	const urls: string[] = [];
+	const headers: Array<Record<string, string>> = [];
+	const respond = (status: number) => async (url: string | URL | Request, init?: RequestInit) => {
+		urls.push(String(url));
+		headers.push(init?.headers as Record<string, string>);
+		return new Response("{}", { status });
+	};
+
+	await checkRadiusApiKey("rds_ok", new AbortController().signal, respond(200));
+	await assert.rejects(checkRadiusApiKey("rds_bad", new AbortController().signal, respond(401)), /invalid API key/);
+	await assert.rejects(checkRadiusApiKey("rds_bad", new AbortController().signal, respond(500)), /Could not verify Radius API key: 500/);
+	assert.equal(urls[0], "https://radius.pi.dev/v1/config");
+	assert.equal(headers[0]?.authorization, "Bearer rds_ok");
 });
 
 test("logoutRadius: deletes the Radius credential; only a post-delete sync error is swallowed", async () => {

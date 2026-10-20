@@ -371,12 +371,14 @@ test("share Radius: a missing credential runs pi's sign-in (account → browser)
 	await flush();
 	assert.equal(h.menu().title, "Radius sign-in");
 	assert.deepEqual(h.menu().items, ["Sign in with an account", "Sign in with an API key"]);
+	assert.equal(h.menu().subject, "Esc/q close");
 	h.menu().onSelect(0);
 	await flush();
 
 	// pi's OAuth question, translated by the panel: both choices, pi's parentheticals dropped.
 	assert.equal(h.menu().title, t("dialog.radiusLoginMethodTitle"));
 	assert.deepEqual(h.menu().items, [t("dialog.radiusLoginBrowser"), t("dialog.radiusLoginDeviceCode")]);
+	assert.equal(h.menu().subject, "Esc/q close");
 	h.menu().onSelect(0);
 	await flush();
 
@@ -460,7 +462,7 @@ test("share Radius: the API key uses the input dialog and an empty key stays ope
 	h.menu().onSelect(1);
 	await flush();
 	const prompt = h.prompt();
-	assert.equal(prompt.title, "Enter your Radius API key:");
+	assert.equal(prompt.title, t("dialog.radiusApiKeyTitle"));
 	assert.equal(prompt.placeholder, "rds_…");
 	assert.equal(prompt.validate?.("  "), "API key cannot be empty");
 	assert.equal(prompt.validate?.("rds_key"), undefined);
@@ -470,6 +472,42 @@ test("share Radius: the API key uses the input dialog and an empty key stays ope
 	assert.equal(key, "rds_key");
 	assert.deepEqual(shares, [{ file: "/tmp/s1.jsonl", destination: "radius" }]);
 	assert.equal(h.anyOpen(), false);
+});
+
+test("share Radius: a rejected API key is reported and the next S still asks for sign-in, not the account menu", async () => {
+	const shares: unknown[] = [];
+	const h = fakeHost({
+		actions: {
+			radiusAuthenticated: async () => false,
+			shareSession: async (file, destination) => {
+				shares.push({ file, destination });
+				return { url: "https://pi.dev/session/#radius", destination: "radius" };
+			},
+			loginRadius: async (_method, interaction) => {
+				await interaction.prompt({ type: "secret", message: "Enter Radius API key" });
+				throw new Error("invalid API key");
+			},
+		},
+	});
+
+	confirmShareSession(h.host);
+	h.menu().onSelect(2);
+	await flush();
+	h.menu().onSelect(1);
+	await flush();
+	h.prompt().onSubmit("rds_bad");
+	await flush();
+	await flush();
+	assert.equal(h.anyOpen(), false);
+	assert.equal(h.statuses.at(-1), t("status.radiusLoginFailed", { error: "invalid API key" }));
+	assert.deepEqual(shares, []);
+
+	// The key was never stored, so Radius starts the sign-in menus again.
+	confirmShareSession(h.host);
+	h.menu().onSelect(2);
+	await flush();
+	assert.equal(h.menu().title, t("dialog.radiusLoginTitle"));
+	assert.ok(!h.menu().items.includes(t("dialog.radiusAccountShare")));
 });
 
 test("share Radius: Esc in the method menu or the API-key prompt cancels without sharing", async () => {

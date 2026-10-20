@@ -5,6 +5,13 @@
 /** Extension identifier used for status/widget keys and log prefixes. */
 export const EXTENSION_ID = "lazy-panel";
 
+/**
+ * pi's `DEFAULT_RADIUS_GATEWAY`, used for both uploading a shared session and
+ * checking an API key. pi's own `/share` hardcodes it too (it does not read a
+ * custom gateway from models.json), so the panel stays consistent.
+ */
+export const RADIUS_GATEWAY = "https://radius.pi.dev";
+
 /** Slash command that opens the panel: `/lazy-panel`. */
 export const COMMAND_NAME = "lazy-panel";
 

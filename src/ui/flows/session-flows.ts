@@ -29,6 +29,7 @@ import type {
 } from "../../types.ts";
 import { alertDialogSpec, cannotDeleteActiveTitle } from "../widgets/alert-dialog.ts";
 import { compactDialogHints, compactDialogTitle } from "../widgets/compact-dialog.ts";
+import { dialogCloseHint } from "../widgets/dialog-header.ts";
 import {
 	cloneSessionTitle,
 	confirmDialogSpec,
@@ -44,6 +45,7 @@ import { forkDialogHints, forkDialogTitle } from "../widgets/fork-dialog.ts";
 import { importDialogHints, importDialogSubject, importDialogTitle } from "../widgets/import-dialog.ts";
 import { newSessionDialogHints, newSessionDialogTitle } from "../widgets/new-session-dialog.ts";
 import {
+	radiusApiKeyTitle,
 	radiusDeviceCode,
 	radiusDeviceTitle,
 	radiusLoginHints,
@@ -578,7 +580,8 @@ export function confirmShareSession(host: FlowHost): void {
 		title: shareTitle(),
 		items: entries.map((e) => e.label),
 		initialIndex: shareInitialIndex(host.actions.shareDestination ?? "auto"),
-		subject: sessionTitle(row),
+		subject: dialogCloseHint(),
+		closeOnQ: true,
 		hints: shareHints(),
 		onSelect: (i) => {
 			const destination = entries[i]?.destination;
@@ -669,7 +672,8 @@ function openRadiusAccount(host: FlowHost, row: SessionRow): void {
 	host.openMenu("share", {
 		title: radiusAccountTitle(),
 		items: actions.map((a) => a.label),
-		subject: sessionTitle(row),
+		subject: dialogCloseHint(),
+		closeOnQ: true,
 		hints: radiusAccountHints(),
 		onSelect: (i) => {
 			const action = actions[i]?.action;
@@ -687,7 +691,8 @@ function openRadiusLogin(host: FlowHost, row: SessionRow): void {
 	host.openMenu("share", {
 		title: radiusLoginTitle(),
 		items: methods.map((m) => m.label),
-		subject: sessionTitle(row),
+		subject: dialogCloseHint(),
+		closeOnQ: true,
 		hints: radiusLoginHints(),
 		onSelect: (i) => {
 			const method = methods[i]?.method;
@@ -768,6 +773,8 @@ function promptRadiusLogin(host: FlowHost, prompt: RadiusLoginPrompt, controller
 			host.openMenu("share", {
 				title: labels.some((label) => label !== undefined) ? radiusLoginMethodTitle() : prompt.message,
 				items: options.map((o, i) => labels[i] ?? o.label),
+				subject: dialogCloseHint(),
+				closeOnQ: true,
 				hints: radiusLoginHints(),
 				onSelect: (i) => {
 					if (settled) return;
@@ -785,7 +792,8 @@ function promptRadiusLogin(host: FlowHost, prompt: RadiusLoginPrompt, controller
 			return;
 		}
 		host.openPrompt("share", {
-			title: prompt.message,
+			// pi 的 API Key 提示是英文原文（"Enter Radius API key"），面板用自己的译文。
+			title: prompt.type === "secret" ? radiusApiKeyTitle() : prompt.message,
 			...(prompt.placeholder ? { placeholder: prompt.placeholder } : {}),
 			hints: radiusPromptHints(),
 			...(prompt.type === "secret" ? { validate: (value: string) => (value.trim() ? undefined : t("status.radiusApiKeyRequired")) } : {}),

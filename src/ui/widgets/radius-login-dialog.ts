@@ -27,6 +27,11 @@
 import { t } from "../../i18n/index.ts";
 import type { KeyHint, RadiusLoginMethod } from "../../types.ts";
 
+/** Title on the top border of the API-key input box (pi's own prompt is untranslated). */
+export function radiusApiKeyTitle(): string {
+	return t("dialog.radiusApiKeyTitle");
+}
+
 /** Title on the top border of the account / API-key menu. */
 export function radiusLoginTitle(): string {
 	return t("dialog.radiusLoginTitle");

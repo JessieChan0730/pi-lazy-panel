@@ -33,7 +33,7 @@ import {
 	type ExtensionCommandContext,
 	SessionManager,
 } from "@earendil-works/pi-coding-agent";
-import { EXTENSION_ID, SPINNER_FRAMES, SPINNER_INTERVAL_MS } from "../constants.ts";
+import { EXTENSION_ID, RADIUS_GATEWAY, SPINNER_FRAMES, SPINNER_INTERVAL_MS } from "../constants.ts";
 import { loadLastReply } from "../data/content.ts";
 import { RADIUS_PROVIDER_ID } from "./radius-auth.ts";
 import { t } from "../i18n/index.ts";
@@ -569,14 +569,6 @@ export function shareViewerUrl(gistId: string): string {
 // ---------------------------------------------------------------------------
 // Radius sharing (pi 1.3.0's sessionShareDestination)
 // ---------------------------------------------------------------------------
-
-/**
- * pi's `DEFAULT_RADIUS_GATEWAY`.
- *
- * pi 自己的 `/share` 也固定用这个地址（`session-share.js` 里没有读 models.json 的自定义 gateway），
- * 这里保持一致；pi-ai 的常量没有从 pi-coding-agent 的入口导出。
- */
-export const RADIUS_GATEWAY = "https://radius.pi.dev";
 
 /** Uploading a long session can take a while; pi aborts through its loader instead. */
 const RADIUS_TIMEOUT_MS = 120_000;

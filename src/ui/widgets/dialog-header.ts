@@ -15,3 +15,11 @@ export function dialogHeader(width: number, title: string, subject = ""): Pick<F
 	const fittedSubject = subjectWidth > 1 ? truncateToWidth(subject, subjectWidth, "…", false) : "";
 	return { title: fittedTitle, meta: fittedSubject ? `${fittedSubject} · ${hint}` : hint };
 }
+
+/**
+ * Right-aligned exit hint for menus that have no subject of their own (the
+ * share flow's pickers): `Esc` and `q` both leave without doing anything.
+ */
+export function dialogCloseHint(): string {
+	return `Esc/q ${t("hint.close")}`;
+}
