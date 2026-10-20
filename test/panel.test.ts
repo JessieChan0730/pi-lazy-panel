@@ -49,6 +49,7 @@ import { importDialogTitle } from "../src/ui/widgets/import-dialog.ts";
 import { InputDialog } from "../src/ui/widgets/input-dialog.ts";
 import { labelDialogTitle } from "../src/ui/widgets/label-dialog.ts";
 import { newSessionDialogTitle } from "../src/ui/widgets/new-session-dialog.ts";
+import { radiusLoginMethodLabel, radiusLoginMethodTitle } from "../src/ui/widgets/radius-login-dialog.ts";
 import { renameDialogTitle } from "../src/ui/widgets/rename-dialog.ts";
 import { customPromptTitle, summaryMenu as restoreSummaryMenu, summaryMenuTitle } from "../src/ui/widgets/restore-dialog.ts";
 import { searchLabel } from "../src/ui/widgets/search-bar.ts";
@@ -3667,7 +3668,7 @@ test("S: pick Auto / Gist / Radius in a menu (Esc cancels), then upload, copy th
 	]);
 });
 
-test("S: an unauthenticated Radius share signs in through panel dialogs (URL notice, y copies, Esc cancels)", async () => {
+test("S: an unauthenticated Radius share signs in through panel dialogs (browser link copied, Esc cancels)", async () => {
 	const copies: string[] = [];
 	const opened: string[] = [];
 	const h = makeSessionActionPanel({
@@ -3676,6 +3677,15 @@ test("S: an unauthenticated Radius share signs in through panel dialogs (URL not
 			openUrl: (url) => void opened.push(url),
 			copyText: async (text) => void copies.push(text),
 			loginRadius: async (_method, interaction) => {
+				// pi's OAuth question: browser or device code.
+				await interaction.prompt({
+					type: "select",
+					message: "Sign in to Radius:",
+					options: [
+						{ id: "browser", label: "Sign in with browser (recommended)" },
+						{ id: "device-code", label: "Sign in with device code (when signing in from another device)" },
+					],
+				});
 				interaction.notify({ type: "auth_url", url: "https://radius.test/authorize?state=x", instructions: "Continue in your browser." });
 				await new Promise((_resolve, reject) => {
 					interaction.signal.addEventListener("abort", () => reject(new Error("Login cancelled")), { once: true });
@@ -3697,25 +3707,28 @@ test("S: an unauthenticated Radius share signs in through panel dialogs (URL not
 	h.panel.handleInput("\r");
 	await flush();
 
-	// pi's browser URL in the notice, opened in the platform browser
-	assert.deepEqual(opened, ["https://radius.test/authorize?state=x"]);
-	const notice = dialogAt(h.text(), "Continue in your browser");
-	assert.ok(notice?.body.some((line) => line.includes("https://radius.test/authorize?state=x")), notice?.body.join("\n"));
-	assert.ok(h.footer().includes("y copy"), h.footer());
-	assert.ok(h.footer().includes("Esc cancel"), h.footer());
-
-	// y copies the URL and leaves the notice up
-	h.panel.handleInput("y");
+	// pi's OAuth question, translated by the panel and without pi's parentheticals.
+	const oauth = dialogAt(h.text(), radiusLoginMethodTitle());
+	assert.ok(oauth?.body[0]?.includes(`› ${radiusLoginMethodLabel("browser")}`), oauth?.body.join("\n"));
+	assert.ok(oauth?.body[1]?.includes(radiusLoginMethodLabel("device-code") ?? ""), oauth?.body.join("\n"));
+	h.panel.handleInput("\r");
 	await flush();
-	assert.equal(copies.at(-1), "https://radius.test/authorize?state=x");
-	assert.ok(dialogAt(h.text(), "Continue in your browser"), "the notice is still open");
 
-	// Esc cancels the sign-in: nothing is uploaded
+	// The browser opens and the link goes to the clipboard; nothing covers the panel.
+	assert.deepEqual(opened, ["https://radius.test/authorize?state=x"]);
+	assert.equal(h.panel.state.mode, "normal");
+	assert.equal(dialogAt(h.text(), "Continue in your browser"), undefined);
+	assert.equal(copies.at(-1), "https://radius.test/authorize?state=x");
+	assert.ok(h.footer().includes("sign-in link copied"), h.footer());
+	assert.ok(h.footer().includes("Esc cancels"), h.footer());
+
+	// Esc cancels the sign-in (it does not close the panel): nothing is uploaded
 	h.panel.handleInput("\x1b");
 	await flush();
 	await flush();
 	assert.deepEqual(h.shares, []);
 	assert.equal(h.panel.state.mode, "normal");
+	assert.equal(h.closed(), false);
 	assert.ok(h.footer().includes("Radius sign-in cancelled"), h.footer());
 });
 

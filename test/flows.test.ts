@@ -50,6 +50,7 @@ function fakeHost(opts: FakeHostOptions = {}) {
 	};
 	const statuses: string[] = [];
 	const entered: string[] = [];
+	let pendingCancel: (() => void) | undefined;
 	let usageOpened: { info: ContextUsageInfo; onCopy: (text: string) => void } | undefined;
 	const host: FlowHost = {
 		state,
@@ -94,6 +95,9 @@ function fakeHost(opts: FakeHostOptions = {}) {
 			dialogs.menu = undefined;
 			dialogs.notice = undefined;
 		},
+		setPendingCancel: (cancel) => {
+			pendingCancel = cancel;
+		},
 		openInfo: () => {},
 		openUsage: (info, onCopy) => {
 			usageOpened = { info, onCopy };
@@ -127,6 +131,7 @@ function fakeHost(opts: FakeHostOptions = {}) {
 			return dialogs.notice;
 		},
 		anyOpen: () => dialogs.menu !== undefined || dialogs.prompt !== undefined || dialogs.notice !== undefined,
+		pendingCancel: () => pendingCancel,
 		usageOpened: () => usageOpened,
 	};
 }
@@ -327,7 +332,7 @@ test("context usage: loads the cursor session, opens the box, and y copies its t
 	assert.ok(bare.statuses.includes(t("status.usageUnavailable")), bare.statuses.join(","));
 });
 
-test("share Radius: a missing credential runs pi's sign-in (account → browser URL), then shares", async () => {
+test("share Radius: a missing credential runs pi's sign-in (account → browser), copies the link, then shares", async () => {
 	const shares: Array<{ file: string; destination: string }> = [];
 	const copies: string[] = [];
 	const opened: string[] = [];
@@ -348,8 +353,8 @@ test("share Radius: a missing credential runs pi's sign-in (account → browser 
 					type: "select",
 					message: "Sign in to Radius:",
 					options: [
-						{ id: "browser", label: "Sign in with browser" },
-						{ id: "device-code", label: "Sign in with device code" },
+						{ id: "browser", label: "Sign in with browser (recommended)" },
+						{ id: "device-code", label: "Sign in with device code (when signing in from another device)" },
 					],
 				});
 				steps.push(choice);
@@ -369,20 +374,18 @@ test("share Radius: a missing credential runs pi's sign-in (account → browser 
 	h.menu().onSelect(0);
 	await flush();
 
-	// pi's OAuth question (browser / device code) uses the same menu.
-	assert.equal(h.menu().title, "Sign in to Radius:");
+	// pi's OAuth question, translated by the panel: both choices, pi's parentheticals dropped.
+	assert.equal(h.menu().title, t("dialog.radiusLoginMethodTitle"));
+	assert.deepEqual(h.menu().items, [t("dialog.radiusLoginBrowser"), t("dialog.radiusLoginDeviceCode")]);
 	h.menu().onSelect(0);
 	await flush();
-	assert.deepEqual(opened, ["https://radius.test/authorize?state=x"]);
-	const notice = h.notice();
-	assert.equal(notice.title, "Continue in your browser");
-	assert.ok(notice.lines[0]?.includes("https://radius.test/authorize?state=x"), notice.lines.join("\n"));
 
-	// y copies the URL while the browser callback is still pending.
-	notice.onCopy?.();
-	await flush();
-	assert.equal(copies.at(-1), "https://radius.test/authorize?state=x");
-	assert.equal(h.statuses.at(-1), "copied Radius sign-in details to clipboard");
+	// Browser sign-in does not cover the panel: the link goes to the clipboard, Esc stays available.
+	assert.deepEqual(opened, ["https://radius.test/authorize?state=x"]);
+	assert.equal(h.anyOpen(), false);
+	assert.deepEqual(copies, ["https://radius.test/authorize?state=x"]);
+	assert.equal(h.statuses.at(-1), t("status.radiusBrowserLinkCopied"));
+	assert.ok(h.pendingCancel(), "Esc can still cancel the browser wait");
 
 	finish();
 	await flush();
@@ -392,6 +395,45 @@ test("share Radius: a missing credential runs pi's sign-in (account → browser 
 	assert.ok(h.statuses.includes("signed in to Radius"), h.statuses.join(","));
 	assert.equal(copies.at(-1), "https://pi.dev/session/#radius");
 	assert.equal(h.anyOpen(), false);
+	assert.equal(h.pendingCancel(), undefined, "the cancel hook is cleared once the sign-in ends");
+});
+
+test("share Radius: the browser link stays in the footer when the clipboard fails; cancelling does not share", async () => {
+	const shares: unknown[] = [];
+	const h = fakeHost({
+		actions: {
+			radiusAuthenticated: async () => false,
+			shareSession: async (file, destination) => {
+				shares.push({ file, destination });
+				return { url: "https://pi.dev/session/#radius", destination: "radius" };
+			},
+			copyText: async () => {
+				throw new Error("no clipboard");
+			},
+			loginRadius: async (_method, interaction) => {
+				interaction.notify({ type: "auth_url", url: "https://radius.test/authorize?state=x" });
+				await new Promise((_resolve, reject) => {
+					interaction.signal.addEventListener("abort", () => reject(new Error("Login cancelled")), { once: true });
+				});
+			},
+		},
+	});
+
+	confirmShareSession(h.host);
+	h.menu().onSelect(2);
+	await flush();
+	h.menu().onSelect(0);
+	await flush();
+	await flush();
+	assert.equal(h.statuses.at(-1), t("status.radiusBrowserLink", { url: "https://radius.test/authorize?state=x" }));
+	assert.equal(h.anyOpen(), false);
+
+	// Esc (through the panel's cancel hook) aborts the wait; nothing is uploaded.
+	h.pendingCancel()?.();
+	await flush();
+	await flush();
+	assert.ok(h.statuses.includes(t("status.radiusLoginCancelled")), h.statuses.join(","));
+	assert.deepEqual(shares, []);
 });
 
 test("share Radius: the API key uses the input dialog and an empty key stays open", async () => {

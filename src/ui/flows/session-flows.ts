@@ -43,10 +43,11 @@ import { forkDialogHints, forkDialogTitle } from "../widgets/fork-dialog.ts";
 import { importDialogHints, importDialogSubject, importDialogTitle } from "../widgets/import-dialog.ts";
 import { newSessionDialogHints, newSessionDialogTitle } from "../widgets/new-session-dialog.ts";
 import {
-	radiusBrowserTitle,
 	radiusDeviceCode,
 	radiusDeviceTitle,
 	radiusLoginHints,
+	radiusLoginMethodLabel,
+	radiusLoginMethodTitle,
 	radiusLoginMethods,
 	radiusLoginTitle,
 	radiusNoticeHints,
@@ -639,11 +640,15 @@ async function runRadiusLogin(host: FlowHost, row: SessionRow, method: RadiusLog
 	host.closeDialogs();
 	host.setStatus(t("status.radiusSigningIn"));
 	const controller = new AbortController();
+	// 浏览器登录期间没有弹窗：Esc 取消这次登录，而不是把整个面板关掉（footer 里也提示了）。
+	host.setPendingCancel(() => controller.abort());
 	let failure: Error | undefined;
 	try {
 		await login(method, radiusLoginInteraction(host, controller));
 	} catch (err) {
 		failure = err instanceof Error ? err : new Error(String(err));
+	} finally {
+		host.setPendingCancel(undefined);
 	}
 	if (host.isDisposed()) return;
 	if (controller.signal.aborted) {
@@ -691,9 +696,11 @@ function promptRadiusLogin(host: FlowHost, prompt: RadiusLoginPrompt, controller
 		prompt.signal?.addEventListener("abort", cancel, { once: true });
 		if (prompt.type === "select") {
 			const options = prompt.options ?? [];
+			// pi 的选项文案带括号说明（"(recommended)" 等），面板用自己的译文；不认识的 id 照旧用 pi 的。
+			const labels = options.map((o) => radiusLoginMethodLabel(o.id));
 			host.openMenu("share", {
-				title: prompt.message,
-				items: options.map((o) => o.label),
+				title: labels.some((label) => label !== undefined) ? radiusLoginMethodTitle() : prompt.message,
+				items: options.map((o, i) => labels[i] ?? o.label),
 				hints: radiusLoginHints(),
 				onSelect: (i) => {
 					if (settled) return;
@@ -727,9 +734,10 @@ function promptRadiusLogin(host: FlowHost, prompt: RadiusLoginPrompt, controller
 }
 
 /**
- * Show what pi's sign-in reported: progress in the footer, the browser URL or
- * device code in a notice (the browser opens automatically, like /login does).
- * Closing the notice cancels the login.
+ * Show what pi's sign-in reported: progress in the footer, the browser link on
+ * the clipboard (the browser opens automatically, like /login does — no box
+ * over the panel), the device code in a notice.
+ * Closing the device-code notice cancels the login.
  */
 function notifyRadiusLogin(host: FlowHost, event: RadiusLoginEvent, controller: AbortController): void {
 	if (host.isDisposed() || controller.signal.aborted) return;
@@ -738,9 +746,9 @@ function notifyRadiusLogin(host: FlowHost, event: RadiusLoginEvent, controller: 
 		return;
 	}
 	if (event.type === "auth_url") {
+		// 浏览器登录不弹框：链接直接进剪贴板，footer 说明正在等浏览器（Esc 取消）。
 		host.actions?.openUrl?.(event.url);
-		const lines = [event.url, ...(event.instructions ? [event.instructions] : [])];
-		openRadiusNotice(host, controller, radiusBrowserTitle(), lines, event.url);
+		void copyRadiusBrowserLink(host, event.url);
 		return;
 	}
 	if (event.type === "device_code") {
@@ -754,7 +762,7 @@ function notifyRadiusLogin(host: FlowHost, event: RadiusLoginEvent, controller: 
 	openRadiusNotice(host, controller, radiusLoginTitle(), lines, event.links?.[0]?.url);
 }
 
-/** The waiting notice: Esc cancels; `y` copies the URL / code when there is one. */
+/** The device-code / info notice: Esc cancels; `y` copies the code / link when there is one. */
 function openRadiusNotice(host: FlowHost, controller: AbortController, title: string, lines: string[], copyText: string | undefined): void {
 	host.openNotice("share", {
 		title,
@@ -778,6 +786,26 @@ async function copyRadiusNotice(host: FlowHost, text: string): Promise<void> {
 	} catch (err) {
 		if (!host.isDisposed()) host.setStatus(t("status.copyFailed", { error: (err as Error).message }));
 	}
+}
+
+/**
+ * Browser sign-in: the link goes to the clipboard (no box covers the panel),
+ * the footer says what to do. A failing clipboard only changes the message —
+ * the browser was already opened and may be all the user needs.
+ */
+async function copyRadiusBrowserLink(host: FlowHost, url: string): Promise<void> {
+	const copy = host.actions?.copyText;
+	let copied = false;
+	if (copy) {
+		try {
+			await copy(url);
+			copied = true;
+		} catch {
+			// 剪贴板不可用不挡住登录：footer 里给出完整链接。
+		}
+	}
+	if (host.isDisposed()) return;
+	host.setStatus(copied ? t("status.radiusBrowserLinkCopied") : t("status.radiusBrowserLink", { url }));
 }
 
 /** Upload, then put the viewer link on the clipboard (a long link may not fit the footer) and show it. */

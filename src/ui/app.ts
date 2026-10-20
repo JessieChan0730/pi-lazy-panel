@@ -251,6 +251,11 @@ export class LazyPanel implements Component, Focusable {
 	private helpRect: BoxRect | undefined;
 	/** Set while the search bar is open (`mode === "search"`). */
 	private searchOrigin: SearchOrigin | undefined;
+	/**
+	 * Set while a flow waits on something outside the panel (Radius browser
+	 * sign-in): Esc calls it instead of closing the panel.
+	 */
+	private pendingCancel: (() => void) | undefined;
 
 	constructor(private readonly o: LazyPanelOptions) {
 		this.state = createInitialState(o.initialState);
@@ -364,6 +369,9 @@ export class LazyPanel implements Component, Focusable {
 			openPrompt: (mode, spec) => this.openPrompt(mode, spec),
 			openMenu: (mode, spec) => this.openMenu(mode, spec),
 			openNotice: (mode, spec) => this.openNotice(mode, spec),
+			setPendingCancel: (cancel) => {
+				this.pendingCancel = cancel;
+			},
 			closeDialogs: () => this.closeDialogs(),
 			openInfo: (info, onCopy) => this.openInfo(info, onCopy),
 			openUsage: (info, onCopy) => this.openUsage(info, onCopy),
@@ -626,6 +634,11 @@ export class LazyPanel implements Component, Focusable {
 
 		// Esc 优先：清掉半截序列或当前面板的搜索结果。
 		if (matchesKeyId(data, "escape")) {
+			// 等待面板外的操作（Radius 浏览器登录）时 Esc 取消它，别把整个面板关掉。
+			if (this.pendingCancel) {
+				this.cancelPending();
+				return;
+			}
 			if (this.keys.hasPending) {
 				this.keys.clear();
 				return;
@@ -792,6 +805,13 @@ export class LazyPanel implements Component, Focusable {
 		this.inputDialog.focused = false;
 		this.noticeDialog.close();
 		this.o.requestRender();
+	}
+
+	/** Stop the browser sign-in (if one is waiting) before the panel goes away. */
+	private cancelPending(): void {
+		const cancel = this.pendingCancel;
+		this.pendingCancel = undefined;
+		cancel?.();
 	}
 
 	private openHelp(): void {
@@ -2092,6 +2112,7 @@ export class LazyPanel implements Component, Focusable {
 	private close(): void {
 		if (this.disposed) return;
 		this.disposed = true;
+		this.cancelPending();
 		this.settingsDialog.dispose();
 		this.keys.clear();
 		this.clearSessionLoad();
@@ -2100,6 +2121,7 @@ export class LazyPanel implements Component, Focusable {
 
 	dispose(): void {
 		this.disposed = true;
+		this.cancelPending();
 		this.settingsDialog.dispose();
 		this.stopChangelogSpinner();
 		this.keys.clear();
