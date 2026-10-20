@@ -35,6 +35,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { EXTENSION_ID, SPINNER_FRAMES, SPINNER_INTERVAL_MS } from "../constants.ts";
 import { loadLastReply } from "../data/content.ts";
+import { RADIUS_PROVIDER_ID } from "./radius-auth.ts";
 import { t } from "../i18n/index.ts";
 import type { DeleteMethod, EnterOutcome, ExportFormat, ExportTarget, SessionShareDestination, ShareResult } from "../types.ts";
 import { resolveUserPath, stripQuotes } from "../utils/paths.ts";
@@ -630,6 +631,24 @@ export function shareBearerToken(auth: ShareAuth | undefined): string | undefine
 	const header = Object.entries(auth.auth.headers ?? {}).find(([name]) => name.toLowerCase() === "authorization")?.[1];
 	if (typeof header !== "string") return undefined;
 	return /^Bearer\s+(.+)$/iu.exec(header)?.[1];
+}
+
+/**
+ * Is Radius signed in (would an upload find a bearer token)?
+ *
+ * `S` checks this before uploading to Radius so a missing credential starts
+ * pi's `/login radius` flow instead of failing. A refresh error counts as not
+ * signed in, matching `shareViaRadius`.
+ *
+ * 分享到 Radius 前先看有没有可用凭据；没有就由面板接管 `/login radius` 的流程。
+ */
+export async function radiusAuthenticated(auth: ShareAuthSource | undefined): Promise<boolean> {
+	if (!auth) return false;
+	try {
+		return shareBearerToken(await auth.getProviderAuth(RADIUS_PROVIDER_ID)) !== undefined;
+	} catch {
+		return false;
+	}
 }
 
 /**

@@ -13,7 +13,20 @@
 
 import { t } from "../../i18n/index.ts";
 import { findSessionIndex } from "../../data/sessions.ts";
-import type { ContextUsageInfo, DeleteMethod, ExportFormat, ForkPoint, SessionInfo, SessionRow, SessionShareDestination, ShareResult } from "../../types.ts";
+import type {
+	ContextUsageInfo,
+	DeleteMethod,
+	ExportFormat,
+	ForkPoint,
+	RadiusLoginEvent,
+	RadiusLoginInteraction,
+	RadiusLoginMethod,
+	RadiusLoginPrompt,
+	SessionInfo,
+	SessionRow,
+	SessionShareDestination,
+	ShareResult,
+} from "../../types.ts";
 import { alertDialogSpec, cannotDeleteActiveTitle } from "../widgets/alert-dialog.ts";
 import { compactDialogHints, compactDialogTitle } from "../widgets/compact-dialog.ts";
 import {
@@ -29,6 +42,16 @@ import { EXPORT_FORMAT_ORDER, exportFormatHints, exportFormats, exportFormatTitl
 import { forkDialogHints, forkDialogTitle } from "../widgets/fork-dialog.ts";
 import { importDialogHints, importDialogSubject, importDialogTitle } from "../widgets/import-dialog.ts";
 import { newSessionDialogHints, newSessionDialogTitle } from "../widgets/new-session-dialog.ts";
+import {
+	radiusBrowserTitle,
+	radiusDeviceCode,
+	radiusDeviceTitle,
+	radiusLoginHints,
+	radiusLoginMethods,
+	radiusLoginTitle,
+	radiusNoticeHints,
+	radiusPromptHints,
+} from "../widgets/radius-login-dialog.ts";
 import { renameDialogHints, renameDialogTitle } from "../widgets/rename-dialog.ts";
 import { shareDestinations, shareHints, shareInitialIndex, shareTitle } from "../widgets/share-dialog.ts";
 import { forgetDeletedSessions } from "./archive-flows.ts";
@@ -533,7 +556,10 @@ async function runImport(host: FlowHost, input: string): Promise<void> {
  * S: pick the destination (Auto / GitHub Gist / Radius) and upload (/share).
  *
  * 菜单本身就是外发确认：Esc 什么都不发。初始光标是 pi 的 `sessionShareDestination`
- * （没配置为 auto）；缺凭据 / 缺工具由动作层按 pi 的原文报在 footer。
+ * （没配置为 auto）；Gist 缺工具 / Auto 两边都不可用由动作层按 pi 的原文报在 footer。
+ *
+ * Radius 没登录时不直接报错：先走 pi 的 `/login radius` 流程（账号 / API Key，
+ * 账号再用同一个菜单选浏览器 / 设备码），登录成功后自动继续这次分享。
  */
 export function confirmShareSession(host: FlowHost): void {
 	if (refuseMultiSelect(host, "share")) return;
@@ -551,10 +577,207 @@ export function confirmShareSession(host: FlowHost): void {
 		hints: shareHints(),
 		onSelect: (i) => {
 			const destination = shareDestinations()[i]?.destination;
-			if (destination) void runShare(host, row.file, destination);
+			if (destination) void startShare(host, row, destination);
 		},
 		onCancel: () => host.closeDialogs(),
 	});
+}
+
+/**
+ * Upload to the picked destination, taking over Radius sign-in first when an
+ * explicit Radius share finds no credential.
+ */
+async function startShare(host: FlowHost, row: SessionRow, destination: SessionShareDestination): Promise<void> {
+	const actions = host.actions;
+	if (!actions?.shareSession) {
+		host.closeDialogs();
+		host.setStatus(t("status.shareUnavailable"));
+		return;
+	}
+	host.closeDialogs();
+	if (destination === "radius" && actions.radiusAuthenticated && actions.loginRadius) {
+		let ready: boolean;
+		try {
+			ready = await actions.radiusAuthenticated();
+		} catch {
+			// 取凭据失败（如 OAuth 刷新出错）按未登录处理，和 share 的判断一致。
+			ready = false;
+		}
+		if (host.isDisposed()) return;
+		if (!ready) {
+			openRadiusLogin(host, row);
+			return;
+		}
+	}
+	await runShare(host, row.file, destination);
+}
+
+/** The account / API-key menu, same two choices as pi's `/login radius`. */
+function openRadiusLogin(host: FlowHost, row: SessionRow): void {
+	if (!host.actions?.loginRadius) return;
+	const methods = radiusLoginMethods();
+	host.openMenu("share", {
+		title: radiusLoginTitle(),
+		items: methods.map((m) => m.label),
+		subject: sessionTitle(row),
+		hints: radiusLoginHints(),
+		onSelect: (i) => {
+			const method = methods[i]?.method;
+			if (method) void runRadiusLogin(host, row, method);
+		},
+		onCancel: () => host.closeDialogs(),
+	});
+}
+
+/**
+ * Run pi's Radius sign-in with the panel as its UI (prompts become dialogs,
+ * auth URLs / device codes become a notice), then share the session.
+ */
+async function runRadiusLogin(host: FlowHost, row: SessionRow, method: RadiusLoginMethod): Promise<void> {
+	const login = host.actions?.loginRadius;
+	if (!login) return;
+	host.closeDialogs();
+	host.setStatus(t("status.radiusSigningIn"));
+	const controller = new AbortController();
+	let failure: Error | undefined;
+	try {
+		await login(method, radiusLoginInteraction(host, controller));
+	} catch (err) {
+		failure = err instanceof Error ? err : new Error(String(err));
+	}
+	if (host.isDisposed()) return;
+	if (controller.signal.aborted) {
+		host.closeDialogs();
+		host.setStatus(t("status.radiusLoginCancelled"));
+		return;
+	}
+	host.closeDialogs();
+	if (failure) {
+		host.setStatus(t("status.radiusLoginFailed", { error: failure.message }));
+		return;
+	}
+	host.setStatus(t("status.radiusSignedIn"));
+	await runShare(host, row.file, "radius");
+}
+
+/** The callbacks pi's login uses; the signal cancels the browser wait / device poll. */
+function radiusLoginInteraction(host: FlowHost, controller: AbortController): RadiusLoginInteraction {
+	return {
+		signal: controller.signal,
+		prompt: (prompt) => promptRadiusLogin(host, prompt, controller),
+		notify: (event) => notifyRadiusLogin(host, event, controller),
+	};
+}
+
+/**
+ * One pi sign-in prompt as a panel dialog: a menu for choices (browser / device
+ * code), the shared input dialog for text / the API key. Esc aborts the login.
+ */
+function promptRadiusLogin(host: FlowHost, prompt: RadiusLoginPrompt, controller: AbortController): Promise<string> {
+	return new Promise((resolve, reject) => {
+		if (controller.signal.aborted || prompt.signal?.aborted) {
+			reject(new Error("Login cancelled"));
+			return;
+		}
+		let settled = false;
+		const cancel = (): void => {
+			if (settled) return;
+			settled = true;
+			host.closeDialogs();
+			controller.abort();
+			reject(new Error("Login cancelled"));
+		};
+		// 某些 pi 流程会用它自己的 signal 取消一个已被别的事件解决掉的提示。
+		prompt.signal?.addEventListener("abort", cancel, { once: true });
+		if (prompt.type === "select") {
+			const options = prompt.options ?? [];
+			host.openMenu("share", {
+				title: prompt.message,
+				items: options.map((o) => o.label),
+				hints: radiusLoginHints(),
+				onSelect: (i) => {
+					if (settled) return;
+					const option = options[i];
+					if (!option) {
+						cancel();
+						return;
+					}
+					settled = true;
+					host.closeDialogs();
+					resolve(option.id);
+				},
+				onCancel: cancel,
+			});
+			return;
+		}
+		host.openPrompt("share", {
+			title: prompt.message,
+			...(prompt.placeholder ? { placeholder: prompt.placeholder } : {}),
+			hints: radiusPromptHints(),
+			...(prompt.type === "secret" ? { validate: (value: string) => (value.trim() ? undefined : t("status.radiusApiKeyRequired")) } : {}),
+			onSubmit: (value) => {
+				if (settled) return;
+				settled = true;
+				host.closeDialogs();
+				resolve(value);
+			},
+			onCancel: cancel,
+		});
+	});
+}
+
+/**
+ * Show what pi's sign-in reported: progress in the footer, the browser URL or
+ * device code in a notice (the browser opens automatically, like /login does).
+ * Closing the notice cancels the login.
+ */
+function notifyRadiusLogin(host: FlowHost, event: RadiusLoginEvent, controller: AbortController): void {
+	if (host.isDisposed() || controller.signal.aborted) return;
+	if (event.type === "progress") {
+		host.setStatus(event.message);
+		return;
+	}
+	if (event.type === "auth_url") {
+		host.actions?.openUrl?.(event.url);
+		const lines = [event.url, ...(event.instructions ? [event.instructions] : [])];
+		openRadiusNotice(host, controller, radiusBrowserTitle(), lines, event.url);
+		return;
+	}
+	if (event.type === "device_code") {
+		host.actions?.openUrl?.(event.verificationUri);
+		const lines = [radiusDeviceCode(event.userCode), event.verificationUri];
+		openRadiusNotice(host, controller, radiusDeviceTitle(), lines, `${event.userCode} ${event.verificationUri}`);
+		return;
+	}
+	// info：pi 给一段说明和若干链接（Radius 目前不会走到这里，保持和 /login 一致）。
+	const lines = [event.message, ...(event.links ?? []).map((link) => (link.label ? `${link.label}: ${link.url}` : link.url))];
+	openRadiusNotice(host, controller, radiusLoginTitle(), lines, event.links?.[0]?.url);
+}
+
+/** The waiting notice: Esc cancels; `y` copies the URL / code when there is one. */
+function openRadiusNotice(host: FlowHost, controller: AbortController, title: string, lines: string[], copyText: string | undefined): void {
+	host.openNotice("share", {
+		title,
+		lines,
+		hints: radiusNoticeHints(copyText !== undefined),
+		...(copyText !== undefined ? { onCopy: () => void copyRadiusNotice(host, copyText) } : {}),
+		onClose: () => {
+			host.closeDialogs();
+			controller.abort();
+		},
+	});
+}
+
+/** `y` in the sign-in notice: the link / code goes to the clipboard, the notice stays open. */
+async function copyRadiusNotice(host: FlowHost, text: string): Promise<void> {
+	const copy = host.actions?.copyText;
+	if (!copy) return;
+	try {
+		await copy(text);
+		if (!host.isDisposed()) host.setStatus(t("status.copiedRadiusLink"));
+	} catch (err) {
+		if (!host.isDisposed()) host.setStatus(t("status.copyFailed", { error: (err as Error).message }));
+	}
 }
 
 /** Upload, then put the viewer link on the clipboard (a long link may not fit the footer) and show it. */

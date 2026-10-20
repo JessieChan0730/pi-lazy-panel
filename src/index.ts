@@ -27,10 +27,12 @@ import {
 	importSession,
 	isCurrentSession,
 	newSession,
+	radiusAuthenticated,
 	renameSession,
 	resumeSession,
 	shareSession,
 } from "./actions/session-actions.ts";
+import { loginRadius, openExternalUrl } from "./actions/radius-auth.ts";
 import { copyNodeText, labelNode, restoreNode } from "./actions/tree-actions.ts";
 import { loadConfig, readConfigSnapshot, saveConfigPatch } from "./config/config.ts";
 import { loadSessionFileState, updateSessionFileState } from "./config/archive.ts";
@@ -142,6 +144,10 @@ export default function (pi: ExtensionAPI) {
 								}
 							: {}),
 					}),
+				// S 选 Radius 时先查凭据；没有就走面板里的 `/login radius`，登录后继续分享。
+				radiusAuthenticated: () => radiusAuthenticated(ctx.modelRegistry),
+				loginRadius: (method, interaction) => loginRadius(method, interaction),
+				openUrl: openExternalUrl,
 				shareDestination: piSettings.shareDestination,
 			};
 			// overlay 句柄在面板显示后才拿到；Enter 等待 pi 切换时用它暂时隐藏面板。

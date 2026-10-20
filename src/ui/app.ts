@@ -96,6 +96,7 @@ import { renderFooter } from "./widgets/footer.ts";
 import { buildHelpLines, compactKeys, helpBoxSize, helpEntryAtRow, helpViewport, overlayHelp, type HelpLine, type HelpOverlayProps } from "./widgets/help-overlay.ts";
 import { InputDialog, type InputDialogSpec } from "./widgets/input-dialog.ts";
 
+import { NoticeDialog, type NoticeDialogSpec } from "./widgets/notice-dialog.ts";
 import { renderSearchStatus, SearchBar } from "./widgets/search-bar.ts";
 import { SelectDialog, type SelectDialogSpec } from "./widgets/select-dialog.ts";
 import { SessionInfoDialog } from "./widgets/session-info-dialog.ts";
@@ -206,6 +207,8 @@ export class LazyPanel implements Component, Focusable {
 	private readonly inputDialog: InputDialog;
 	/** Shared centered menu: the "Summarize branch?" choice and the delete confirmation. */
 	private readonly selectDialog: SelectDialog;
+	/** Centered read-only notice: Radius sign-in URL / device code. */
+	private readonly noticeDialog: NoticeDialog;
 	/** Full tree in a big box (`a` in the tree pane) with its own cursor, live search and the filter keys. */
 	private readonly treeDialog: TreeDialog;
 	/** `i` in SESSIONS: the read-only Session Info box. */
@@ -275,6 +278,7 @@ export class LazyPanel implements Component, Focusable {
 			theme: o.theme,
 			onChange: () => this.o.requestRender(),
 		});
+		this.noticeDialog = new NoticeDialog({ theme: o.theme });
 		this.treeDialog = new TreeDialog({
 			theme: o.theme,
 			onChange: () => this.o.requestRender(),
@@ -305,6 +309,7 @@ export class LazyPanel implements Component, Focusable {
 		this.overlays = [
 			widgetOverlay(this.inputDialog),
 			{ ...widgetOverlay(this.selectDialog), handleMouse: (event) => this.selectDialogMouse(event) },
+			widgetOverlay(this.noticeDialog),
 			widgetOverlay(this.infoDialog),
 			{ ...widgetOverlay(this.usageDialog), handleMouse: (event) => this.usageMouse(event) },
 			{
@@ -358,6 +363,7 @@ export class LazyPanel implements Component, Focusable {
 			currentSessionRow: () => this.currentSessionRow(),
 			openPrompt: (mode, spec) => this.openPrompt(mode, spec),
 			openMenu: (mode, spec) => this.openMenu(mode, spec),
+			openNotice: (mode, spec) => this.openNotice(mode, spec),
 			closeDialogs: () => this.closeDialogs(),
 			openInfo: (info, onCopy) => this.openInfo(info, onCopy),
 			openUsage: (info, onCopy) => this.openUsage(info, onCopy),
@@ -746,6 +752,7 @@ export class LazyPanel implements Component, Focusable {
 	 */
 	private openPrompt(mode: PanelMode, spec: InputDialogSpec): void {
 		this.selectDialog.close();
+		this.noticeDialog.close();
 		this.state.mode = mode;
 		this.inputDialog.open(spec);
 		this.inputDialog.focused = this._focused;
@@ -756,14 +763,25 @@ export class LazyPanel implements Component, Focusable {
 	private openMenu(mode: PanelMode, spec: SelectDialogSpec): void {
 		this.inputDialog.close();
 		this.inputDialog.focused = false;
+		this.noticeDialog.close();
 		this.state.mode = mode;
 		this.selectDialog.open(spec);
 		this.o.requestRender();
 	}
 
+	/** Show a read-only notice (Radius sign-in URL / device code); the prompt and menu (if any) close first. */
+	private openNotice(mode: PanelMode, spec: NoticeDialogSpec): void {
+		this.selectDialog.close();
+		this.inputDialog.close();
+		this.inputDialog.focused = false;
+		this.state.mode = mode;
+		this.noticeDialog.open(spec);
+		this.o.requestRender();
+	}
+
 	/**
-	 * End a flow: close its prompt / menu and go back to the base mode (`tree`
-	 * while the tree dialog is still open under it).
+	 * End a flow: close its prompt / menu / notice and go back to the base mode
+	 * (`tree` while the tree dialog is still open under it).
 	 *
 	 * 所有弹窗流程（打标签、恢复、删除、改名、fork、导出……）都从这里收尾；流程的目标由各自的回调闭包带着，不再存字段。
 	 */
@@ -772,6 +790,7 @@ export class LazyPanel implements Component, Focusable {
 		this.selectDialog.close();
 		this.inputDialog.close();
 		this.inputDialog.focused = false;
+		this.noticeDialog.close();
 		this.o.requestRender();
 	}
 

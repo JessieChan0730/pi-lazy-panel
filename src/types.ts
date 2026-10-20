@@ -123,6 +123,53 @@ export interface ShareResult {
 	destination: ShareDestination;
 }
 
+/** How to sign in to Radius, the two choices pi's `/login radius` offers: an account (OAuth) or an API key. */
+export type RadiusLoginMethod = "oauth" | "api_key";
+
+/** One choice of a Radius sign-in menu (browser / device code, supplied by pi's OAuth provider). */
+export interface RadiusLoginOption {
+	id: string;
+	label: string;
+	description?: string;
+}
+
+/**
+ * A prompt pi's Radius sign-in asks for. Kept structurally equal to pi-ai's
+ * `AuthPrompt` so the UI layer never has to import pi-ai (not a dependency of
+ * this plugin); `ModelRuntime.login` accepts it as-is.
+ */
+export interface RadiusLoginPrompt {
+	type: "text" | "secret" | "select" | "manual_code";
+	message: string;
+	placeholder?: string;
+	options?: readonly RadiusLoginOption[];
+	signal?: AbortSignal;
+}
+
+/** A link in an informational sign-in event. */
+export interface RadiusLoginLink {
+	url: string;
+	label?: string;
+}
+
+/**
+ * What pi's Radius sign-in reports while it runs: the browser URL or device
+ * code to show, informational text, and progress. Structurally equal to
+ * pi-ai's `AuthEvent`.
+ */
+export type RadiusLoginEvent =
+	| { type: "info"; message: string; links?: readonly RadiusLoginLink[] }
+	| { type: "auth_url"; url: string; instructions?: string }
+	| { type: "device_code"; userCode: string; verificationUri: string; intervalSeconds?: number; expiresInSeconds?: number }
+	| { type: "progress"; message: string };
+
+/** The callbacks the panel gives pi's Radius sign-in; `signal` cancels the whole flow. */
+export interface RadiusLoginInteraction {
+	signal: AbortSignal;
+	prompt(prompt: RadiusLoginPrompt): Promise<string>;
+	notify(event: RadiusLoginEvent): void;
+}
+
 /**
  * How TREE Enter leaves the branch it abandons — the three choices of pi's
  * `/tree`: no summary, a model-written summary of the abandoned branch, or a

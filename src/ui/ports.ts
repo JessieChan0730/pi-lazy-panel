@@ -54,6 +54,8 @@ import type {
 	ExportTarget,
 	ForkPoint,
 	ListScope,
+	RadiusLoginInteraction,
+	RadiusLoginMethod,
 	RestoreOptions,
 	SessionFileChange,
 	SessionFileState,
@@ -128,6 +130,12 @@ export interface ActionSource {
 	importSession?(input: string): Promise<EnterOutcome>;
 	/** S in SESSIONS (after the destination menu): upload to Radius or a private GitHub gist (/share). */
 	shareSession?(sessionFile: string, destination: SessionShareDestination): Promise<ShareResult>;
+	/** Does Radius have a credential right now? `S` → Radius asks before uploading; false = sign in first. */
+	radiusAuthenticated?(): Promise<boolean>;
+	/** Sign in to Radius with pi's own `/login radius` flow; the interaction supplies the panel dialogs. */
+	loginRadius?(method: RadiusLoginMethod, interaction: RadiusLoginInteraction): Promise<void>;
+	/** Open a URL in the platform browser (Radius sign-in). */
+	openUrl?(url: string): void;
 	/** pi's `sessionShareDestination`, the `S` menu's initial cursor (absent = `auto`). */
 	shareDestination?: SessionShareDestination;
 }

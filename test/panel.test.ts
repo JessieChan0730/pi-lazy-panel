@@ -3667,6 +3667,58 @@ test("S: pick Auto / Gist / Radius in a menu (Esc cancels), then upload, copy th
 	]);
 });
 
+test("S: an unauthenticated Radius share signs in through panel dialogs (URL notice, y copies, Esc cancels)", async () => {
+	const copies: string[] = [];
+	const opened: string[] = [];
+	const h = makeSessionActionPanel({
+		actions: {
+			radiusAuthenticated: async () => false,
+			openUrl: (url) => void opened.push(url),
+			copyText: async (text) => void copies.push(text),
+			loginRadius: async (_method, interaction) => {
+				interaction.notify({ type: "auth_url", url: "https://radius.test/authorize?state=x", instructions: "Continue in your browser." });
+				await new Promise((_resolve, reject) => {
+					interaction.signal.addEventListener("abort", () => reject(new Error("Login cancelled")), { once: true });
+				});
+			},
+		},
+	});
+	await h.panel.load();
+
+	h.panel.handleInput("S");
+	h.panel.handleInput("j");
+	h.panel.handleInput("j");
+	h.panel.handleInput("\r");
+	await flush();
+	// account vs API key, the same choices as /login radius
+	assert.equal(h.panel.state.mode, "share");
+	const methods = dialogAt(h.text(), "Radius sign-in");
+	assert.ok(methods?.body[0]?.includes("› Sign in with an account"), methods?.body.join("\n"));
+	h.panel.handleInput("\r");
+	await flush();
+
+	// pi's browser URL in the notice, opened in the platform browser
+	assert.deepEqual(opened, ["https://radius.test/authorize?state=x"]);
+	const notice = dialogAt(h.text(), "Continue in your browser");
+	assert.ok(notice?.body.some((line) => line.includes("https://radius.test/authorize?state=x")), notice?.body.join("\n"));
+	assert.ok(h.footer().includes("y copy"), h.footer());
+	assert.ok(h.footer().includes("Esc cancel"), h.footer());
+
+	// y copies the URL and leaves the notice up
+	h.panel.handleInput("y");
+	await flush();
+	assert.equal(copies.at(-1), "https://radius.test/authorize?state=x");
+	assert.ok(dialogAt(h.text(), "Continue in your browser"), "the notice is still open");
+
+	// Esc cancels the sign-in: nothing is uploaded
+	h.panel.handleInput("\x1b");
+	await flush();
+	await flush();
+	assert.deepEqual(h.shares, []);
+	assert.equal(h.panel.state.mode, "normal");
+	assert.ok(h.footer().includes("Radius sign-in cancelled"), h.footer());
+});
+
 test("S: the menu cursor starts on pi's sessionShareDestination (auto when unset)", async () => {
 	const cases = [
 		{ destination: "gist", marker: "› GitHub Gist", row: 1 },

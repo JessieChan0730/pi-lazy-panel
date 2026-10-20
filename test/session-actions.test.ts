@@ -10,7 +10,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { homedir, tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { test } from "node:test";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { SessionManager, CredentialSynchronizationError } from "@earendil-works/pi-coding-agent";
 import {
 	cloneSession,
 	type CommandSpec,
@@ -30,6 +30,7 @@ import {
 	type NewSessionContext,
 	newSession,
 	RADIUS_NOT_AUTHENTICATED,
+	radiusAuthenticated,
 	renameSession,
 	resumeSession,
 	shareBearerToken,
@@ -37,6 +38,7 @@ import {
 	shareViewerUrl,
 } from "../src/actions/session-actions.ts";
 import { type RestoreContext, restoreNode } from "../src/actions/tree-actions.ts";
+import { loginRadius } from "../src/actions/radius-auth.ts";
 import { EXTENSION_ID, SPINNER_FRAMES } from "../src/constants.ts";
 import { loadForkPoints, loadLastReply, loadSessionInfo } from "../src/data/content.ts";
 import { isEffectiveLeaf } from "../src/data/tree.ts";
@@ -940,6 +942,68 @@ test("shareBearerToken: apiKey first, then an Authorization bearer header", () =
 	assert.equal(shareBearerToken({ auth: { headers: { Authorization: "Bearer t2" } } }), "t2");
 	assert.equal(shareBearerToken({ auth: { headers: { authorization: "Basic x" } } }), undefined);
 	assert.equal(shareBearerToken({ auth: { headers: { authorization: null } } }), undefined);
+});
+
+test("radiusAuthenticated: true only when Radius resolves a bearer token; refresh errors count as signed out", async () => {
+	assert.equal(await radiusAuthenticated(undefined), false);
+	assert.equal(await radiusAuthenticated(radiusAuth(undefined)), false);
+	assert.equal(await radiusAuthenticated(radiusAuth("tok")), true);
+	assert.equal(await radiusAuthenticated({ getProviderAuth: async () => ({ auth: { headers: { authorization: "Bearer header" } } }) }), true);
+	assert.equal(
+		await radiusAuthenticated({
+			getProviderAuth: async () => {
+				throw new Error("refresh failed");
+			},
+		}),
+		false,
+	);
+});
+
+test("loginRadius: drives pi's Radius login with the picked method; only a post-save sync error is swallowed", async () => {
+	const calls: string[] = [];
+	const interaction = { signal: new AbortController().signal, prompt: async () => "", notify: () => {} };
+	const runtime = {
+		login: async (providerId: string, method: string) => {
+			calls.push(`${providerId}:${method}`);
+		},
+	};
+
+	await loginRadius("oauth", interaction, { runtime });
+	await loginRadius("api_key", interaction, { runtime });
+	assert.deepEqual(calls, ["radius:oauth", "radius:api_key"]);
+
+	// The credential was written; only the catalog sync failed, so the share can go on.
+	await loginRadius("oauth", interaction, {
+		runtime: {
+			login: async () => {
+				throw new CredentialSynchronizationError("radius", "login", undefined, { cause: new Error("catalog") });
+			},
+		},
+	});
+
+	// A real failure (and a sync error after the user cancelled) still rejects.
+	await assert.rejects(
+		loginRadius("oauth", interaction, {
+			runtime: {
+				login: async () => {
+					throw new Error("authorization denied");
+				},
+			},
+		}),
+		/authorization denied/,
+	);
+	const aborted = new AbortController();
+	aborted.abort();
+	await assert.rejects(
+		loginRadius("oauth", { ...interaction, signal: aborted.signal }, {
+			runtime: {
+				login: async () => {
+					throw new CredentialSynchronizationError("radius", "login", undefined, { cause: new Error("catalog") });
+				},
+			},
+		}),
+		CredentialSynchronizationError,
+	);
 });
 
 test("shareSession: radius uploads the active branch as NDJSON and returns the canonical URL", async (t) => {
