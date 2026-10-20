@@ -69,7 +69,7 @@ npm run i18n:check     # English/Chinese copy alignment
 - **Run mode**: available only in pi's TUI mode (`/lazy-panel` refuses to open outside TUI mode).
 - **OS**: cross-platform — Windows / macOS / Linux all work (paths are handled uniformly per platform).
 - **Terminal**: mouse support in regular mode needs a terminal that supports SGR mouse reporting (virtually all modern terminals do); without it, keyboard operation is unaffected.
-- **Optional external commands**: `/share` needs a logged-in GitHub CLI (`gh`); when deleting a session, `trash` is used if available (moving it to the recycle bin), otherwise the file is deleted directly.
+- **Optional external commands**: `/share` opens a destination menu — Auto (private GitHub Gist when `gh` is logged in, otherwise Radius), GitHub Gist, or Radius. Radius uses pi's `/login radius` credential, while the gist path needs a logged-in GitHub CLI (`gh`); when deleting a session, `trash` is used if available (moving it to the recycle bin), otherwise the file is deleted directly.
 
 ## Configuration
 

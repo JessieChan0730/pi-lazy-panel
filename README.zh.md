@@ -69,7 +69,7 @@ npm run i18n:check     # 中英文案对齐
 - **运行模式**：仅在 pi 的 TUI 模式下可用（非 TUI 模式下 `/lazy-panel` 会拒绝打开）。
 - **操作系统**：跨平台，Windows / macOS / Linux 均可（路径按平台统一处理）。
 - **终端**：regular 模式下的鼠标支持需要终端支持 SGR 鼠标上报（现代终端基本都支持）；不支持也不影响键盘操作。
-- **可选外部命令**：`/share` 需要已登录的 GitHub CLI（`gh`）；删除会话时若存在 `trash` 则移入回收站，否则直接删除。
+- **可选外部命令**：`/share` 先选目的地 —— Auto（`gh` 已登录就用私有 GitHub Gist，否则 Radius）/ GitHub Gist / Radius。Radius 用 pi 的 `/login radius` 凭据，Gist 路径需要已登录的 GitHub CLI（`gh`）；删除会话时若存在 `trash` 则移入回收站，否则直接删除。
 
 ## 配置文件
 
