@@ -142,15 +142,7 @@ test("prompt detail scrolls, pages, clamps, copies the original text and resets 
 	assert.equal(dialog.isOpen, false);
 });
 
-/** Only the help inside the box, never the main panel's footer. */
-function localHints(rows: string[]): string[] {
-	const plain = rows.map(stripTerminalSequences);
-	const divider = plain.map((line) => line.startsWith("├")).lastIndexOf(true);
-	assert.ok(divider >= 0, "a divider separates content from the local help");
-	return plain.slice(divider + 1, -1);
-}
-
-test("context and prompt dialogs show local shortcuts in both languages and wrap them in narrow boxes", () => {
+test("context and prompt dialogs leave the shortcuts to the footer instead of repeating them in the box", () => {
 	try {
 		for (const locale of ["en", "zh"] as const) {
 			initI18n(locale);
@@ -158,20 +150,26 @@ test("context and prompt dialogs show local shortcuts in both languages and wrap
 			usage.open({ info: info(), onCopy: () => {}, onClose: () => {} });
 			const prompt = new PromptDetailDialog(theme);
 			prompt.open({ category: "Context", prompt: "Source\n\n".repeat(60), onCopy: () => {} });
+			const usageHints = [`j/k/↑↓ ${t("hint.select")}`, `Enter ${t("hint.preview")}`, `y ${t("hint.copy")}`, `Esc ${t("hint.close")}`];
+			const promptHints = [`j/k/↑↓ ${t("hint.scroll")}`, `d/u ${t("hint.page")}`, `g/G ${t("hint.topBottom")}`, `y ${t("hint.copy")}`, `Esc ${t("hint.back")}`];
 			for (const width of [24, 40, 60, 100]) {
 				const usageRows = usage.render(width, 18);
-				const usageHelp = localHints(usageRows).join("\n");
-				for (const hint of [`j/k/↑↓ ${t("hint.select")}`, `Enter ${t("hint.preview")}`, `y ${t("hint.copy")}`, `Esc ${t("hint.close")}`]) assert.ok(usageHelp.includes(hint), usageHelp);
+				const usageText = usageRows.map(stripTerminalSequences).join("\n");
+				for (const hint of usageHints) assert.ok(!usageText.includes(hint), `usage box repeats the footer hint "${hint}"`);
 				assert.ok(usageRows.every((line) => visibleWidth(line) === width));
 				const top = prompt.render(width, 18);
-				const promptHelp = localHints(top);
-				for (const hint of [`j/k/↑↓ ${t("hint.scroll")}`, `d/u ${t("hint.page")}`, `g/G ${t("hint.topBottom")}`, `y ${t("hint.copy")}`, `Esc ${t("hint.back")}`]) assert.ok(promptHelp.join("\n").includes(hint), promptHelp.join("\n"));
+				const promptText = top.map(stripTerminalSequences).join("\n");
+				for (const hint of promptHints) assert.ok(!promptText.includes(hint), `prompt box repeats the footer hint "${hint}"`);
 				prompt.handleInput("G");
 				const bottom = prompt.render(width, 18);
-				assert.deepEqual(localHints(bottom), promptHelp, "scrolling does not move the local help");
-				assert.equal(bottom.length, 18);
+				assert.equal(bottom.length, top.length, "scrolling does not change the box height");
+				assert.equal(stripTerminalSequences(bottom[0]!), stripTerminalSequences(top[0]!), "the top border stays put");
+				assert.equal(stripTerminalSequences(bottom.at(-1)!), stripTerminalSequences(top.at(-1)!), "the bottom border stays put");
 				assert.ok(bottom.every((line) => visibleWidth(line) === width));
 			}
+			// The footer still receives the same shortcuts from each dialog's hints.
+			for (const hint of usageHints.map((text) => text.split(" ").at(-1)!)) assert.ok(usage.hints.some(([, label]) => label === hint));
+			for (const hint of promptHints.map((text) => text.split(" ").at(-1)!)) assert.ok(prompt.hints.some(([, label]) => label === hint));
 		}
 	} finally {
 		initI18n("en");

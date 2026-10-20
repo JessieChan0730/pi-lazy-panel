@@ -5,9 +5,7 @@ import { matchesKeyId } from "../../config/keys.ts";
 import { t } from "../../i18n/index.ts";
 import type { KeyHint } from "../../types.ts";
 import { normalizeNewlines } from "../../utils/format.ts";
-import { boxContains, centeredRect, FRAME_DIVIDER, frame, overlayCentered, type BoxRect } from "../frame.ts";
-
-import { renderDialogHints } from "./dialog-hints.ts";
+import { boxContains, centeredRect, frame, overlayCentered, type BoxRect } from "../frame.ts";
 
 interface PromptDetailSpec {
 	category: string;
@@ -84,9 +82,7 @@ export class PromptDetailDialog {
 
 	render(width: number, height: number): string[] {
 		const { theme } = this;
-		const hints = renderDialogHints(this.hints, theme, width - 2, Math.max(0, height - 4));
-		const hintHeight = hints.length ? hints.length + 1 : 0;
-		this.visible = Math.max(1, height - 2 - hintHeight);
+		this.visible = Math.max(1, height - 2);
 		if (!this.cache || this.cache.width !== width) {
 			const text = normalizeNewlines(this.spec?.prompt || t("usage.emptyPrompt"));
 			const md = new Markdown(text, 1, 0, getMarkdownTheme());
@@ -96,7 +92,6 @@ export class PromptDetailDialog {
 		this.scroll = Math.min(this.scroll, Math.max(0, all.length - this.visible));
 		const last = Math.min(all.length, this.scroll + this.visible);
 		const body = Array.from({ length: this.visible }, (_, i) => all[this.scroll + i] ?? "");
-		if (hints.length) body.push(FRAME_DIVIDER, ...hints);
 		return frame(body, {
 			width,
 			height,
