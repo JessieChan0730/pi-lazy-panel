@@ -3678,6 +3678,38 @@ test("S: pick Auto / Gist / Radius in a menu (Esc cancels), then upload, copy th
 	]);
 });
 
+test("a long footer result (share link) does not hide the shortcut hints of a dialog opened afterwards", async () => {
+	const url = "https://radius.earendil.com/artifact/01m5cnysszemc9pwrt9qf2yj3m";
+	const h = makeSessionActionPanel({
+		actions: {
+			shareSession: async () => ({ url, destination: "radius" }),
+		},
+	});
+	await h.panel.load();
+
+	// S → upload succeeds, the (long) viewer link lands in the footer
+	h.panel.handleInput("S");
+	h.panel.handleInput("\r");
+	await flush();
+	assert.ok(h.footer().includes(`share URL copied: ${url}`), h.footer());
+
+	// u: the stale result is dropped so the usage box gets the whole footer row
+	h.panel.handleInput("u");
+	await flush();
+	assert.equal(h.panel.state.mode, "usage");
+	assert.ok(!h.footer().includes(url), h.footer());
+	assert.ok(h.footer().includes("USAGE") && h.footer().includes("y copy") && h.footer().includes("Esc close"), h.footer());
+	h.panel.handleInput("\x1b");
+
+	// i: same for the Session Info box
+	h.panel.handleInput("i");
+	await flush();
+	assert.equal(h.panel.state.mode, "info");
+	assert.ok(!h.footer().includes(url), h.footer());
+	assert.ok(h.footer().includes("INFO") && h.footer().includes("y copy") && h.footer().includes("Esc close"), h.footer());
+	h.panel.dispose();
+});
+
 test("S: an unauthenticated Radius share signs in through panel dialogs (browser link copied, Esc cancels)", async () => {
 	const copies: string[] = [];
 	const opened: string[] = [];
