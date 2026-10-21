@@ -6,7 +6,7 @@
  *   │ › HTML   whole tree, opens in a browser             │
  *   │   JSONL  active branch, can be imported again        │
  *   └──────────────────────────────────────────────────────┘
- *   ┌─ Export to ──────────────────────────── FilmRecall ─┐
+ *   ┌─ Export to ─────────────────── Enter the export path ─┐
  *   │ E:\work\pi-session-2026-09-23T….html                 │
  *   └──────────────────────────────────────────────────────┘
  *
@@ -50,6 +50,11 @@ export function exportFormatHints(): KeyHint[] {
 /** Title of the output-path prompt (localised). */
 export function exportPathTitle(): string {
 	return t("dialog.exportPathTitle");
+}
+
+/** Right-hand title-bar note of the output-path prompt (the field asks for a path). */
+export function exportPathSubject(): string {
+	return t("dialog.exportPathSubject");
 }
 
 /** Footer hints while the output-path prompt is open. */

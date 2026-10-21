@@ -41,7 +41,7 @@ import {
 	overwriteFileTitle,
 	radiusSignOutTitle,
 } from "../widgets/confirm-dialog.ts";
-import { EXPORT_FORMAT_ORDER, exportFormatHints, exportFormats, exportFormatTitle, exportPathHints, exportPathTitle } from "../widgets/export-dialog.ts";
+import { EXPORT_FORMAT_ORDER, exportFormatHints, exportFormats, exportFormatTitle, exportPathHints, exportPathSubject, exportPathTitle } from "../widgets/export-dialog.ts";
 import { forkDialogHints, forkDialogSubject, forkDialogTitle } from "../widgets/fork-dialog.ts";
 import { importDialogHints, importDialogSubject, importDialogTitle } from "../widgets/import-dialog.ts";
 import { newSessionDialogHints, newSessionDialogTitle } from "../widgets/new-session-dialog.ts";
@@ -466,7 +466,8 @@ function openExportPath(host: FlowHost, job: ExportJob, format: ExportFormat, va
 		title: exportPathTitle(),
 		// 预填 pi 的默认路径（绝对路径），用户一眼能看到会写到哪里；改成目录就在里面用默认文件名。
 		value: value ?? resolveTarget(job.file, format, "").path,
-		subject: job.subject,
+		// 右上角提示这个框要填什么（而不是会话名，格式菜单上已经显示过会话了）。
+		subject: exportPathSubject(),
 		hints: exportPathHints(),
 		onSubmit: (v) => submitExportPath(host, job, format, v),
 		// Esc：退回格式菜单，光标停在刚选的格式上。

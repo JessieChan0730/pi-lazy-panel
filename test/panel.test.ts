@@ -43,10 +43,10 @@ import {
 	overwriteFileTitle,
 	radiusSignOutTitle,
 } from "../src/ui/widgets/confirm-dialog.ts";
-import { exportFormatTitle, exportPathTitle } from "../src/ui/widgets/export-dialog.ts";
+import { exportFormatTitle, exportPathSubject, exportPathTitle } from "../src/ui/widgets/export-dialog.ts";
 import { forkDialogTitle } from "../src/ui/widgets/fork-dialog.ts";
 import { buildHelpLines, helpBoxSize, helpLineCount, renderHelpBox } from "../src/ui/widgets/help-overlay.ts";
-import { importDialogTitle } from "../src/ui/widgets/import-dialog.ts";
+import { importDialogSubject, importDialogTitle } from "../src/ui/widgets/import-dialog.ts";
 import { InputDialog } from "../src/ui/widgets/input-dialog.ts";
 import { labelDialogTitle } from "../src/ui/widgets/label-dialog.ts";
 import { newSessionDialogTitle } from "../src/ui/widgets/new-session-dialog.ts";
@@ -71,8 +71,10 @@ const SHARE_SESSION_TITLE = shareTitle();
 const RADIUS_SIGN_OUT_TITLE = radiusSignOutTitle();
 const EXPORT_FORMAT_TITLE = exportFormatTitle();
 const EXPORT_PATH_TITLE = exportPathTitle();
+const EXPORT_PATH_SUBJECT = exportPathSubject();
 const FORK_DIALOG_TITLE = forkDialogTitle();
 const IMPORT_DIALOG_TITLE = importDialogTitle();
+const IMPORT_DIALOG_SUBJECT = importDialogSubject();
 const LABEL_DIALOG_TITLE = labelDialogTitle();
 const NEW_SESSION_DIALOG_TITLE = newSessionDialogTitle();
 const RENAME_DIALOG_TITLE = renameDialogTitle();
@@ -3484,6 +3486,7 @@ test("e: pick HTML / JSONL, the path prompt is pre-filled with the default, Ente
 	h.panel.handleInput("\r");
 	const prompt = dialogAt(h.text(), EXPORT_PATH_TITLE);
 	assert.ok(prompt, "the path prompt is drawn");
+	assert.ok(prompt.title.includes(EXPORT_PATH_SUBJECT), `subject = what to type: ${prompt.title}`);
 	assert.ok(prompt.body[0]!.includes("/work/pi-session-s1.html"), prompt.body.join("|"));
 	assert.ok(h.footer().includes("Enter export"), h.footer());
 
@@ -3579,7 +3582,9 @@ test("I: type a path, confirm, then import and close; Esc on the confirmation ke
 
 	h.panel.handleInput("I");
 	assert.equal(h.panel.state.mode, "import");
-	assert.ok(dialogAt(h.text(), IMPORT_DIALOG_TITLE), "the import prompt is drawn");
+	const prompt = dialogAt(h.text(), IMPORT_DIALOG_TITLE);
+	assert.ok(prompt, "the import prompt is drawn");
+	assert.ok(prompt.title.includes(IMPORT_DIALOG_SUBJECT), `subject = what to type: ${prompt.title}`);
 	assert.ok(h.footer().includes("IMPORT") && h.footer().includes("Enter import"), h.footer());
 	for (const ch of "~/backup.jsonl") h.panel.handleInput(ch);
 	h.panel.handleInput("\r");
@@ -3589,8 +3594,8 @@ test("I: type a path, confirm, then import and close; Esc on the confirmation ke
 
 	// Esc → back on the prompt with the path kept
 	h.panel.handleInput("\x1b");
-	const prompt = dialogAt(h.text(), IMPORT_DIALOG_TITLE);
-	assert.ok(prompt?.body[0]!.includes("~/backup.jsonl"), prompt?.body.join("|"));
+	const reopened = dialogAt(h.text(), IMPORT_DIALOG_TITLE);
+	assert.ok(reopened?.body[0]!.includes("~/backup.jsonl"), reopened?.body.join("|"));
 	assert.deepEqual(h.imports, []);
 
 	// Enter, y → import, the panel is hidden while pi switches and then closes
