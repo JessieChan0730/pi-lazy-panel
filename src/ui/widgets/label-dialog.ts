@@ -1,7 +1,7 @@
 /**
- * Label prompt (`L`, same as `Shift+L` in pi's `/tree`):
- * the title, title-bar subject and footer hints that ./input-dialog.ts shows
- * while labelling.
+ * Label prompt (`L`, same as `Shift+L` in pi's `/tree`): the title and footer
+ * hints that ./input-dialog.ts shows while labelling. The title-bar subject is
+ * ./dialog-subject.ts's `nodeSubject` (role · time).
  *
  * The panel owns the target node and persists the change through the injected
  * actions; the pre-filled value is the node's current label and an empty
@@ -12,17 +12,11 @@
  */
 
 import { t } from "../../i18n/index.ts";
-import type { KeyHint, TreeRow } from "../../types.ts";
-import { formatTime } from "../../utils/format.ts";
+import type { KeyHint } from "../../types.ts";
 
 /** Title on the top border of the box. */
 export function labelDialogTitle(): string {
 	return t("dialog.labelTitle");
-}
-
-/** Title-bar subject: which node is being labelled, as role · time (never its text). */
-export function labelDialogSubject(row: TreeRow): string {
-	return `${t(`role.${row.role}`)} · ${formatTime(row.timestamp)}`;
 }
 
 /** Footer hints while the dialog is open. */

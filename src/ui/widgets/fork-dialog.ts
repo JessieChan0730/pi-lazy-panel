@@ -26,3 +26,12 @@ export function forkDialogHints(): KeyHint[] {
 		["Esc", t("hint.cancel")],
 	];
 }
+
+/**
+ * Title-bar subject of the confirmation: the picked message's position in the
+ * list, not its text (the selector already showed it, and a 60-column box
+ * would cut it to a meaningless "…"). Esc goes back to that same entry.
+ */
+export function forkDialogSubject(index: number, total: number): string {
+	return `#${index + 1}/${total}`;
+}

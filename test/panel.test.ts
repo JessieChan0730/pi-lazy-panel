@@ -1300,7 +1300,7 @@ test("tree dialog: Enter on another node asks Summarize branch? over the dialog;
 	assert.equal(h.panel.state.mode, "restore");
 	const menu = summaryMenu(h.text());
 	assert.ok(menu, "the menu should be drawn");
-	assert.ok(menu.title.includes("user: msg 0"), menu.title);
+	assert.ok(menu.title.includes("user · ") && !menu.title.includes("msg 0"), menu.title);
 	assert.ok(h.text().some((l) => l.includes("┌─ TREE ")), "the tree dialog stays underneath");
 	h.panel.handleInput("\x1b");
 	assert.equal(h.panel.state.mode, "tree");
@@ -1785,7 +1785,7 @@ test("Enter on another node opens the Summarize branch? menu: j/k move, Esc goes
 	assert.ok(menu, "the menu should be drawn");
 	// drawn over the middle of the panel, naming the node; three entries in pi's order, cursor on the first
 	assert.ok(menu.top > 2 && menu.top < lines.length - 6, `menu row ${menu.top} of ${lines.length}`);
-	assert.ok(menu.title.includes("assistant: msg 1"), menu.title);
+	assert.ok(menu.title.includes("assistant · ") && !menu.title.includes("msg 1"), menu.title);
 	for (const [i, m] of SUMMARY_MENU.entries()) assert.ok(menu.items[i]!.includes(m.label), `${i}: ${menu.items[i]}`);
 	assert.ok(menu.items[0]!.startsWith("No summary") || menu.selected?.startsWith("No summary"), menu.items[0]);
 	assert.ok(lines[menu.top + SUMMARY_MENU.length + 1]!.includes("└"), "bottom border right under the last entry");
@@ -1874,7 +1874,7 @@ test("Summarize with custom prompt opens a one-line input; Esc returns to the me
 	assert.equal(summaryMenu(lines), undefined);
 	const promptTop = lines.findIndex((l) => l.includes(`┌─ ${CUSTOM_PROMPT_TITLE} `));
 	assert.ok(promptTop > 0, "the custom prompt should be drawn");
-	assert.ok(lines[promptTop]!.includes("assistant: msg 1"), lines[promptTop]);
+	assert.ok(lines[promptTop]!.includes("assistant · ") && !lines[promptTop]!.includes("msg 1"), lines[promptTop]);
 	assert.ok(lines.at(-1)!.includes("Enter summarize") && lines.at(-1)!.includes("Esc back"), lines.at(-1));
 	for (const l of h.panel.render(100)) assert.equal(visibleWidth(l), 100);
 
@@ -2734,7 +2734,7 @@ test("d asks Delete session? in a centered Yes / No box starting on No; n / Esc 
 	const dlg = dialogAt(lines, DELETE_SESSION_TITLE);
 	assert.ok(dlg, "the confirmation should be drawn");
 	assert.ok(dlg.top > 2 && dlg.top < lines.length - 6, `dialog row ${dlg.top} of ${lines.length}`);
-	assert.ok(dlg.title.includes("beta"), dlg.title);
+	assert.ok(dlg.title.includes("beta") && !dlg.title.includes("second words"), `subject = name · date, not the preview: ${dlg.title}`);
 	assert.equal(dlg.body.length, 2);
 	assert.ok(dlg.body[0]!.includes("  Yes") && !dlg.body[0]!.includes("›"), dlg.body[0]);
 	assert.ok(dlg.body[1]!.includes("› No"), dlg.body[1]);
@@ -2899,7 +2899,7 @@ test("r opens a centered Rename box pre-filled with the name; Enter saves and th
 	const dlg = dialogAt(lines, RENAME_DIALOG_TITLE);
 	assert.ok(dlg, "the Rename dialog should be drawn");
 	assert.ok(dlg.top > 2 && dlg.top < lines.length - 6, `dialog row ${dlg.top} of ${lines.length}`);
-	assert.ok(dlg.title.includes("second words"), dlg.title);
+	assert.ok(dlg.title.includes("beta") && !dlg.title.includes("second words"), `subject = the session's name: ${dlg.title}`);
 	assert.ok(dlg.body[0]!.includes("beta"), dlg.body[0]);
 	assert.ok(h.footer().includes("RENAME") && h.footer().includes("Enter save") && h.footer().includes("empty removes"), h.footer());
 
@@ -3290,7 +3290,7 @@ test("c prompts for optional focus instructions, then compacts the cursor sessio
 	assert.equal(h.panel.state.mode, "compact");
 	const dlg = dialogAt(h.text(), COMPACT_DIALOG_TITLE);
 	assert.ok(dlg, "the Compact prompt is drawn");
-	assert.ok(dlg.title.includes("second words"), dlg.title);
+	assert.ok(dlg.title.includes("beta") && !dlg.title.includes("second words"), `subject = the session's name: ${dlg.title}`);
 	assert.ok(h.footer().includes("COMPACT") && h.footer().includes("Enter compact"), h.footer());
 
 	// typed instructions travel through to the action; the panel is hidden while pi works, then closes
@@ -3355,7 +3355,7 @@ test("o lists the user messages to fork before (last selected), confirms, then f
 	h.panel.handleInput("\r");
 	const confirm = dialogAt(h.text(), FORK_SESSION_TITLE);
 	assert.ok(confirm, "the confirmation is drawn");
-	assert.ok(confirm.title.includes("second question"), confirm.title);
+	assert.ok(confirm.title.includes("#2/2") && !confirm.title.includes("second question"), `the subject is the picked position, not the text: ${confirm.title}`);
 	assert.ok(confirm.body[1]!.includes("› No"), "the cursor starts on No");
 	assert.deepEqual(h.forks, [], "nothing is forked until confirmed");
 
@@ -3410,7 +3410,7 @@ test("y asks Clone session? and only clones once confirmed; n / Esc cancel", asy
 	h.panel.handleInput("y");
 	assert.equal(h.panel.state.mode, "clone");
 	const dlg = dialogAt(h.text(), CLONE_SESSION_TITLE);
-	assert.ok(dlg && dlg.title.includes("alpha"), dlg?.title);
+	assert.ok(dlg && dlg.title.includes("alpha") && !dlg.title.includes("first words"), `subject = name · date: ${dlg?.title}`);
 	assert.ok(dlg!.body[1]!.includes("› No"), "cursor starts on No");
 	assert.ok(h.footer().includes("CLONE"), h.footer());
 	h.panel.handleInput("n");

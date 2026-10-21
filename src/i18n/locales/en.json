@@ -345,7 +345,7 @@
     "delete": "Delete session?",
     "deleteN_one": "Delete {{count}} session?",
     "deleteN_other": "Delete {{count}} sessions?",
-    "deleteSkipped": "current session skipped · {{subjects}}",
+    "deleteSkipped": "current session skipped",
     "clone": "Clone session?",
     "fork": "Fork session?",
     "import": "Import and switch to it?",

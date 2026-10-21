@@ -12,7 +12,7 @@
  */
 
 import { t } from "../../i18n/index.ts";
-import { findSessionIndex } from "../../data/sessions.ts";
+import { findSessionIndex, sessionTitle } from "../../data/sessions.ts";
 import type {
 	ContextUsageInfo,
 	DeleteMethod,
@@ -29,6 +29,7 @@ import type {
 } from "../../types.ts";
 import { alertDialogSpec, cannotDeleteActiveTitle } from "../widgets/alert-dialog.ts";
 import { compactDialogHints, compactDialogTitle } from "../widgets/compact-dialog.ts";
+import { sessionSubject } from "../widgets/dialog-subject.ts";
 import { dialogCloseHint } from "../widgets/dialog-header.ts";
 import {
 	cloneSessionTitle,
@@ -41,7 +42,7 @@ import {
 	radiusSignOutTitle,
 } from "../widgets/confirm-dialog.ts";
 import { EXPORT_FORMAT_ORDER, exportFormatHints, exportFormats, exportFormatTitle, exportPathHints, exportPathTitle } from "../widgets/export-dialog.ts";
-import { forkDialogHints, forkDialogTitle } from "../widgets/fork-dialog.ts";
+import { forkDialogHints, forkDialogSubject, forkDialogTitle } from "../widgets/fork-dialog.ts";
 import { importDialogHints, importDialogSubject, importDialogTitle } from "../widgets/import-dialog.ts";
 import { newSessionDialogHints, newSessionDialogTitle } from "../widgets/new-session-dialog.ts";
 import {
@@ -104,14 +105,14 @@ export function confirmDeleteSession(host: FlowHost): void {
 	}
 	// 和 pi 内置 /resume 一样：当前打开的会话不能删；这里弹一个警告框告诉用户为什么。
 	if (findSessionIndex([row], host.currentSessionFile) === 0) {
-		openCannotDeleteAlert(host, sessionTitle(row));
+		openCannotDeleteAlert(host, row);
 		return;
 	}
 	host.openMenu(
 		"confirm",
 		confirmDialogSpec({
 			title: deleteSessionTitle(),
-			subject: sessionTitle(row),
+			subject: sessionSubject(row),
 			onConfirm: () => void deleteSession(host, row),
 			onCancel: () => host.closeDialogs(),
 		}),
@@ -135,7 +136,7 @@ function confirmDeleteSelected(host: FlowHost): void {
 	if (targets.length === 0) {
 		// 选中的全是（其实只可能有一个）当前打开的会话：弹警告框，什么都不删。
 		const active = rows.find((r) => findSessionIndex([r], host.currentSessionFile) === 0);
-		openCannotDeleteAlert(host, active ? sessionTitle(active) : undefined);
+		openCannotDeleteAlert(host, active);
 		return;
 	}
 	const skipped = rows.length - targets.length;
@@ -145,9 +146,8 @@ function confirmDeleteSelected(host: FlowHost): void {
 		"confirm",
 		confirmDialogSpec({
 			title: deleteSessionsTitle(targets.length),
-			subject: skipped
-				? t("confirm.deleteSkipped", { subjects: targets.map((r) => sessionTitle(r)).join(", ") })
-				: targets.map((r) => sessionTitle(r)).join(", "),
+			// 数量已经在标题里；只提示“当前会话被跳过”。拼接多个标题只会被截断。
+			...(skipped ? { subject: t("confirm.deleteSkipped") } : {}),
 			onConfirm: () => void deleteSelected(host, targets),
 			onCancel: () => host.closeDialogs(),
 		}),
@@ -159,12 +159,12 @@ function confirmDeleteSelected(host: FlowHost): void {
  * deleted. Reuses the select dialog + "confirm" mode so Enter / Esc / OK all
  * dismiss it through `closeDialogs`; nothing is ever deleted from here.
  */
-function openCannotDeleteAlert(host: FlowHost, subject: string | undefined): void {
+function openCannotDeleteAlert(host: FlowHost, row: SessionRow | undefined): void {
 	host.openMenu(
 		"confirm",
 		alertDialogSpec({
 			title: cannotDeleteActiveTitle(),
-			...(subject ? { subject } : {}),
+			...(row ? { subject: sessionSubject(row) } : {}),
 			onClose: () => host.closeDialogs(),
 		}),
 	);
@@ -211,7 +211,7 @@ async function deleteSelected(host: FlowHost, targets: SessionRow[]): Promise<vo
 			host.state.selectedSessionFiles.delete(row.file);
 			removed.push(row.file);
 		} catch (err) {
-			firstError ??= `${sessionTitle(row)}: ${(err as Error).message}`;
+			firstError ??= `${sessionTitle(row) || t("pane.emptySession")}: ${(err as Error).message}`;
 		}
 		if (host.isDisposed()) return;
 	}
@@ -232,11 +232,11 @@ export function openRenameInput(host: FlowHost): void {
 		host.setStatus(t("status.renameUnavailable"));
 		return;
 	}
-	// 弹窗标题右侧显示是给哪个会话改名（首条消息预览，名字本身在输入框里）。
+	// 弹窗标题右侧只标出会话身份（名字/模型 · 日期）：名字本身在输入框里，预览截断后没信息量。
 	host.openPrompt("rename", {
 		title: renameDialogTitle(),
 		value: row.name ?? "",
-		subject: row.preview || row.id,
+		subject: sessionSubject(row),
 		hints: renameDialogHints(),
 		onSubmit: (v) => void submitRename(host, row, v),
 		onCancel: () => host.closeDialogs(),
@@ -294,11 +294,11 @@ export function openCompactInput(host: FlowHost): void {
 		host.setStatus(t("status.compactUnavailable"));
 		return;
 	}
-	// 标题右侧显示压缩的是哪个会话（首条消息预览）；输入框留空 = 用 pi 的默认压缩指令。
+	// 标题右侧显示压缩的是哪个会话（名字/模型 · 日期）；输入框留空 = 用 pi 的默认压缩指令。
 	host.openPrompt("compact", {
 		title: compactDialogTitle(),
 		value: "",
-		subject: row.preview || row.id,
+		subject: sessionSubject(row),
 		hints: compactDialogHints(),
 		onSubmit: (v) => void submitCompact(host, row, v),
 		onCancel: () => host.closeDialogs(),
@@ -336,7 +336,7 @@ export async function startFork(host: FlowHost): Promise<void> {
 		return;
 	}
 	// 默认停在最后一条 user 消息（和 pi 内置 /fork 一致）。
-	openForkSelector(host, { file: row.file, subject: sessionTitle(row), points }, points.length - 1);
+	openForkSelector(host, { file: row.file, subject: sessionSubject(row), points }, points.length - 1);
 }
 
 /** The fork selector with the cursor on `index` (Esc / No on the confirmation comes back onto that message). */
@@ -365,7 +365,8 @@ function confirmFork(host: FlowHost, target: ForkTarget, index: number): void {
 		"fork",
 		confirmDialogSpec({
 			title: forkSessionTitle(),
-			subject: point.text,
+			// 只回显“第几条”：正文在选择器里刚看过，塞进标题栏只会被截成省略号。
+			subject: forkDialogSubject(index, target.points.length),
 			onConfirm: () => void runFork(host, target.file, point.entryId),
 			// Esc / No：退回选择器，光标停在刚选中的那条消息上。
 			onCancel: () => openForkSelector(host, target, index),
@@ -394,7 +395,7 @@ export function confirmCloneSession(host: FlowHost): void {
 		"clone",
 		confirmDialogSpec({
 			title: cloneSessionTitle(),
-			subject: sessionTitle(row),
+			subject: sessionSubject(row),
 			onConfirm: () => void runClone(host, row),
 			onCancel: () => host.closeDialogs(),
 		}),
@@ -435,7 +436,7 @@ export function startExport(host: FlowHost): void {
 		host.setStatus(t("status.exportUnavailable"));
 		return;
 	}
-	openExportMenu(host, { file: row.file, subject: sessionTitle(row) }, 0);
+	openExportMenu(host, { file: row.file, subject: sessionSubject(row) }, 0);
 }
 
 /** The format menu with the cursor on `index` (Esc from the path prompt comes back onto the chosen format). */
@@ -989,11 +990,6 @@ async function copyContextUsage(host: FlowHost, text: string): Promise<void> {
 	} catch (err) {
 		host.setStatus(t("status.copyFailed", { error: (err as Error).message }));
 	}
-}
-
-/** Title of a session as the pane shows it: its name, else the first-message preview. */
-function sessionTitle(row: SessionRow): string {
-	return row.name ?? row.preview ?? "(empty session)";
 }
 
 /**

@@ -16,6 +16,7 @@ import { openTreeFilterMenu, restoreTreeNode, type TreeTarget } from "../src/ui/
 import type { ActionSource, DataSource } from "../src/ui/ports.ts";
 import { createInitialState } from "../src/ui/state.ts";
 import { CONFIRM_NO_INDEX, CONFIRM_YES_INDEX, deleteSessionsTitle, overwriteFileTitle } from "../src/ui/widgets/confirm-dialog.ts";
+import { nodeSubject } from "../src/ui/widgets/dialog-subject.ts";
 import type { InputDialogSpec } from "../src/ui/widgets/input-dialog.ts";
 import type { NoticeDialogSpec } from "../src/ui/widgets/notice-dialog.ts";
 import { CUSTOM_PROMPT_INDEX } from "../src/ui/widgets/restore-dialog.ts";
@@ -219,7 +220,7 @@ test("fork: the selector starts on the last user message; No on the confirmation
 	assert.equal(h.menu().initialIndex, 2, "like pi's /fork: the last user message");
 	assert.equal(h.menu().maxRows, 10, "a long list scrolls within the host's limit");
 	h.menu().onSelect(0);
-	assert.equal(h.menu().subject, "first", "the confirmation names the message");
+	assert.equal(h.menu().subject, "#1/3", "the confirmation names the picked position, not the message text");
 	h.menu().onSelect(CONFIRM_NO_INDEX);
 	assert.equal(h.menu().initialIndex, 0, "back on the message just picked");
 	h.menu().onSelect(0);
@@ -240,12 +241,12 @@ test("restore: Summarize branch? → custom prompt, Esc there comes back onto th
 			},
 		},
 	});
-	function node(isLeaf: boolean): TreeTarget {
-		return { file: "/tmp/s1.jsonl", row: { entryId: "e1", role: "user", kind: "message", text: "hi", timestamp: 0, onActiveBranch: isLeaf, isLeaf } };
-	}
-	restoreTreeNode(h.host, node(false));
+	const target: TreeTarget = { file: "/tmp/s1.jsonl", row: { entryId: "e1", role: "user", kind: "message", text: "hi", timestamp: 0, onActiveBranch: false, isLeaf: false } };
+	restoreTreeNode(h.host, target);
 	assert.equal(h.state.mode, "restore");
-	assert.equal(h.menu().subject, "user: hi");
+	const subject = h.menu().subject ?? "";
+	assert.equal(subject, nodeSubject(target.row), "the menu identifies the node by role · time, not its text");
+	assert.ok(!subject.includes("hi"));
 	h.menu().onSelect(CUSTOM_PROMPT_INDEX);
 	h.prompt().onCancel();
 	assert.equal(h.menu().initialIndex, CUSTOM_PROMPT_INDEX, "Esc lands back on the custom entry");
@@ -255,7 +256,8 @@ test("restore: Summarize branch? → custom prompt, Esc there comes back onto th
 	assert.deepEqual(restores, [{ summarize: true, customInstructions: "keep the API notes" }]);
 	assert.deepEqual(h.entered, ["restore"]);
 	// the active leaf restores right away, without a summary and without a menu
-	restoreTreeNode(h.host, node(true));
+	const leaf: TreeTarget = { file: "/tmp/s1.jsonl", row: { entryId: "e1", role: "user", kind: "message", text: "hi", timestamp: 0, onActiveBranch: true, isLeaf: true } };
+	restoreTreeNode(h.host, leaf);
 	await flush();
 	assert.deepEqual(restores.at(-1), { summarize: false });
 	assert.equal(h.anyOpen(), false);
@@ -279,6 +281,7 @@ test("batch delete: one confirmation, the open session is left out, a failure st
 	confirmDeleteSession(h.host);
 	assert.equal(h.state.mode, "confirm");
 	assert.equal(h.menu().title, deleteSessionsTitle(2), "the open session is not counted");
+	assert.equal(h.menu().subject, t("confirm.deleteSkipped"), "only the skip notice, no joined titles");
 	assert.deepEqual([...h.state.selectedSessionFiles].sort(), ["/tmp/s2.jsonl", "/tmp/s3.jsonl"], "…and no longer selected");
 	h.menu().onSelect(CONFIRM_YES_INDEX);
 	await flush();

@@ -345,7 +345,7 @@
     "delete": "删除会话？",
     "deleteN_one": "删除 {{count}} 个会话？",
     "deleteN_other": "删除 {{count}} 个会话？",
-    "deleteSkipped": "已跳过当前会话 · {{subjects}}",
+    "deleteSkipped": "已跳过当前会话",
     "clone": "克隆会话？",
     "fork": "分叉会话？",
     "import": "导入并切换过去？",
