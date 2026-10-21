@@ -43,10 +43,10 @@ import {
 	overwriteFileTitle,
 	radiusSignOutTitle,
 } from "../src/ui/widgets/confirm-dialog.ts";
-import { exportFormatTitle, exportPathTitle } from "../src/ui/widgets/export-dialog.ts";
+import { exportFormatTitle, exportPathSubject, exportPathTitle } from "../src/ui/widgets/export-dialog.ts";
 import { forkDialogTitle } from "../src/ui/widgets/fork-dialog.ts";
 import { buildHelpLines, helpBoxSize, helpLineCount, renderHelpBox } from "../src/ui/widgets/help-overlay.ts";
-import { importDialogTitle } from "../src/ui/widgets/import-dialog.ts";
+import { importDialogSubject, importDialogTitle } from "../src/ui/widgets/import-dialog.ts";
 import { InputDialog } from "../src/ui/widgets/input-dialog.ts";
 import { labelDialogTitle } from "../src/ui/widgets/label-dialog.ts";
 import { newSessionDialogTitle } from "../src/ui/widgets/new-session-dialog.ts";
@@ -71,8 +71,10 @@ const SHARE_SESSION_TITLE = shareTitle();
 const RADIUS_SIGN_OUT_TITLE = radiusSignOutTitle();
 const EXPORT_FORMAT_TITLE = exportFormatTitle();
 const EXPORT_PATH_TITLE = exportPathTitle();
+const EXPORT_PATH_SUBJECT = exportPathSubject();
 const FORK_DIALOG_TITLE = forkDialogTitle();
 const IMPORT_DIALOG_TITLE = importDialogTitle();
+const IMPORT_DIALOG_SUBJECT = importDialogSubject();
 const LABEL_DIALOG_TITLE = labelDialogTitle();
 const NEW_SESSION_DIALOG_TITLE = newSessionDialogTitle();
 const RENAME_DIALOG_TITLE = renameDialogTitle();
@@ -174,7 +176,7 @@ test("settings opens immediately in all panes, owns keys and mouse, and preserve
 		h.panel.handleInput("d");
 		assert.match(h.text(120).join("\n"), /Settings/);
 		assert.doesNotMatch(h.text(120).join("\n"), /Preview only|Settings · Read-only/);
-		assert.match(h.text(120).at(-1)!, /Esc close/);
+		assert.match(h.text(120).at(-1)!, /Esc\/q close/);
 		h.panel.handleInput("\x1b");
 		assert.equal(h.panel.state.settings.phase, "closed");
 		assert.equal(h.panel.state.mode, "normal");
@@ -1179,7 +1181,7 @@ test("/ opens the search bar in the tree pane (footer lists it), and a opens the
 	assert.equal(h.panel.state.treeFilter, "default");
 	assert.equal(h.text().at(-1)!.includes("not implemented"), false, h.text().at(-1));
 
-	// a: big box with a search row, a divider, the rows (cursor on the pane's node) and a hint row
+	// a: big box with a search row, a divider and the rows (cursor on the pane's node); the hints stay in the footer
 	h.panel.handleInput("a");
 	assert.equal(h.panel.state.mode, "tree");
 	const lines = h.text(100);
@@ -1193,11 +1195,11 @@ test("/ opens the search bar in the tree pane (footer lists it), and a opens the
 	assert.ok(lines[top + 4]!.includes("› ") && lines[top + 4]!.includes("assistant: msg 1"), lines[top + 4]);
 	// the box starts at column 2, so its bottom border is the first "└" found there (the pane borders sit at column 0)
 	const bottom = lines.findIndex((l, i) => i > top && l.slice(2).startsWith("└"));
-	assert.ok(lines[bottom - 1]!.includes("/ search") && lines[bottom - 1]!.includes("q close"), lines[bottom - 1]);
-	assert.ok(lines[bottom - 2]!.includes("├──"), lines[bottom - 2]);
+	// the box does not repeat the footer hints
+	assert.ok(!lines.slice(top, bottom).some((l) => l.includes("Esc/q close")), lines.slice(top, bottom).join("\n"));
 	// the box spans the terminal minus a 2-column margin and the footer shows its hints
 	assert.equal(lines[top]!.indexOf("┌"), 2);
-	assert.ok(lines.at(-1)!.includes("TREE") && lines.at(-1)!.includes("q close"), lines.at(-1));
+	assert.ok(lines.at(-1)!.includes("TREE") && lines.at(-1)!.includes("Esc/q close"), lines.at(-1));
 	for (const l of h.panel.render(100)) assert.equal(visibleWidth(l), 100);
 
 	// j moves the dialog's own cursor (the pane's stays put until the dialog closes); y copies the dialog's row
@@ -1258,7 +1260,7 @@ test("tree dialog: gg/G move its cursor, L labels its row over the dialog, Enter
 	let lines = h.text();
 	const dlg = labelDialog(lines);
 	assert.ok(dlg, "the Label dialog should be drawn");
-	assert.ok(dlg.title.includes("assistant: msg 1"), dlg.title);
+	assert.ok(dlg.title.includes("assistant ·") && !dlg.title.includes("msg 1"), dlg.title);
 	assert.ok(lines.some((l) => l.includes("┌─ TREE ")), "the tree dialog stays underneath");
 	assert.ok(lines.at(-1)!.includes("LABEL"), lines.at(-1));
 	for (const ch of "ckpt") h.panel.handleInput(ch);
@@ -1300,7 +1302,7 @@ test("tree dialog: Enter on another node asks Summarize branch? over the dialog;
 	assert.equal(h.panel.state.mode, "restore");
 	const menu = summaryMenu(h.text());
 	assert.ok(menu, "the menu should be drawn");
-	assert.ok(menu.title.includes("user: msg 0"), menu.title);
+	assert.ok(menu.title.includes("user · ") && !menu.title.includes("msg 0"), menu.title);
 	assert.ok(h.text().some((l) => l.includes("┌─ TREE ")), "the tree dialog stays underneath");
 	h.panel.handleInput("\x1b");
 	assert.equal(h.panel.state.mode, "tree");
@@ -1529,7 +1531,7 @@ test("tree dialog z folds / unfolds on the shared fold state; h switches nothing
 	h.panel.dispose();
 });
 
-test("? does nothing inside the tree dialog: every key it has is on its bottom row", async () => {
+test("? does nothing inside the tree dialog: its keys live in the footer, not in the box", async () => {
 	const h = makeTreeActionPanel();
 	await h.panel.load();
 	h.panel.handleInput("2");
@@ -1538,14 +1540,15 @@ test("? does nothing inside the tree dialog: every key it has is on its bottom r
 	assert.equal(h.panel.state.helpOpen, false);
 	assert.equal(h.panel.state.mode, "tree");
 	const lines = h.text(160);
-	const bottom = lines.findIndex((l, i) => i > 0 && l.slice(2).startsWith("└"));
-	const hintRow = lines[bottom - 1]!;
+	const footer = lines.at(-1)!;
 	for (const hint of ["/ search", "j/k move", "Enter restore", "q close", "z fold", "d/t/u/l/a filter", "y copy", "T label"]) {
-		assert.ok(hintRow.includes(hint), `${hint} missing from: ${hintRow}`);
+		assert.ok(footer.includes(hint), `${hint} missing from: ${footer}`);
 	}
-	assert.equal(hintRow.includes("? help"), false, hintRow);
-	assert.equal(hintRow.includes("h/l"), false, hintRow);
-	assert.ok(lines.at(-1)!.includes("d/t/u/l/a filter"), `the footer repeats the hints: ${lines.at(-1)}`);
+	assert.equal(footer.includes("? help"), false, footer);
+	assert.equal(footer.includes("h/l"), false, footer);
+	const top = lines.findIndex((l) => l.includes("┌─ TREE "));
+	const bottom = lines.findIndex((l, i) => i > top && l.slice(2).startsWith("└"));
+	assert.ok(!lines.slice(top, bottom).some((l) => l.includes("d/t/u/l/a filter")), "the box should not repeat the footer hints");
 	h.panel.handleInput("q");
 	assert.equal(h.panel.state.mode, "normal");
 	h.panel.dispose();
@@ -1660,11 +1663,11 @@ test("T opens a centered Label dialog; Enter saves and refreshes the row, empty 
 	assert.ok(dlg, "the Label dialog should be drawn");
 	// drawn over the middle of the panel (not in the footer row), naming the node; the footer carries the dialog's keys
 	assert.ok(dlg.top > 2 && dlg.top < lines.length - 6, `dialog row ${dlg.top} of ${lines.length}`);
-	assert.ok(dlg.title.includes("assistant: msg 1"), dlg.title);
+	assert.ok(dlg.title.includes("assistant ·") && !dlg.title.includes("msg 1"), dlg.title);
 	// 3 rows: border, input, border — the bottom border sits right under the input line
 	assert.ok(lines[dlg.top + 2]!.includes("└"), lines[dlg.top + 2]);
 	const footer = lines.at(-1)!;
-	assert.ok(footer.includes("LABEL") && footer.includes("Enter save") && footer.includes("empty removes"), footer);
+	assert.ok(footer.includes("LABEL") && footer.includes("Enter save") && footer.includes("empty field clears it"), footer);
 	for (const l of h.panel.render(100)) assert.equal(visibleWidth(l), 100);
 
 	// keys go to the input, not to the keymap
@@ -1784,7 +1787,7 @@ test("Enter on another node opens the Summarize branch? menu: j/k move, Esc goes
 	assert.ok(menu, "the menu should be drawn");
 	// drawn over the middle of the panel, naming the node; three entries in pi's order, cursor on the first
 	assert.ok(menu.top > 2 && menu.top < lines.length - 6, `menu row ${menu.top} of ${lines.length}`);
-	assert.ok(menu.title.includes("assistant: msg 1"), menu.title);
+	assert.ok(menu.title.includes("assistant · ") && !menu.title.includes("msg 1"), menu.title);
 	for (const [i, m] of SUMMARY_MENU.entries()) assert.ok(menu.items[i]!.includes(m.label), `${i}: ${menu.items[i]}`);
 	assert.ok(menu.items[0]!.startsWith("No summary") || menu.selected?.startsWith("No summary"), menu.items[0]);
 	assert.ok(lines[menu.top + SUMMARY_MENU.length + 1]!.includes("└"), "bottom border right under the last entry");
@@ -1873,7 +1876,7 @@ test("Summarize with custom prompt opens a one-line input; Esc returns to the me
 	assert.equal(summaryMenu(lines), undefined);
 	const promptTop = lines.findIndex((l) => l.includes(`┌─ ${CUSTOM_PROMPT_TITLE} `));
 	assert.ok(promptTop > 0, "the custom prompt should be drawn");
-	assert.ok(lines[promptTop]!.includes("assistant: msg 1"), lines[promptTop]);
+	assert.ok(lines[promptTop]!.includes("assistant · ") && !lines[promptTop]!.includes("msg 1"), lines[promptTop]);
 	assert.ok(lines.at(-1)!.includes("Enter summarize") && lines.at(-1)!.includes("Esc back"), lines.at(-1));
 	for (const l of h.panel.render(100)) assert.equal(visibleWidth(l), 100);
 
@@ -2733,7 +2736,7 @@ test("d asks Delete session? in a centered Yes / No box starting on No; n / Esc 
 	const dlg = dialogAt(lines, DELETE_SESSION_TITLE);
 	assert.ok(dlg, "the confirmation should be drawn");
 	assert.ok(dlg.top > 2 && dlg.top < lines.length - 6, `dialog row ${dlg.top} of ${lines.length}`);
-	assert.ok(dlg.title.includes("beta"), dlg.title);
+	assert.ok(dlg.title.includes("beta") && !dlg.title.includes("second words"), `subject = name · date, not the preview: ${dlg.title}`);
 	assert.equal(dlg.body.length, 2);
 	assert.ok(dlg.body[0]!.includes("  Yes") && !dlg.body[0]!.includes("›"), dlg.body[0]);
 	assert.ok(dlg.body[1]!.includes("› No"), dlg.body[1]);
@@ -2898,9 +2901,9 @@ test("r opens a centered Rename box pre-filled with the name; Enter saves and th
 	const dlg = dialogAt(lines, RENAME_DIALOG_TITLE);
 	assert.ok(dlg, "the Rename dialog should be drawn");
 	assert.ok(dlg.top > 2 && dlg.top < lines.length - 6, `dialog row ${dlg.top} of ${lines.length}`);
-	assert.ok(dlg.title.includes("second words"), dlg.title);
+	assert.ok(dlg.title.includes("beta") && !dlg.title.includes("second words"), `subject = the session's name: ${dlg.title}`);
 	assert.ok(dlg.body[0]!.includes("beta"), dlg.body[0]);
-	assert.ok(h.footer().includes("RENAME") && h.footer().includes("Enter save") && h.footer().includes("empty removes"), h.footer());
+	assert.ok(h.footer().includes("RENAME") && h.footer().includes("Enter save") && h.footer().includes("empty field clears it"), h.footer());
 
 	// keys go to the input (the cursor starts at the end); Enter persists and the list reloads with the cursor still on the row
 	for (const ch of " two") h.panel.handleInput(ch);
@@ -3068,14 +3071,14 @@ test("i opens the Session Info box (what /session shows); y copies its text, Esc
 	const lines = h.text();
 	const dlg = dialogAt(lines, SESSION_INFO_TITLE);
 	assert.ok(dlg, "the info box should be drawn");
-	assert.ok(dlg.title.includes("alpha · Esc close"), dlg.title);
+	assert.ok(dlg.title.includes("alpha · Esc/q close"), dlg.title);
 	const body = dlg.body.join("\n");
 	const infoObj: SessionInfo = { name: "alpha", model: "claude-opus-4", messages: 12, tokens: 84_213, cost: 1.4211, createdAt: new Date(2026, 8, 20, 22, 18).getTime(), updatedAt: new Date(2026, 8, 20, 22, 21).getTime(), path: "/tmp/s1.jsonl", id: "id-1" };
 	// 每一行的标签 / 值排版和 sessionInfoText 一致（含 "Session path" 标签、12 列的标签列对齐）。
 	for (const expected of sessionInfoText(infoObj).split("\n")) {
 		assert.ok(body.includes(expected), `${expected}\n${body}`);
 	}
-	assert.ok(h.footer().includes("INFO") && h.footer().includes("y copy") && h.footer().includes("Esc close"), h.footer());
+	assert.ok(h.footer().includes("INFO") && h.footer().includes("y copy") && h.footer().includes("Esc/q close"), h.footer());
 	for (const l of h.panel.render(120)) assert.equal(visibleWidth(l), 120);
 
 	// y copies the whole text (full path) and keeps the box open; other keys are swallowed
@@ -3100,7 +3103,7 @@ test("i opens the Session Info box (what /session shows); y copies its text, Esc
 	await flush();
 	const noName = dialogAt(h.text(), SESSION_INFO_TITLE)!;
 	assert.ok(noName.body[0]!.includes("(none)"), noName.body[0]);
-	assert.ok(noName.title.includes("Esc close"), noName.title);
+	assert.ok(noName.title.includes("Esc/q close"), noName.title);
 	h.panel.handleInput("q");
 	assert.equal(h.panel.state.mode, "normal");
 
@@ -3130,8 +3133,8 @@ test("u opens the context-usage box for the cursor session; y copies its text, E
 	assert.ok(body.includes("84.2k") && body.includes("200k"), body);
 	assert.ok(body.includes("System prompt") && body.includes("Tool results"), body);
 	assert.ok(body.includes("Context") && body.includes("Free space"), body);
-	for (const hint of ["j/k/↑↓ select", "Enter preview", "y copy", "Esc close"]) assert.ok(!body.includes(hint), `the box should not repeat the footer hint: ${hint}`);
-	assert.ok(h.footer().includes("USAGE") && h.footer().includes("y copy") && h.footer().includes("Esc close"), h.footer());
+	for (const hint of ["j/k/↑↓ select", "Enter preview", "y copy", "Esc/q close"]) assert.ok(!body.includes(hint), `the box should not repeat the footer hint: ${hint}`);
+	assert.ok(h.footer().includes("USAGE") && h.footer().includes("y copy") && h.footer().includes("Esc/q close"), h.footer());
 	for (const l of h.panel.render(120)) assert.equal(visibleWidth(l), 120);
 
 	// y copies the whole text and keeps the box open; navigation never reaches the panel
@@ -3181,12 +3184,12 @@ test("context prompt preview: Enter opens the selected category, Esc returns wit
 	assert.equal(h.panel.state.mode, "usage");
 	assert.ok(dialogAt(h.text(), "Prompt · Tool results"));
 	assert.ok(h.text().join("\n").includes("TOOL_RESULT_SOURCE"));
-	assert.ok(h.footer().includes("Esc back"));
+	assert.ok(h.footer().includes("Esc/q back"));
 	h.panel.handleInput("y");
 	await flush();
 	assert.equal(h.copies.at(-1), "TOOL_RESULT_SOURCE");
 	const promptBody = dialogAt(h.text(), "Prompt · Tool results")!.body.join("\n");
-	for (const hint of ["j/k/↑↓ scroll", "y copy", "Esc back"]) assert.ok(!promptBody.includes(hint), `the box should not repeat the footer hint: ${hint}`);
+	for (const hint of ["j/k/↑↓ scroll", "y copy", "Esc/q back"]) assert.ok(!promptBody.includes(hint), `the box should not repeat the footer hint: ${hint}`);
 	// Esc closes only the child; the selection and panel cursor are untouched.
 	h.panel.handleInput("\x1b");
 	assert.equal(h.panel.state.mode, "usage");
@@ -3289,7 +3292,7 @@ test("c prompts for optional focus instructions, then compacts the cursor sessio
 	assert.equal(h.panel.state.mode, "compact");
 	const dlg = dialogAt(h.text(), COMPACT_DIALOG_TITLE);
 	assert.ok(dlg, "the Compact prompt is drawn");
-	assert.ok(dlg.title.includes("second words"), dlg.title);
+	assert.ok(dlg.title.includes("beta") && !dlg.title.includes("second words"), `subject = the session's name: ${dlg.title}`);
 	assert.ok(h.footer().includes("COMPACT") && h.footer().includes("Enter compact"), h.footer());
 
 	// typed instructions travel through to the action; the panel is hidden while pi works, then closes
@@ -3354,7 +3357,7 @@ test("o lists the user messages to fork before (last selected), confirms, then f
 	h.panel.handleInput("\r");
 	const confirm = dialogAt(h.text(), FORK_SESSION_TITLE);
 	assert.ok(confirm, "the confirmation is drawn");
-	assert.ok(confirm.title.includes("second question"), confirm.title);
+	assert.ok(confirm.title.includes("#2/2") && !confirm.title.includes("second question"), `the subject is the picked position, not the text: ${confirm.title}`);
 	assert.ok(confirm.body[1]!.includes("› No"), "the cursor starts on No");
 	assert.deepEqual(h.forks, [], "nothing is forked until confirmed");
 
@@ -3409,7 +3412,7 @@ test("y asks Clone session? and only clones once confirmed; n / Esc cancel", asy
 	h.panel.handleInput("y");
 	assert.equal(h.panel.state.mode, "clone");
 	const dlg = dialogAt(h.text(), CLONE_SESSION_TITLE);
-	assert.ok(dlg && dlg.title.includes("alpha"), dlg?.title);
+	assert.ok(dlg && dlg.title.includes("alpha") && !dlg.title.includes("first words"), `subject = name · date: ${dlg?.title}`);
 	assert.ok(dlg!.body[1]!.includes("› No"), "cursor starts on No");
 	assert.ok(h.footer().includes("CLONE"), h.footer());
 	h.panel.handleInput("n");
@@ -3483,6 +3486,7 @@ test("e: pick HTML / JSONL, the path prompt is pre-filled with the default, Ente
 	h.panel.handleInput("\r");
 	const prompt = dialogAt(h.text(), EXPORT_PATH_TITLE);
 	assert.ok(prompt, "the path prompt is drawn");
+	assert.ok(prompt.title.includes(EXPORT_PATH_SUBJECT), `subject = what to type: ${prompt.title}`);
 	assert.ok(prompt.body[0]!.includes("/work/pi-session-s1.html"), prompt.body.join("|"));
 	assert.ok(h.footer().includes("Enter export"), h.footer());
 
@@ -3578,7 +3582,9 @@ test("I: type a path, confirm, then import and close; Esc on the confirmation ke
 
 	h.panel.handleInput("I");
 	assert.equal(h.panel.state.mode, "import");
-	assert.ok(dialogAt(h.text(), IMPORT_DIALOG_TITLE), "the import prompt is drawn");
+	const prompt = dialogAt(h.text(), IMPORT_DIALOG_TITLE);
+	assert.ok(prompt, "the import prompt is drawn");
+	assert.ok(prompt.title.includes(IMPORT_DIALOG_SUBJECT), `subject = what to type: ${prompt.title}`);
 	assert.ok(h.footer().includes("IMPORT") && h.footer().includes("Enter import"), h.footer());
 	for (const ch of "~/backup.jsonl") h.panel.handleInput(ch);
 	h.panel.handleInput("\r");
@@ -3588,8 +3594,8 @@ test("I: type a path, confirm, then import and close; Esc on the confirmation ke
 
 	// Esc → back on the prompt with the path kept
 	h.panel.handleInput("\x1b");
-	const prompt = dialogAt(h.text(), IMPORT_DIALOG_TITLE);
-	assert.ok(prompt?.body[0]!.includes("~/backup.jsonl"), prompt?.body.join("|"));
+	const reopened = dialogAt(h.text(), IMPORT_DIALOG_TITLE);
+	assert.ok(reopened?.body[0]!.includes("~/backup.jsonl"), reopened?.body.join("|"));
 	assert.deepEqual(h.imports, []);
 
 	// Enter, y → import, the panel is hidden while pi switches and then closes
@@ -3641,6 +3647,7 @@ test("S: pick Auto / Gist / Radius in a menu (Esc cancels), then upload, copy th
 	assert.ok(menu.body[1]!.includes("GitHub Gist"), menu.body[1]);
 	assert.ok(menu.body[2]!.includes("Radius"), menu.body[2]);
 	assert.ok(h.footer().includes("SHARE"), h.footer());
+	assert.ok(h.footer().includes("Esc/q cancel"), h.footer());
 	// Esc cancels: nothing leaves the machine
 	h.panel.handleInput("\x1b");
 	assert.equal(h.panel.state.mode, "normal");
@@ -3698,7 +3705,7 @@ test("a long footer result (share link) does not hide the shortcut hints of a di
 	await flush();
 	assert.equal(h.panel.state.mode, "usage");
 	assert.ok(!h.footer().includes(url), h.footer());
-	assert.ok(h.footer().includes("USAGE") && h.footer().includes("y copy") && h.footer().includes("Esc close"), h.footer());
+	assert.ok(h.footer().includes("USAGE") && h.footer().includes("y copy") && h.footer().includes("Esc/q close"), h.footer());
 	h.panel.handleInput("\x1b");
 
 	// i: same for the Session Info box
@@ -3706,7 +3713,7 @@ test("a long footer result (share link) does not hide the shortcut hints of a di
 	await flush();
 	assert.equal(h.panel.state.mode, "info");
 	assert.ok(!h.footer().includes(url), h.footer());
-	assert.ok(h.footer().includes("INFO") && h.footer().includes("y copy") && h.footer().includes("Esc close"), h.footer());
+	assert.ok(h.footer().includes("INFO") && h.footer().includes("y copy") && h.footer().includes("Esc/q close"), h.footer());
 	h.panel.dispose();
 });
 
@@ -3996,7 +4003,7 @@ test("@ opens pi's changelog in a big box: j/k/arrows scroll, G / g jump, Esc / 
 	assert.equal(panel.state.mode, "changelog");
 	// first the loading box shows (the whole changelog is slow to render): a spinner + hint, no content yet
 	let lines = text();
-	assert.ok(dialogAt(lines, "What's New")?.title.includes("Esc close"), "the loading box shows how to close it");
+	assert.ok(dialogAt(lines, "What's New")?.title.includes("Esc/q close"), "the loading box shows how to close it");
 	assert.ok(
 		lines.some((l) => l.includes("Loading changelog")),
 		`a loading hint shows: ${lines.join("\n")}`,
@@ -4007,7 +4014,7 @@ test("@ opens pi's changelog in a big box: j/k/arrows scroll, G / g jump, Esc / 
 	lines = text();
 	const dlg = dialogAt(lines, "What's New");
 	assert.ok(dlg, "the dialog is drawn");
-	assert.ok(dlg.title.includes("Esc close"), dlg.title);
+	assert.ok(dlg.title.includes("Esc/q close"), dlg.title);
 	assert.ok(dlg.body.some((l) => l.includes("line 1 ")), dlg.body.join("\n"));
 	assert.ok(lines.at(-1)!.includes("j/k scroll"), lines.at(-1));
 	for (const l of panel.render(100)) assert.equal(visibleWidth(l), 100);

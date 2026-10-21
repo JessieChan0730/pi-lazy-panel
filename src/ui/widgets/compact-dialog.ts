@@ -24,6 +24,7 @@ export function compactDialogHints(): KeyHint[] {
 	return [
 		["Enter", t("hint.compact")],
 		["Esc", t("hint.cancel")],
-		[t("hint.emptyKey"), t("hint.compactDefault")],
+		// 纯文本提示：空键位，说明留空提交时用 pi 的默认压缩指令。
+		["", t("hint.compactDefault")],
 	];
 }

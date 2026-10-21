@@ -1,8 +1,8 @@
 /**
  * Tree dialog — the full conversation tree in a big centered box, opened with
  * `a` from the tree pane (the small pane only shows a slice). Layout follows
- * the `prefix + g` picker of herdr: search box on top, the tree in the middle,
- * key hints at the bottom.
+ * the `prefix + g` picker of herdr: search box on top, the tree in the middle.
+ * Key hints live in the panel footer only (no repeated row inside the box).
  *
  *   ┌─ TREE ─────────────────────────────── 3/12 · default ─┐
  *   │ 搜索: hello▏                                           │
@@ -11,8 +11,6 @@
  *   │   ├⊟ 22:18 user: hi                                    │
  *   │   │     22:18 assistant: Hello!                        │
  *   │   └⊞ • 22:19 user: hi                                  │
- *   ├────────────────────────────────────────────────────────┤
- *   │ / search   j/↓/k/↑ move   Enter restore   z fold   …   │
  *   └────────────────────────────────────────────────────────┘
  *
  * The widget owns the search field, the cursor and the rendering; the rows it
@@ -31,7 +29,6 @@
  */
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { visibleWidth } from "@earendil-works/pi-tui";
 import { t } from "../../i18n/index.ts";
 import type { KeyHint, TreeFilter, TreeRow } from "../../types.ts";
 import { clamp } from "../../utils/indices.ts";
@@ -77,8 +74,8 @@ export interface TreeDialogOptions {
 	onChange: () => void;
 }
 
-/** Rows above (search + divider) and below (divider + hints) the list, plus the two borders. */
-const CHROME_ROWS = 6;
+/** Rows above the list (search + divider) plus the two borders; hints live in the footer. */
+const CHROME_ROWS = 4;
 
 export class TreeDialog {
 	private spec: TreeDialogSpec | undefined;
@@ -208,7 +205,7 @@ export class TreeDialog {
 
 	/**
 	 * 屏幕上 (x, y) 命中的东西：列表行返回行号，搜索行返回 "search"，
-	 * 分隔线 / 列表末尾之后的补白行 / 底部提示行 / 框外返回 undefined。鼠标单击选中、双击 Enter 都用它。
+	 * 分隔线 / 列表末尾之后的补白行 / 框外返回 undefined。鼠标单击选中、双击 Enter 都用它。
 	 */
 	indexAt(x: number, y: number): number | "search" | undefined {
 		const rect = this.boxRect;
@@ -217,7 +214,7 @@ export class TreeDialog {
 		if (cell.row === 0) return "search"; // 正文第 0 行是搜索框
 		const line = cell.row - 2; // 第 1 行是分隔线，列表从第 2 行开始
 		const visible = this.visibleRows(rect.height);
-		if (line < 0 || line >= visible) return undefined; // 分隔线、底部提示行或更靠下的补白
+		if (line < 0 || line >= visible) return undefined; // 分隔线或更靠下的补白
 		const index = scrollOffset(this.index, this.rows.length, visible) + line;
 		return index < this.rows.length ? index : undefined; // 列表末尾之后的补白行
 	}
@@ -275,7 +272,6 @@ export class TreeDialog {
 			}
 		}
 		while (body.length < visible + 2) body.push("");
-		body.push(FRAME_DIVIDER, ` ${renderHints(this.hints, theme, inner - 1)}`);
 
 		const position = rows.length ? `${this.index + 1}/${rows.length}` : "0/0";
 		return frame(body, {
@@ -310,18 +306,4 @@ export class TreeDialog {
 		this.boxRect = centeredRect(termW, lines.length, width, box.length);
 		return overlayCentered(lines, box, width, termW, (s) => this.o.theme.fg("dim", s), this.boxRect.top);
 	}
-}
-
-/** `key text   key text …`, dropping the hints that do not fit in `width` (like the footer). */
-function renderHints(hints: KeyHint[], theme: Theme, width: number): string {
-	const parts: string[] = [];
-	let used = 0;
-	for (const [k, t] of hints) {
-		const part = `${theme.bold(theme.fg("accent", k))} ${theme.fg("muted", t)}`;
-		const w = visibleWidth(part) + (parts.length ? 3 : 0);
-		if (used + w > width) break;
-		parts.push(part);
-		used += w;
-	}
-	return parts.join("   ");
 }

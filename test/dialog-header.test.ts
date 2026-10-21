@@ -40,7 +40,7 @@ for (const locale of ["en", "zh"] as const) {
 	test(`dialog headers keep Escape visible with long titles and subjects (${locale})`, () => {
 		initI18n(locale);
 		try {
-			const close = locale === "en" ? "Esc close" : "Esc 关闭";
+			const close = locale === "en" ? "Esc/q close" : "Esc/q 关闭";
 			for (const width of [24, 40, 60, 100]) {
 				for (const title of ["Info", "很长的标题 with wide characters ".repeat(5)]) {
 					const lines = frame([], {
@@ -68,7 +68,7 @@ for (const locale of ["en", "zh"] as const) {
 			for (const width of [24, 40, 60, 100]) {
 				for (const name of ["", "session A", "很长的会话名 ".repeat(20)]) {
 					session.open({ info: { ...info, ...(name ? { name } : {}) }, onCopy: () => {}, onClose: () => cancelled++ });
-					assertHeader(session.render(width), width, `Esc ${t("hint.close")}`);
+					assertHeader(session.render(width), width, `Esc/q ${t("hint.close")}`);
 				}
 				for (const action of ["hint.cancel", "hint.back"] as const) {
 					const spec = {
@@ -99,16 +99,16 @@ for (const locale of ["en", "zh"] as const) {
 			const dialog = new ChangelogDialog({ theme, onClose: () => dialog.close() });
 			for (const width of [24, 40, 60, 100]) {
 				dialog.openLoading();
-				assertHeader(dialog.render(width, 10), width, `Esc ${t("hint.close")}`);
+				assertHeader(dialog.render(width, 10), width, `Esc/q ${t("hint.close")}`);
 				dialog.handleInput("\x1b");
 				assert.equal(dialog.isOpen, false);
 				dialog.setContent("Short update");
-				assertHeader(dialog.render(width, 10), width, `Esc ${t("hint.close")}`);
+				assertHeader(dialog.render(width, 10), width, `Esc/q ${t("hint.close")}`);
 				dialog.setContent("Long update\n\n".repeat(50));
-				assertHeader(dialog.render(width, 10), width, `Esc ${t("hint.close")}`);
+				assertHeader(dialog.render(width, 10), width, `Esc/q ${t("hint.close")}`);
 				dialog.handleInput("j");
 				const lines = dialog.render(width, 10);
-				assertHeader(lines, width, `Esc ${t("hint.close")}`);
+				assertHeader(lines, width, `Esc/q ${t("hint.close")}`);
 				if (width >= 60) assert.match(lines[0]!, /2-9\/\d+ · Esc/);
 				dialog.handleInput("\x1b");
 				assert.equal(dialog.isOpen, false);

@@ -1,6 +1,7 @@
 /**
- * Label prompt (`L`, same as `Shift+L` in pi's `/tree`):
- * the title and footer hints that ./input-dialog.ts shows while labelling.
+ * Label prompt (`L`, same as `Shift+L` in pi's `/tree`): the title and footer
+ * hints that ./input-dialog.ts shows while labelling. The title-bar subject is
+ * ./dialog-subject.ts's `nodeSubject` (role · time).
  *
  * The panel owns the target node and persists the change through the injected
  * actions; the pre-filled value is the node's current label and an empty
@@ -23,6 +24,7 @@ export function labelDialogHints(): KeyHint[] {
 	return [
 		["Enter", t("hint.save")],
 		["Esc", t("hint.cancel")],
-		[t("hint.emptyKey"), t("hint.removes")],
+		// 纯文本提示：空键位，说明留空提交时清除该项。
+		["", t("hint.removes")],
 	];
 }

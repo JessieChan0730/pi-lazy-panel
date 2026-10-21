@@ -24,6 +24,7 @@ export function newSessionDialogHints(): KeyHint[] {
 	return [
 		["Enter", t("hint.create")],
 		["Esc", t("hint.cancel")],
-		[t("hint.emptyKey"), t("hint.noName")],
+		// 纯文本提示：空键位，说明留空提交时不设置名称。
+		["", t("hint.noName")],
 	];
 }

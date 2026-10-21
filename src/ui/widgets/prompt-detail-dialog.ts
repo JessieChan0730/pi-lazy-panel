@@ -6,6 +6,7 @@ import { t } from "../../i18n/index.ts";
 import type { KeyHint } from "../../types.ts";
 import { normalizeNewlines } from "../../utils/format.ts";
 import { boxContains, centeredRect, frame, overlayCentered, type BoxRect } from "../frame.ts";
+import { DIALOG_CLOSE_KEYS } from "./dialog-header.ts";
 
 interface PromptDetailSpec {
 	category: string;
@@ -33,7 +34,7 @@ export class PromptDetailDialog {
 			["d/u", t("hint.page")],
 			["g/G", t("hint.topBottom")],
 			["y", t("hint.copy")],
-			["Esc", t("hint.back")],
+			[DIALOG_CLOSE_KEYS, t("hint.back")],
 		];
 	}
 

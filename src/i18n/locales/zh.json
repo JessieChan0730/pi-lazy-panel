@@ -1,7 +1,6 @@
 {
   "settings": {
     "title": "设置",
-    "list": "配置列表",
     "retry": "重试",
     "restore": "恢复默认",
     "reload": "重新读取",
@@ -28,7 +27,6 @@
     "restoreScopeConfirm": "恢复 {{scope}} 的默认快捷键？",
     "restoreThemeConfirm": "放弃这次失败的主题切换？",
     "reloadConfirm": "放弃未保存的改动并重新读取设置？",
-    "categories": "分类",
     "category": {
       "general": "常规",
       "layout": "布局",
@@ -109,6 +107,7 @@
     "treeTitle": "对话树",
     "contentTitle": "内容",
     "sessionsEmpty": "暂无会话",
+    "sessionsEmptyCurrent": "暂无会话 · 按 {{key}} 查看所有目录",
     "archivedSessionsTitle": "已归档会话",
     "treeEmpty": "没有条目",
     "contentEmpty": "没有消息",
@@ -128,7 +127,8 @@
   "role": {
     "user": "用户",
     "assistant": "助手",
-    "tool": "工具"
+    "tool": "工具",
+    "system": "系统"
   },
   "scope": {
     "currentLong": "当前",
@@ -267,9 +267,8 @@
     "cancel": "取消",
     "searchConfirm": "搜索",
     "compact": "压缩",
-    "compactDefault": "= 默认",
-    "removes": "清除",
-    "emptyKey": "空",
+    "compactDefault": "输入框留空则默认压缩",
+    "removes": "输入框留空则清除",
     "folderKey": "目录",
     "move": "移动",
     "select": "选择",
@@ -278,7 +277,7 @@
     "export": "导出",
     "import": "导入",
     "create": "创建",
-    "noName": "不命名",
+    "noName": "输入框留空则不命名",
     "defaultInside": "在其中用默认名",
     "choose": "选择",
     "confirm": "确认",
@@ -295,7 +294,7 @@
     "renameTitle": "重命名",
     "newTitle": "新建会话",
     "importTitle": "导入会话",
-    "importSubject": "输入 .jsonl 文件路径",
+    "importSubject": "输入导入的 .jsonl 路径",
     "sessionInfoTitle": "会话信息",
     "contextUsageTitle": "上下文占用",
     "changelogTitle": "更新日志",
@@ -312,6 +311,7 @@
     "toSearch": "{{key}} 搜索",
     "exportFormatTitle": "导出为",
     "exportPathTitle": "导出到",
+    "exportPathSubject": "输入导出的路径",
     "exportHtml": "HTML   完整对话树，在浏览器中打开",
     "exportJsonl": "JSONL  当前分支，可再次导入",
     "shareTitle": "分享会话",
@@ -344,7 +344,7 @@
     "delete": "删除会话？",
     "deleteN_one": "删除 {{count}} 个会话？",
     "deleteN_other": "删除 {{count}} 个会话？",
-    "deleteSkipped": "已跳过当前会话 · {{subjects}}",
+    "deleteSkipped": "已跳过当前会话",
     "clone": "克隆会话？",
     "fork": "分叉会话？",
     "import": "导入并切换过去？",

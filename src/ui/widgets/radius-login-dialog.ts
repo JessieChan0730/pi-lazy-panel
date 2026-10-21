@@ -26,6 +26,7 @@
 
 import { t } from "../../i18n/index.ts";
 import type { KeyHint, RadiusLoginMethod } from "../../types.ts";
+import { DIALOG_CLOSE_KEYS } from "./dialog-header.ts";
 
 /** Title on the top border of the API-key input box (pi's own prompt is untranslated). */
 export function radiusApiKeyTitle(): string {
@@ -67,7 +68,7 @@ export function radiusLoginHints(): KeyHint[] {
 	return [
 		["j/k", t("hint.move")],
 		["Enter", t("hint.select")],
-		["Esc", t("hint.cancel")],
+		[DIALOG_CLOSE_KEYS, t("hint.cancel")],
 	];
 }
 
@@ -83,7 +84,7 @@ export function radiusPromptHints(): KeyHint[] {
 export function radiusNoticeHints(copy: boolean): KeyHint[] {
 	const hints: KeyHint[] = [];
 	if (copy) hints.push(["y", t("hint.copy")]);
-	hints.push(["Esc", t("hint.cancel")]);
+	hints.push([DIALOG_CLOSE_KEYS, t("hint.cancel")]);
 	return hints;
 }
 

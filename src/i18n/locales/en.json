@@ -1,7 +1,6 @@
 {
   "settings": {
     "title": "Settings",
-    "list": "Items",
     "retry": "Retry",
     "restore": "Restore defaults",
     "reload": "Reload",
@@ -28,7 +27,6 @@
     "restoreScopeConfirm": "Restore default key bindings for {{scope}}?",
     "restoreThemeConfirm": "Give up on the failed theme switch?",
     "reloadConfirm": "Discard the unsaved change and reload settings?",
-    "categories": "Categories",
     "category": {
       "general": "General",
       "layout": "Layout",
@@ -109,6 +107,7 @@
     "treeTitle": "TREE",
     "contentTitle": "CONTENT",
     "sessionsEmpty": "No sessions",
+    "sessionsEmptyCurrent": "No sessions · press {{key}} to see all folders",
     "archivedSessionsTitle": "ARCHIVED",
     "treeEmpty": "No entries",
     "contentEmpty": "No messages",
@@ -128,7 +127,8 @@
   "role": {
     "user": "user",
     "assistant": "assistant",
-    "tool": "tool"
+    "tool": "tool",
+    "system": "system"
   },
   "scope": {
     "currentLong": "Current",
@@ -267,9 +267,8 @@
     "cancel": "cancel",
     "searchConfirm": "search",
     "compact": "compact",
-    "compactDefault": "= default",
-    "removes": "removes",
-    "emptyKey": "empty",
+    "compactDefault": "empty field uses the default compaction",
+    "removes": "empty field clears it",
     "folderKey": "folder",
     "move": "move",
     "select": "select",
@@ -278,7 +277,7 @@
     "export": "export",
     "import": "import",
     "create": "create",
-    "noName": "no name",
+    "noName": "empty field leaves it unnamed",
     "defaultInside": "default name inside",
     "choose": "choose",
     "confirm": "confirm",
@@ -295,7 +294,7 @@
     "renameTitle": "Rename",
     "newTitle": "New session",
     "importTitle": "Import session",
-    "importSubject": "path to a .jsonl file",
+    "importSubject": "Enter the .jsonl path",
     "sessionInfoTitle": "Session Info",
     "contextUsageTitle": "Context Usage",
     "changelogTitle": "What's New",
@@ -312,6 +311,7 @@
     "toSearch": "{{key}} to search",
     "exportFormatTitle": "Export as",
     "exportPathTitle": "Export to",
+    "exportPathSubject": "Enter the export path",
     "exportHtml": "HTML   whole tree, opens in a browser",
     "exportJsonl": "JSONL  active branch, can be imported again",
     "shareTitle": "Share session",
@@ -344,7 +344,7 @@
     "delete": "Delete session?",
     "deleteN_one": "Delete {{count}} session?",
     "deleteN_other": "Delete {{count}} sessions?",
-    "deleteSkipped": "current session skipped · {{subjects}}",
+    "deleteSkipped": "current session skipped",
     "clone": "Clone session?",
     "fork": "Fork session?",
     "import": "Import and switch to it?",

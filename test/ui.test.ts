@@ -18,7 +18,7 @@ import {
 	foldTarget,
 	nearestListedIndex,
 } from "../src/data/tree-fold.ts";
-import type { TreeRow } from "../src/types.ts";
+import type { SessionRow, TreeRow } from "../src/types.ts";
 import { boxCell, boxContains, centeredRect, fit, FRAME_DIVIDER, frame, metaBudget, overlayCentered, sideBySide } from "../src/ui/frame.ts";
 import { hitTest, listVisibleRows, panelGeometry } from "../src/ui/mouse.ts";
 import { renderSessionsPane, scrollOffset, sessionAtLine, sessionFirstLine, sessionLineCount, sessionsMeta } from "../src/ui/panes/sessions-pane.ts";
@@ -32,6 +32,7 @@ import { treePrefixes } from "../src/ui/tree-lines.ts";
 import { ELLIPSIS, MARK_FOLDED, MARK_LEAF, MARK_OPEN, MAX_DEPTH, treeOutline } from "../src/ui/tree-outline.ts";
 import { treeSearchHints, TreeDialog } from "../src/ui/widgets/tree-dialog.ts";
 import { contextUsageText } from "../src/ui/widgets/context-usage-dialog.ts";
+import { nodeSubject, sessionSubject } from "../src/ui/widgets/dialog-subject.ts";
 import { formatCost, formatTokens, normalizeNewlines, shortenPath, singleLine } from "../src/utils/format.ts";
 import { initI18n, t } from "../src/i18n/index.ts";
 
@@ -103,6 +104,21 @@ test("shortenPath replaces the home prefix and singleLine collapses whitespace",
 	assert.equal(shortenPath(outside), outside);
 	assert.equal(singleLine("  a\n\n b\tc "), "a b c");
 	assert.equal(normalizeNewlines("a\r\nb\rc\n"), "a\nb\nc\n");
+});
+
+test("dialog subjects identify by structure, never by truncated free text", () => {
+	const at = new Date(2026, 8, 20, 22, 18).getTime();
+	const base: SessionRow = { file: "/tmp/a.jsonl", id: "a", cwd: "/a", preview: "a very long first message that would be cut", createdAt: at, updatedAt: at, messageCount: 12 };
+	const named: SessionRow = { ...base, name: "FilmRecall", model: "claude-opus-4" };
+	assert.equal(sessionSubject(named), "FilmRecall · 09-20 22:18", "the name wins over the model and the preview");
+	const unnamed: SessionRow = { ...base, model: "claude-opus-4" };
+	assert.equal(sessionSubject(unnamed), "claude-opus-4 · 09-20 22:18", "no name: the model, still no preview");
+	assert.equal(sessionSubject(base), "09-20 22:18", "neither: just the date (no dangling separator)");
+	assert.ok(!sessionSubject(unnamed).includes("very long"), "the preview never leaks into the title bar");
+
+	const node: TreeRow = { entryId: "e1", role: "assistant", kind: "message", text: "a long message body", timestamp: at, onActiveBranch: true, isLeaf: true };
+	assert.equal(nodeSubject(node), "assistant · 22:18");
+	assert.ok(!nodeSubject(node).includes("long message"), "a node is its role + time, not its text");
 });
 
 test("fit pads and truncates to the exact width, including wide chars", () => {

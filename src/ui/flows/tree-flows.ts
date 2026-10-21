@@ -10,6 +10,7 @@
 
 import { t } from "../../i18n/index.ts";
 import type { RestoreOptions, TreeRow } from "../../types.ts";
+import { nodeSubject } from "../widgets/dialog-subject.ts";
 import { labelDialogHints, labelDialogTitle } from "../widgets/label-dialog.ts";
 import {
 	customPromptHints,
@@ -33,7 +34,7 @@ export interface TreeTarget {
 interface RestoreTarget {
 	file: string;
 	entryId: string;
-	/** "role: text" of the node, shown in the dialog title bars. */
+	/** "role · time" of the node, shown in the dialog title bars (see widgets/dialog-subject.ts). */
 	subject: string;
 }
 
@@ -82,11 +83,11 @@ export function openLabelInput(host: FlowHost, target: TreeTarget | undefined): 
 		return;
 	}
 	const { file, row } = target;
-	// 弹窗标题右侧显示是给哪条消息打标签。
+	// 弹窗标题右侧只标出角色和时间：正文开头截断后信息量低，还容易误导。
 	host.openPrompt("label", {
 		title: labelDialogTitle(),
 		value: row.label ?? "",
-		subject: `${row.role}: ${row.text}`,
+		subject: nodeSubject(row),
 		hints: labelDialogHints(),
 		onSubmit: (v) => void submitLabel(host, file, row.entryId, v),
 		onCancel: () => host.closeDialogs(),
@@ -124,7 +125,7 @@ export function restoreTreeNode(host: FlowHost, target: TreeTarget | undefined):
 	const restore: RestoreTarget = {
 		file: target.file,
 		entryId: target.row.entryId,
-		subject: `${target.row.role}: ${target.row.text}`,
+		subject: nodeSubject(target.row),
 	};
 	if (target.row.isLeaf || host.skipSummaryPrompt) {
 		void runRestore(host, restore, { summarize: false });

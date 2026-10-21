@@ -1,13 +1,21 @@
-/** Read-only dialog title bar: keep the Escape hint visible before optional subject text. */
+/** Read-only dialog title bar: keep the close hint visible before optional subject text. */
 
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { t } from "../../i18n/index.ts";
 import type { FrameOptions } from "../frame.ts";
 import { metaBudget } from "../frame.ts";
 
-/** Used by session info and changelog only; compact input and menu dialogs keep their original headers. */
+/**
+ * Key labels of the two ways out of a read-only dialog. `q` is only advertised
+ * where it does not type into a field (input / search dialogs stay Esc-only).
+ *
+ * 只读弹窗的两种退出键；输入框里 q 是正文，只提示 Esc。
+ */
+export const DIALOG_CLOSE_KEYS = "Esc/q";
+
+/** Used by session info, changelog and settings; compact input and menu dialogs keep their original headers. */
 export function dialogHeader(width: number, title: string, subject = ""): Pick<FrameOptions, "title" | "meta"> {
-	const hint = `Esc ${t("hint.close")}`;
+	const hint = dialogCloseHint();
 	// 窄屏优先保留退出提示：先缩短标题，再按剩余宽度放说明，避免 frame 把整个 meta 丢掉。
 	const fittedTitle = truncateToWidth(title, Math.max(0, metaBudget(width, "") - visibleWidth(hint)), "…", false);
 	// 说明与提示之间用 " · " 分隔，标题和右侧信息之间至少留 3 个 ─。
@@ -17,9 +25,10 @@ export function dialogHeader(width: number, title: string, subject = ""): Pick<F
 }
 
 /**
- * Right-aligned exit hint for menus that have no subject of their own (the
- * share flow's pickers): `Esc` and `q` both leave without doing anything.
+ * Right-aligned exit hint of read-only dialogs and menus without a subject of
+ * their own (the share flow's pickers): `Esc` and `q` both leave without doing
+ * anything.
  */
 export function dialogCloseHint(): string {
-	return `Esc/q ${t("hint.close")}`;
+	return `${DIALOG_CLOSE_KEYS} ${t("hint.close")}`;
 }

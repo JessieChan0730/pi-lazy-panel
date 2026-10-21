@@ -1753,14 +1753,16 @@ export class LazyPanel implements Component, Focusable {
 		void this.syncContentToTree();
 	}
 
-	/** Bottom row / footer hints of the dialog, from the resolved keymap (`/ search`, `d/t/u/l/a filter`…). */
+	/** Footer hints of the dialog, from the resolved keymap (`/ search`, `d/t/u/l/a filter`…). */
 	private treeDialogHints(): KeyHint[] {
 		const out: KeyHint[] = [];
 		for (const group of TREE_DIALOG_FOOTER) {
 			const keys = group.flatMap((a) => labelsForFocus(this.keymap, TREE_DIALOG_SCOPE, a).slice(0, 1));
+			// Esc 关对话框是写死在 handleTreeDialogInput 里的（关闭键改绑 / 解绑也仍然生效），所以一并提示。
+			const shown = group.includes("tree-dialog-close") ? [...new Set(["Esc", ...keys])] : keys;
 			// 组里只要还有一个动作绑了键就显示，文字取组里第一个动作的。
-			if (keys.length === 0) continue;
-			out.push([compactKeys(keys), treeDialogHintText(group[0]!)]);
+			if (shown.length === 0) continue;
+			out.push([compactKeys(shown), treeDialogHintText(group[0]!)]);
 		}
 		return out;
 	}
@@ -2192,6 +2194,7 @@ export class LazyPanel implements Component, Focusable {
 					sort: this.state.sort,
 					selected: this.state.selectedSessionFiles,
 					pinnedCount: this.pinnedCount(),
+					emptyMessage: this.sessionsEmptyMessage(),
 					title: this.paneTitle("sessions"),
 					theme,
 					...(this.currentSessionFile ? { currentFile: this.currentSessionFile } : {}),
@@ -2287,6 +2290,13 @@ export class LazyPanel implements Component, Focusable {
 			...(this.state.sessionView === "archived" && this.state.focus === "sessions" ? { hints: this.archiveHints() } : {}),
 			...(status ? { status } : {}),
 		}, width)[0]!;
+	}
+
+	/** Empty SESSIONS list: in Current scope point at the scope-all key (rebindable) instead of just "no sessions". */
+	private sessionsEmptyMessage(): string {
+		if (this.state.sessionView !== "normal" || this.state.scope !== "current-folder") return t("pane.sessionsEmpty");
+		const key = labelsForFocus(this.keymap, "sessions", "scope-all")[0];
+		return key ? t("pane.sessionsEmptyCurrent", { key }) : t("pane.sessionsEmpty");
 	}
 
 	private emptyMessage(selected: SessionRow | undefined): string {
