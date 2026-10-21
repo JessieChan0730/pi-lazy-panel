@@ -423,6 +423,8 @@ test("empty session views are concise and localized, with distinguishable titles
 		await h.press("X");
 		const normal = h.text().split("\n").slice(0, -1).join("\n");
 		assert.ok(normal.includes(translate("pane.sessionsEmpty")));
+		// Current 范围为空时顺带提示怎么切到全部目录（键位来自 keymap，默认 A）。
+		assert.ok(normal.includes(translate("pane.sessionsEmptyCurrent", { key: "A" })));
 		assert.doesNotMatch(normal, /view archive|查看归档|未归档/);
 		await h.press("X");
 	}

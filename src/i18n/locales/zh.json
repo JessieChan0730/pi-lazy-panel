@@ -1,7 +1,6 @@
 {
   "settings": {
     "title": "设置",
-    "list": "配置列表",
     "retry": "重试",
     "restore": "恢复默认",
     "reload": "重新读取",
@@ -28,7 +27,6 @@
     "restoreScopeConfirm": "恢复 {{scope}} 的默认快捷键？",
     "restoreThemeConfirm": "放弃这次失败的主题切换？",
     "reloadConfirm": "放弃未保存的改动并重新读取设置？",
-    "categories": "分类",
     "category": {
       "general": "常规",
       "layout": "布局",
@@ -109,6 +107,7 @@
     "treeTitle": "对话树",
     "contentTitle": "内容",
     "sessionsEmpty": "暂无会话",
+    "sessionsEmptyCurrent": "暂无会话 · 按 {{key}} 查看所有目录",
     "archivedSessionsTitle": "已归档会话",
     "treeEmpty": "没有条目",
     "contentEmpty": "没有消息",

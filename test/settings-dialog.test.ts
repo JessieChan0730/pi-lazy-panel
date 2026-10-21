@@ -143,7 +143,7 @@ test("footer hints keep navigation keys only; the action keys live on the button
 	const h = makeDialog();
 	const keys = h.dialog.hints.map(([key]) => key);
 	// 没有对应按钮的导航键留在 footer。
-	for (const key of ["Esc/q", "h/←", "l/→", "Tab", "j/k/↑↓", "Enter"]) assert.ok(keys.includes(key), `${key} is hinted in the footer`);
+	for (const key of ["Esc/q", "h/l/←→/Tab", "j/k/↑↓", "Enter"]) assert.ok(keys.includes(key), `${key} is hinted in the footer`);
 	// 动作键在按钮行的标签上写着，footer 不再重复。
 	for (const key of ["q", "d", "r", "s"]) assert.ok(!keys.includes(key), `${key} is not repeated in the footer`);
 	assert.match(h.text(), /\[ q close \].*\[ d Restore defaults \].*\[ r Reload \]/);

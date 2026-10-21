@@ -46,6 +46,8 @@ export interface SessionsPaneProps {
 	currentFile?: string;
 	/** Active `/` search of this pane: matching rows are highlighted, the header shows the count. */
 	search?: SearchView;
+	/** Shown instead of the default "no sessions" when the list is empty (e.g. how to widen the scope). */
+	emptyMessage?: string;
 	/** Frame title; the panel passes "[1] SESSIONS" so the jump key is visible. */
 	title?: string;
 	theme: Theme;
@@ -122,7 +124,7 @@ export function renderSessionsPane(p: SessionsPaneProps, width: number, height: 
 	const body: string[] = [];
 
 	if (p.rows.length === 0) {
-		body.push(theme.fg("muted", ` ${t("pane.sessionsEmpty")}`));
+		body.push(theme.fg("muted", ` ${p.emptyMessage ?? t("pane.sessionsEmpty")}`));
 	} else {
 		// pi 当前打开的会话（比较解析后的路径，和 findSessionIndex 一致）：这一行会带 current 标记。
 		const currentResolved = p.currentFile ? resolve(p.currentFile) : undefined;

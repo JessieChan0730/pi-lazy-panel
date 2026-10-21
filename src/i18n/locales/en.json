@@ -1,7 +1,6 @@
 {
   "settings": {
     "title": "Settings",
-    "list": "Items",
     "retry": "Retry",
     "restore": "Restore defaults",
     "reload": "Reload",
@@ -28,7 +27,6 @@
     "restoreScopeConfirm": "Restore default key bindings for {{scope}}?",
     "restoreThemeConfirm": "Give up on the failed theme switch?",
     "reloadConfirm": "Discard the unsaved change and reload settings?",
-    "categories": "Categories",
     "category": {
       "general": "General",
       "layout": "Layout",
@@ -109,6 +107,7 @@
     "treeTitle": "TREE",
     "contentTitle": "CONTENT",
     "sessionsEmpty": "No sessions",
+    "sessionsEmptyCurrent": "No sessions · press {{key}} to see all folders",
     "archivedSessionsTitle": "ARCHIVED",
     "treeEmpty": "No entries",
     "contentEmpty": "No messages",

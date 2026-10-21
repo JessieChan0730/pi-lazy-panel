@@ -2194,6 +2194,7 @@ export class LazyPanel implements Component, Focusable {
 					sort: this.state.sort,
 					selected: this.state.selectedSessionFiles,
 					pinnedCount: this.pinnedCount(),
+					emptyMessage: this.sessionsEmptyMessage(),
 					title: this.paneTitle("sessions"),
 					theme,
 					...(this.currentSessionFile ? { currentFile: this.currentSessionFile } : {}),
@@ -2289,6 +2290,13 @@ export class LazyPanel implements Component, Focusable {
 			...(this.state.sessionView === "archived" && this.state.focus === "sessions" ? { hints: this.archiveHints() } : {}),
 			...(status ? { status } : {}),
 		}, width)[0]!;
+	}
+
+	/** Empty SESSIONS list: in Current scope point at the scope-all key (rebindable) instead of just "no sessions". */
+	private sessionsEmptyMessage(): string {
+		if (this.state.sessionView !== "normal" || this.state.scope !== "current-folder") return t("pane.sessionsEmpty");
+		const key = labelsForFocus(this.keymap, "sessions", "scope-all")[0];
+		return key ? t("pane.sessionsEmptyCurrent", { key }) : t("pane.sessionsEmpty");
 	}
 
 	private emptyMessage(selected: SessionRow | undefined): string {
