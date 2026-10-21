@@ -59,7 +59,7 @@ export function renderSearchStatus(p: SearchStatusProps, width: number): string 
 		p.total === 0
 			? theme.fg("warning", t("search.none"))
 			: theme.fg("success", p.position > 0 ? `${p.position}/${p.total}` : String(p.total));
-	const hint = p.hints.map(([k, t]) => `${theme.fg("dim", k)} ${theme.fg("muted", t)}`).join("  ");
+	const hint = p.hints.map(([k, t]) => (k ? `${theme.fg("dim", k)} ${theme.fg("muted", t)}` : theme.fg("muted", t))).join("  ");
 	const status = p.status ? `   ${theme.fg("warning", p.status)}` : "";
 	return fit(`${label}${theme.fg("text", p.query)}   ${count}   ${hint}${status}`, width);
 }

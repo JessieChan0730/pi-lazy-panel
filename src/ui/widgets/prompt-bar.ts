@@ -75,7 +75,7 @@ export class PromptBar {
 	render(width: number): string[] {
 		const { theme } = this.o;
 		const label = theme.bold(theme.fg("accent", this.o.label));
-		const hint = this.o.hints.map(([k, t]) => `${theme.fg("dim", k)} ${theme.fg("muted", t)}`).join("  ");
+		const hint = this.o.hints.map(([k, t]) => (k ? `${theme.fg("dim", k)} ${theme.fg("muted", t)}` : theme.fg("muted", t))).join("  ");
 		const hintW = visibleWidth(hint);
 		const labelW = visibleWidth(this.o.label);
 		let inputW = width - labelW - hintW - 2;

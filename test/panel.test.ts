@@ -1665,7 +1665,7 @@ test("T opens a centered Label dialog; Enter saves and refreshes the row, empty 
 	// 3 rows: border, input, border — the bottom border sits right under the input line
 	assert.ok(lines[dlg.top + 2]!.includes("└"), lines[dlg.top + 2]);
 	const footer = lines.at(-1)!;
-	assert.ok(footer.includes("LABEL") && footer.includes("Enter save") && footer.includes("empty removes"), footer);
+	assert.ok(footer.includes("LABEL") && footer.includes("Enter save") && footer.includes("empty field clears it"), footer);
 	for (const l of h.panel.render(100)) assert.equal(visibleWidth(l), 100);
 
 	// keys go to the input, not to the keymap
@@ -2901,7 +2901,7 @@ test("r opens a centered Rename box pre-filled with the name; Enter saves and th
 	assert.ok(dlg.top > 2 && dlg.top < lines.length - 6, `dialog row ${dlg.top} of ${lines.length}`);
 	assert.ok(dlg.title.includes("beta") && !dlg.title.includes("second words"), `subject = the session's name: ${dlg.title}`);
 	assert.ok(dlg.body[0]!.includes("beta"), dlg.body[0]);
-	assert.ok(h.footer().includes("RENAME") && h.footer().includes("Enter save") && h.footer().includes("empty removes"), h.footer());
+	assert.ok(h.footer().includes("RENAME") && h.footer().includes("Enter save") && h.footer().includes("empty field clears it"), h.footer());
 
 	// keys go to the input (the cursor starts at the end); Enter persists and the list reloads with the cursor still on the row
 	for (const ch of " two") h.panel.handleInput(ch);

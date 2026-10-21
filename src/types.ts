@@ -76,7 +76,7 @@ export type PanelMode =
 	| "visual"
 	| "preview";
 
-/** A `key description` pair shown as a hint in the footer or a prompt bar. */
+/** A `key description` pair shown as a hint in the footer or a prompt bar. An empty key means text-only. */
 export type KeyHint = [key: string, text: string];
 
 /**

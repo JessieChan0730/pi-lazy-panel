@@ -5,7 +5,7 @@
  *   ┌─ Label ──────────────────────── user: hi ─┐
  *   │ checkpoint▏                                │
  *   └────────────────────────────────────────────┘
- *    LABEL │ Enter save   Esc cancel   empty removes      <- footer while open
+ *    LABEL │ Enter save   Esc cancel   empty field clears it   <- footer while open
  *
  * Generic: the caller passes a title, the pre-filled value, an optional
  * subject for the title bar and the callbacks on each `open`, so the same

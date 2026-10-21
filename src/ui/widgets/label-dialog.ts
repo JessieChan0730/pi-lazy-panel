@@ -24,6 +24,7 @@ export function labelDialogHints(): KeyHint[] {
 	return [
 		["Enter", t("hint.save")],
 		["Esc", t("hint.cancel")],
-		[t("hint.emptyKey"), t("hint.removes")],
+		// 纯文本提示：空键位，说明留空提交时清除该项。
+		["", t("hint.removes")],
 	];
 }

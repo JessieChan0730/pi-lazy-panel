@@ -94,7 +94,9 @@ export function renderFooter(p: FooterProps, width: number): string[] {
 	const parts: string[] = [];
 	let used = 0;
 	for (const [key, text] of p.hints ?? keymapHints(p)) {
-		const part = `${theme.bold(theme.fg("accent", key))} ${theme.fg(p.modal ? "text" : "muted", text)}`;
+		// 空键位是纯文本提示（例如“输入框留空则默认压缩”）：不画键名，用主题的强调色，和键名一致。
+		const label = theme.fg(p.modal ? "text" : "muted", text);
+		const part = key ? `${theme.bold(theme.fg("accent", key))} ${label}` : theme.fg("accent", text);
 		const w = visibleWidth(part) + (parts.length ? 3 : 0);
 		if (used + w > budget) break;
 		parts.push(part);
