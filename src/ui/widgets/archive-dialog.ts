@@ -346,9 +346,14 @@ export class ArchiveDialog {
 		return index < this.visible.length ? index : undefined;
 	}
 
-	/** Box size for a `termW` × `termH` terminal: as big as it gets with a 2-column / 1-row margin. */
+	/**
+	 * Box size for a `termW` × `termH` terminal: 3 columns / 2 rows of breathing
+	 * room on every side, capped so it stays a dialog instead of a wall of rows
+	 * (the list scrolls). Filling the body edge to edge made the top / bottom
+	 * borders look clipped against the terminal.
+	 */
 	static size(termW: number, termH: number): { width: number; height: number } {
-		return { width: Math.max(24, Math.min(termW - 4, 110)), height: Math.max(CHROME_ROWS + 1, termH - 2) };
+		return { width: Math.max(24, Math.min(termW - 6, 108)), height: Math.max(CHROME_ROWS + 1, Math.min(termH - 4, 32)) };
 	}
 
 	/** Render the box itself, every line exactly `width` columns and `height` lines tall. */
