@@ -39,8 +39,10 @@ export interface FlowHost {
 	readonly skipSummaryPrompt: boolean;
 	/** True once the panel is gone: async flows stop before touching it again. */
 	isDisposed(): boolean;
-	/** Localised hint using the configured archive-view key (empty when unbound). */
-	archiveViewHint(): string;
+	/** Localised hint using the configured archive-open key (empty when unbound). */
+	archiveOpenHint(): string;
+	/** Re-read the archive dialog's rows after a restore / delete; no-op while it is closed. */
+	refreshArchivedSessions(): Promise<void>;
 	/** Footer status text (undefined clears it). */
 	setStatus(text: string | undefined): void;
 	/** Listed sessions, in display order. */

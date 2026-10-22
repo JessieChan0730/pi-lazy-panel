@@ -19,7 +19,13 @@ export interface ListSessionsOptions {
 /** Filter before sorting: a hidden parent must not leave its visible forks indented. */
 export function filterSessions(rows: SessionRow[], filter: SessionListFilter): SessionRow[] {
 	const archived = new Set([...filter.archived].map(sessionFileKey));
-	return rows.filter((row) => archived.has(sessionFileKey(row.file)) === (filter.view === "archived"));
+	return rows.filter((row) => !archived.has(sessionFileKey(row.file)));
+}
+
+/** Only the archived rows, for the archive dialog (all directories, independent of C/A). */
+export function filterArchivedSessions(rows: SessionRow[], archived: ReadonlySet<string>): SessionRow[] {
+	const files = new Set([...archived].map(sessionFileKey));
+	return rows.filter((row) => files.has(sessionFileKey(row.file)));
 }
 
 /** List sessions for the given scope. */
