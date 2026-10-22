@@ -7,17 +7,8 @@
  * 面板的全部可变 UI 状态集中在这里。
  */
 
-import type { ListScope, PaneId, PanelMode, PaneSearch, SessionFileState, SessionListView, SessionSortMode, TreeFilter } from "../types.ts";
+import type { ListScope, PaneId, PanelMode, PaneSearch, SessionFileState, SessionSortMode, TreeFilter } from "../types.ts";
 import { createSettingsState, type SettingsState } from "./settings-state.ts";
-
-/** View-local position; query is kept, match row indices are always recomputed. */
-export interface SessionViewPosition {
-	scope: ListScope;
-	file: string | undefined;
-	index: number;
-	scroll: number | null;
-	query: string;
-}
 
 /** Mutable UI state of the panel. Kept in one place for easy debugging. */
 export interface PanelState {
@@ -32,8 +23,6 @@ export interface PanelState {
 	/** Ordered pins and unordered archives are persisted in one metadata file. */
 	pinnedFiles: string[];
 	archivedFiles: Set<string>;
-	sessionView: SessionListView;
-	sessionViewPositions: Partial<Record<SessionListView, SessionViewPosition>>;
 	/** Blocks repeated mutations while the shared metadata commit is in flight. */
 	sessionStateBusy: boolean;
 	/**
@@ -76,8 +65,6 @@ export function createInitialState(overrides: Partial<PanelState> = {}): PanelSt
 		selectedSessionFiles: new Set(),
 		pinnedFiles: [],
 		archivedFiles: new Set(),
-		sessionView: "normal",
-		sessionViewPositions: {},
 		sessionStateBusy: false,
 		search: {},
 		scope: "current-folder",
