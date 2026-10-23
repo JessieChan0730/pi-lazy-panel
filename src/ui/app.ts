@@ -1373,12 +1373,11 @@ export class LazyPanel implements Component, Focusable {
 			this.state.mode = "archive";
 			this.status = undefined;
 			const searchKey = labelsFor(this.keymap, "global", "search")[0];
-			const closeKey = labelsFor(this.keymap, "global", "archive-open")[0];
+
 			this.archiveDialog.open({
 				rows,
 				...(this.o.currentProjectCwd ? { currentProject: this.o.currentProjectCwd } : {}),
 				...(searchKey ? { searchKey } : {}),
-				...(closeKey ? { closeKey } : {}),
 				onRestore: (row) => void restoreArchivedSession(this.flowHost, row),
 				onDelete: (rows) => confirmDeleteArchivedSessions(this.flowHost, rows),
 				onProjectMenu: () => this.openArchiveProjectMenu(),
@@ -1418,14 +1417,10 @@ export class LazyPanel implements Component, Focusable {
 		this.o.requestRender();
 	}
 
-	/** Keys while the archive dialog is open: its search row first, then the global search / X, then the list. */
+	/** Keys while the archive dialog is open: its search row first, then the global search, then the list (Esc / q close it). */
 	private handleArchiveInput(data: string): void {
 		if (this.archiveDialog.searchFocused) {
 			this.archiveDialog.handleSearchInput(data);
-			return;
-		}
-		if (this.isAction(data, "global", "archive-open")) {
-			this.closeArchiveDialog();
 			return;
 		}
 		if (this.isAction(data, "global", "search")) {

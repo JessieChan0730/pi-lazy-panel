@@ -168,6 +168,7 @@ test("x archives atomically; X opens the archive, Enter restores it and keeps th
 	assert.deepEqual(h.archivedShown().map((r) => r.id), ["alpha"]);
 	assert.match(h.text(), /ARCHIVE/);
 	assert.match(h.footer(), /Enter restore.*D delete all/);
+	assert.doesNotMatch(h.footer(), /Esc\/q\/X/, "X is not offered as a close key");
 
 	await h.press("\r");
 	assert.equal(h.panel.state.mode, "archive", "restoring leaves the dialog open");
@@ -193,6 +194,8 @@ test("X works from any pane and lists archived sessions from every directory", a
 	assert.deepEqual(h.archivedShown().map((r) => r.id).sort(), ["alpha", "other"]);
 	assert.match(h.text(), /tmp\/opencode\/other/);
 	await h.press("X");
+	assert.equal(h.panel.state.mode, "archive", "X no longer closes the box");
+	await h.press("\x1b");
 	assert.equal(h.panel.state.mode, "normal");
 	assert.equal(h.panel.state.focus, "tree");
 });

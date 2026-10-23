@@ -118,7 +118,7 @@ Help uses a fixed 28-row popup (including borders), shrinking on smaller termina
 | `,` | `settings-open` | Open plugin settings immediately; edit and save General, Layout, Keybindings and Theme (see Plugin settings above) |
 | `q` / `Ctrl+c` | `quit` | Quit the panel |
 | `@` | `changelog` | pi's changelog (`/changelog`) as a large popup: `j` `k` `↑` `↓` scroll, `Ctrl+d` / `Ctrl+u` half-page, `g` / `G` top / bottom, `Esc` / `q` / `@` close. The whole file renders slowly, so the popup first shows a spinning square `◰ Loading changelog…` in the center, then the content (cached, so a second `@` opens instantly). The newest version is on top (pi's own `/changelog` puts it last). Not available inside the tree dialog |
-| `X` | `archive-open` | Open / close the archive manager from any pane. It lists every archived session from every directory (independent of `C` / `A`); see *Archive* below. Disabled inside the tree dialog |
+| `X` | `archive-open` | Open the archive manager from any pane (close it with `Esc` / `q`). It lists every archived session from every directory (independent of `C` / `A`); see *Archive* below. Disabled inside the tree dialog |
 | `Esc` | — (built-in, not configurable) | In order: discard an unfinished keystroke → clear the current pane's search → clear the SESSIONS multi-selection → quit. Inside the archive dialog it closes the box. |
 | `/` | `search` | Search the current pane (see below): the bottom search bar searches as you type, `Enter` keeps the keyword, `Esc` cancels |
 | `n` / `N` | `search-next` / `search-prev` | Next / previous match of the current pane's search, wrapping around. While a search is active they take priority over the pane binding of the same key (`n` is "new session" only in SESSIONS when there is no search) |
@@ -174,7 +174,7 @@ When the panel opens, the cursor lands on the session pi currently has open (so 
 | Key | Config name | Action |
 | --- | --- | --- |
 | `x` (SESSIONS) | `session-archive` | Archive the cursor session, or all selected sessions. No confirmation, including batches. Archiving also removes its pin. The archived rows leave SESSIONS; `X` manages them |
-| `X` (any pane) | `archive-open` | Open / close the archive dialog. It lists archived sessions from every directory, regardless of the `C` / `A` scope. Inside the tree dialog this global key is disabled (the tree dialog uses uppercase keys for its filters) |
+| `X` (any pane) | `archive-open` | Open the archive dialog (close it with `Esc` / `q`; `X` itself only opens). It lists archived sessions from every directory, regardless of the `C` / `A` scope. Inside the tree dialog this global key is disabled (the tree dialog uses uppercase keys for its filters) |
 
 Inside the archive dialog (fixed list keys; the footer shows them):
 

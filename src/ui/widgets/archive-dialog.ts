@@ -54,8 +54,6 @@ export interface ArchiveDialogSpec {
 	currentProject?: string;
 	/** Label of the key that focuses the search row, for the idle row's `/ to search` hint. */
 	searchKey?: string;
-	/** Label of the global key that closes the dialog (the same one that opened it). */
-	closeKey?: string;
 	/** Enter: restore this row (the panel keeps the dialog open). */
 	onRestore: (row: SessionRow) => void;
 	/** d / D: delete these rows (the panel confirms first). */
@@ -124,7 +122,7 @@ export class ArchiveDialog {
 			["p", t("archive.project")],
 			["d", t("archive.delete")],
 			["D", t("archive.deleteAll")],
-			[this.spec.closeKey ? `Esc/q/${this.spec.closeKey}` : "Esc/q", t("hint.close")],
+			["Esc/q", t("hint.close")],
 		];
 	}
 
