@@ -42,7 +42,7 @@ import { loadChangelog } from "./data/changelog.ts";
 import { loadContent, loadForkPoints, loadSessionInfo } from "./data/content.ts";
 import { loadContextUsage } from "./data/context-usage.ts";
 import { initI18n, t } from "./i18n/index.ts";
-import { filterSessions, listSessions, sortSessions } from "./data/sessions.ts";
+import { filterArchivedSessions, filterSessions, listSessions, sortSessions } from "./data/sessions.ts";
 import { applyTreeFilter, loadTree } from "./data/tree.ts";
 import { LazyPanel } from "./ui/app.ts";
 import type { ActionSource, DataSource } from "./ui/ports.ts";
@@ -91,6 +91,8 @@ export default function (pi: ExtensionAPI) {
 			const data: DataSource = {
 				loadSessionState: async () => loadSessionFileState(getAgentDir()),
 				listSessions: async (scope, sort, pinned, filter) => sortSessions(filterSessions(await listSessions({ cwd: ctx.cwd, scope }), filter), sort, pinned),
+				// 归档框不限 C/A 目录范围：列所有目录里已归档的会话，按最近更新排序。
+				listArchivedSessions: async (archived) => sortSessions(filterArchivedSessions(await listSessions({ cwd: ctx.cwd, scope: "all" }), archived), "recent"),
 				loadTree: async (file, filter) => applyTreeFilter(await loadTree(file), filter),
 				loadContent: (file, leafEntryId) =>
 					loadContent(leafEntryId ? { sessionFile: file, leafEntryId } : { sessionFile: file }),
@@ -184,6 +186,7 @@ export default function (pi: ExtensionAPI) {
 						keymap: config.keymap,
 						initialState: { scope: config.defaultScope, sort: config.defaultSort, treeFilter: piSettings.treeFilter },
 						leftColumnRatio: config.leftColumnRatio,
+						currentProjectCwd: ctx.cwd,
 						configDefaults: config,
 						settingsSource: {
 							read: () => readConfigSnapshot(getAgentDir()),

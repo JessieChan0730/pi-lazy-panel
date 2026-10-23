@@ -74,6 +74,8 @@ import type {
 export interface DataSource {
 	/** Apply visibility before pinning / threaded sorting. */
 	listSessions(scope: ListScope, sort: SessionSortMode, pinned: readonly string[], filter: SessionListFilter): Promise<SessionRow[]>;
+	/** X dialog: archived sessions from every directory, newest update first. */
+	listArchivedSessions?(archived: ReadonlySet<string>): Promise<SessionRow[]>;
 	/** Reload shared metadata before listing so other pi windows' changes are seen. */
 	loadSessionState?(): Promise<SessionFileState>;
 	loadTree(sessionFile: string, filter: TreeFilter): Promise<TreeRow[]>;

@@ -34,11 +34,22 @@
       "theme": "主题"
     },
     "locale": "界面语言",
-    "language": { "en": "English", "zh": "简体中文" },
+    "language": {
+      "en": "English",
+      "zh": "简体中文"
+    },
     "defaultScope": "默认会话范围",
     "defaultSort": "默认排序",
-    "scope": { "current-folder": "当前目录", "all": "全部目录" },
-    "sort": { "recent": "最近更新", "created": "创建时间", "title": "标题", "threaded": "分叉关系" },
+    "scope": {
+      "current-folder": "当前目录",
+      "all": "全部目录"
+    },
+    "sort": {
+      "recent": "最近更新",
+      "created": "创建时间",
+      "title": "标题",
+      "threaded": "分叉关系"
+    },
     "leftWidth": "左栏宽度",
     "widthDescription": "会话和对话树共用此宽度，范围 15%～60%，默认 25%。",
     "widthRange": "范围 {{min}}%～{{max}}%",
@@ -100,7 +111,8 @@
     "settings": "设置",
     "compact": "压缩",
     "visual": "可视",
-    "preview": "预览"
+    "preview": "预览",
+    "archive": "归档"
   },
   "pane": {
     "sessionsTitle": "会话",
@@ -108,7 +120,6 @@
     "contentTitle": "内容",
     "sessionsEmpty": "暂无会话",
     "sessionsEmptyCurrent": "暂无会话 · 按 {{key}} 查看所有目录",
-    "archivedSessionsTitle": "已归档会话",
     "treeEmpty": "没有条目",
     "contentEmpty": "没有消息",
     "emptySession": "（空会话）",
@@ -175,9 +186,8 @@
     "session-rename": "重命名会话",
     "session-fork": "分叉会话并打开分叉",
     "session-toggle-select": "切换多选",
-    "session-pin": "置顶 / 取消置顶会话（归档会话需先取消归档）",
+    "session-pin": "置顶 / 取消置顶会话（置顶固定在最上）",
     "session-archive": "归档",
-    "session-archive-view": "切换普通 / 归档列表（保留 C/A 目录范围）",
     "session-export": "导出为 HTML / JSONL",
     "session-import": "从 JSONL 导入",
     "session-share": "分享会话（GitHub Gist 或 Radius）",
@@ -202,7 +212,8 @@
     "tree-filter-all": "过滤：显示全部（切换）",
     "tree-dialog-close": "关闭对话树对话框",
     "content-center": "将选中的消息滚到面板中间",
-    "content-copy": "复制选中的消息文本"
+    "content-copy": "复制选中的消息文本",
+    "archive-open": "打开归档管理（恢复 / 删除已归档会话）"
   },
   "scopeTitle": {
     "global": "全局",
@@ -260,9 +271,6 @@
     "tree-dialog-close": "关闭"
   },
   "hint": {
-    "viewArchive": "按 {{key}} 查看归档",
-    "normalSessions": "返回普通列表",
-    "unarchive": "取消归档",
     "save": "保存",
     "cancel": "取消",
     "searchConfirm": "搜索",
@@ -287,7 +295,8 @@
     "page": "翻页",
     "topBottom": "顶部/底部",
     "backToList": "返回列表",
-    "preview": "查看详情"
+    "preview": "查看详情",
+    "openArchive": "按 {{key}} 打开归档"
   },
   "dialog": {
     "labelTitle": "标签",
@@ -421,7 +430,6 @@
     "sessionsUnarchived_one": "已取消归档 {{count}} 个会话",
     "sessionsUnarchived_other": "已取消归档 {{count}} 个会话",
     "currentSessionArchived": "当前会话已归档 · {{hint}}",
-    "unarchiveBeforePin": "请先取消归档，再置顶此会话",
     "savingSessionState": "正在保存会话状态…",
     "sessionStateSavedWarning": "会话状态已保存，但清理需要处理：{{error}}",
     "sessionStateCleanupFailed": "会话整理状态清理失败：{{error}}",
@@ -519,5 +527,23 @@
     "workFailed": "{{what}}失败：{{error}}",
     "notImplemented": "{{action}}：尚未实现",
     "pending": "待续按键：{{keys}}"
+  },
+  "archive": {
+    "title": "归档",
+    "empty": "暂无已归档会话",
+    "noMatches": "没有匹配的已归档会话",
+    "allProjects": "所有项目",
+    "currentProject": "当前项目（{{path}}）",
+    "projectTitle": "项目",
+    "sortRecent": "更新时间",
+    "sortCreated": "创建时间",
+    "sortTitle": "标题",
+    "search": "搜索",
+    "sort": "排序",
+    "project": "项目",
+    "restore": "恢复",
+    "delete": "删除",
+    "deleteAll": "全部删除",
+    "toSearch": "按 {{key}} 搜索"
   }
 }

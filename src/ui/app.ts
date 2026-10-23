@@ -61,7 +61,7 @@ import type {
 	TreeRow,
 } from "../types.ts";
 import { ContentViewport } from "./content-viewport.ts";
-import { toggleArchive, togglePin } from "./flows/archive-flows.ts";
+import { confirmDeleteArchivedSessions, restoreArchivedSession, toggleArchive, togglePin } from "./flows/archive-flows.ts";
 import type { SettingsFlowHost } from "./flows/host.ts";
 import { editSetting, exitSettings, readSettings, reloadSettings, restoreSettingsDefaults, retrySettings } from "./flows/settings-flows.ts";
 import {
@@ -89,6 +89,7 @@ import { renderTreePane } from "./panes/tree-pane.ts";
 import type { ActionSource, DataSource, SettingsSource, ThemeSource } from "./ports.ts";
 import { applySessionFileState, createInitialState, type PanelState } from "./state.ts";
 import { TreeView } from "./tree-view.ts";
+import { ArchiveDialog } from "./widgets/archive-dialog.ts";
 import { ChangelogDialog } from "./widgets/changelog-dialog.ts";
 import { ContextUsageDialog } from "./widgets/context-usage-dialog.ts";
 
@@ -121,6 +122,8 @@ export interface LazyPanelOptions {
 	keymap?: Keymap;
 	initialState?: Partial<PanelState>;
 	leftColumnRatio?: number;
+	/** Working directory of the pi session that opened the panel, for the archive's "current project" filter. */
+	currentProjectCwd?: string;
 	/** Configured defaults for settings, independent of browsing state. */
 	configDefaults?: Pick<ResolvedConfig, "locale" | "defaultScope" | "defaultSort">;
 	/** Raw configuration persistence and save-time language application. */
@@ -211,6 +214,8 @@ export class LazyPanel implements Component, Focusable {
 	private readonly noticeDialog: NoticeDialog;
 	/** Full tree in a big box (`a` in the tree pane) with its own cursor, live search and the filter keys. */
 	private readonly treeDialog: TreeDialog;
+	/** `X`: archived sessions from every directory; restore / delete only. */
+	private readonly archiveDialog: ArchiveDialog;
 	/** `i` in SESSIONS: the read-only Session Info box. */
 	private readonly infoDialog: SessionInfoDialog;
 	/** `u` in SESSIONS: the read-only Context usage box. */
@@ -288,6 +293,10 @@ export class LazyPanel implements Component, Focusable {
 			theme: o.theme,
 			onChange: () => this.o.requestRender(),
 		});
+		this.archiveDialog = new ArchiveDialog({
+			theme: o.theme,
+			onChange: () => this.o.requestRender(),
+		});
 		this.infoDialog = new SessionInfoDialog({ theme: o.theme });
 		this.usageDialog = new ContextUsageDialog({ theme: o.theme });
 		this.changelogDialog = new ChangelogDialog({ theme: o.theme, onClose: () => this.closeChangelog() });
@@ -345,6 +354,14 @@ export class LazyPanel implements Component, Focusable {
 				],
 			},
 			{
+				isOpen: () => this.archiveDialog.isOpen,
+				handleInput: (data) => this.handleArchiveInput(data),
+				handleMouse: (event) => this.archiveMouse(event),
+				draw: (lines, width) => this.archiveDialog.overlay(lines, width),
+				hints: () => this.archiveDialog.hints,
+				base: true,
+			},
+			{
 				isOpen: () => this.treeDialog.isOpen,
 				handleInput: (data) => this.handleTreeDialogInput(data),
 				handleMouse: (event) => this.treeDialogMouse(event),
@@ -362,7 +379,8 @@ export class LazyPanel implements Component, Focusable {
 			currentSessionFile: o.currentSessionFile,
 			skipSummaryPrompt: o.skipSummaryPrompt ?? false,
 			isDisposed: () => this.disposed,
-			archiveViewHint: () => this.archiveViewHint(),
+			archiveOpenHint: () => this.archiveOpenHint(),
+			refreshArchivedSessions: () => this.refreshArchivedSessions(),
 			setStatus: (text) => this.setStatus(text),
 			sessionRows: () => this.sessions,
 			currentSessionRow: () => this.currentSessionRow(),
@@ -415,6 +433,7 @@ export class LazyPanel implements Component, Focusable {
 		this.searchBar.focused = v && this.state.mode === "search";
 		this.inputDialog.focused = v && this.inputDialog.isOpen;
 		this.treeDialog.focused = v && this.treeDialog.isOpen;
+		this.archiveDialog.focused = v && this.archiveDialog.isOpen;
 	}
 
 	// -----------------------------------------------------------------------
@@ -430,7 +449,7 @@ export class LazyPanel implements Component, Focusable {
 		this.locateSessionFile = undefined;
 		if (await this.listSessions(keep)) {
 			const archived = keep && [...this.state.archivedFiles].some((f) => sessionFileKey(f) === sessionFileKey(keep));
-			this.setStatus(archived && this.state.sessionView === "normal" ? t("status.currentSessionArchived", { hint: this.archiveViewHint() }) : undefined);
+			this.setStatus(archived ? t("status.currentSessionArchived", { hint: this.archiveOpenHint() }) : undefined);
 			await this.loadSelectedSession();
 		}
 	}
@@ -444,17 +463,16 @@ export class LazyPanel implements Component, Focusable {
 	 * 删除 / 改名 / 换排序之后重新拉列表：光标尽量留在同一个会话上，只有光标下的会话
 	 * 真的变了（比如删掉的那个）才重新加载 TREE / CONTENT。
 	 */
-	private async listSessions(keepFile: string | undefined, view = this.state.sessionView): Promise<boolean> {
+	private async listSessions(keepFile: string | undefined): Promise<boolean> {
 		const request = ++this.sessionListRequest;
 		const { scope, sort } = this.state;
 		try {
 			const files = this.o.data.loadSessionState ? await this.o.data.loadSessionState() : undefined;
 			const pinned = files?.pinned ?? this.state.pinnedFiles;
 			const archived = files ? new Set(files.archived) : this.state.archivedFiles;
-			const rows = await this.o.data.listSessions(scope, sort, pinned, { view, archived });
+			const rows = await this.o.data.listSessions(scope, sort, pinned, { archived });
 			if (this.disposed || request !== this.sessionListRequest) return false;
 			if (files) applySessionFileState(this.state, files);
-			this.state.sessionView = view;
 			this.sessions = rows;
 		} catch (err) {
 			if (this.disposed || request !== this.sessionListRequest) return false;
@@ -663,10 +681,6 @@ export class LazyPanel implements Component, Focusable {
 				this.clearSelection();
 				return;
 			}
-			if (this.state.sessionView === "archived") {
-				void this.toggleArchiveView();
-				return;
-			}
 			this.close();
 			return;
 		}
@@ -766,7 +780,7 @@ export class LazyPanel implements Component, Focusable {
 
 	/** Return to the underlying settings/tree browser when a prompt or info dialog closes. */
 	private baseMode(): PanelMode {
-		return this.settingsDialog.isOpen ? "settings" : this.treeDialog.isOpen ? "tree" : "normal";
+		return this.settingsDialog.isOpen ? "settings" : this.treeDialog.isOpen ? "tree" : this.archiveDialog.isOpen ? "archive" : "normal";
 	}
 
 	/**
@@ -895,7 +909,7 @@ export class LazyPanel implements Component, Focusable {
 
 	/** How many of the leading (sorted-to-front) sessions are pinned; drives the group rules and line geometry. */
 	private pinnedCount(): number {
-		if (this.state.sessionView === "archived" || this.state.pinnedFiles.length === 0) return 0;
+		if (this.state.pinnedFiles.length === 0) return 0;
 		const pinned = new Set(this.state.pinnedFiles.map(sessionFileKey));
 		return this.sessions.filter((r) => pinned.has(sessionFileKey(r.file))).length;
 	}
@@ -1206,16 +1220,17 @@ export class LazyPanel implements Component, Focusable {
 				this.toggleSelect();
 				return;
 			case "session-archive":
-			case "session-archive-view":
 				if (this.state.focus !== "sessions") {
 					this.setStatus(t("status.notImplemented", { action }));
 					return;
 				}
-				if (action === "session-archive") void toggleArchive(this.flowHost);
-				else void this.toggleArchiveView();
+				void toggleArchive(this.flowHost);
 				return;
 			case "session-pin":
 				void togglePin(this.flowHost);
+				return;
+			case "archive-open":
+				void this.openArchiveDialog();
 				return;
 			case "settings-open":
 				this.openSettings();
@@ -1334,59 +1349,132 @@ export class LazyPanel implements Component, Focusable {
 		}
 	}
 
-	/** X changes only visibility; directory scope and sorting stay the same. */
-	private async toggleArchiveView(): Promise<void> {
-		if (this.state.sessionStateBusy) return;
-		const { sessionView, scope } = this.state;
-		const next = sessionView === "normal" ? "archived" : "normal";
-		this.state.sessionViewPositions[sessionView] = {
-			scope,
-			file: this.sessions[this.state.cursor.sessions]?.file,
-			index: this.state.cursor.sessions,
-			scroll: this.state.listScroll.sessions,
-			query: this.state.search.sessions?.query ?? "",
-		};
-		const position = this.state.sessionViewPositions[next];
-		const sameScope = position?.scope === scope;
-		if (this.sessionLoadTimer) clearTimeout(this.sessionLoadTimer);
-		this.sessionLoadTimer = undefined;
+	/**
+	 * X: load the archived sessions of every directory and open the management
+	 * dialog. Read-only until the user restores / deletes something, so this only
+	 * reads the metadata and the session list.
+	 */
+	private async openArchiveDialog(): Promise<void> {
+		if (this.disposed || this.entering || this.state.sessionStateBusy || this.state.mode === "search" || this.activeOverlay()) return;
+		const load = this.o.data.listArchivedSessions;
+		if (!load) {
+			this.setStatus(t("status.archiveUnavailable"));
+			return;
+		}
+		this.keys.clear();
 		this.state.sessionStateBusy = true;
 		this.setStatus(t("status.loadingSessions"));
 		try {
-			if (!await this.listSessions(sameScope ? position.file : undefined, next)) return;
-			const index = findSessionIndex(this.sessions, sameScope ? position.file : undefined);
-			this.state.cursor.sessions = index >= 0 ? index : clamp(sameScope ? position.index : 0, 0, Math.max(0, this.sessions.length - 1));
-			this.state.listScroll.sessions = sameScope ? position.scroll : null;
-			this.state.selectedSessionFiles.clear();
-			if (position?.query) this.state.search.sessions = { query: position.query, matches: [], current: -1 };
-			else delete this.state.search.sessions;
-			this.refreshSearch("sessions");
-			this.setStatus(undefined);
-			await this.followSessionsCursor();
+			const files = this.o.data.loadSessionState ? await this.o.data.loadSessionState() : undefined;
+			if (files) applySessionFileState(this.state, files);
+			const rows = await load(new Set(this.state.archivedFiles));
+			if (this.disposed) return;
+			this.state.mode = "archive";
+			this.status = undefined;
+			const searchKey = labelsFor(this.keymap, "global", "search")[0];
+
+			this.archiveDialog.open({
+				rows,
+				...(this.o.currentProjectCwd ? { currentProject: this.o.currentProjectCwd } : {}),
+				...(searchKey ? { searchKey } : {}),
+				onRestore: (row) => void restoreArchivedSession(this.flowHost, row),
+				onDelete: (rows) => confirmDeleteArchivedSessions(this.flowHost, rows),
+				onProjectMenu: () => this.openArchiveProjectMenu(),
+				onClose: () => this.closeArchiveDialog(),
+			});
+			this.archiveDialog.focused = this._focused;
+			this.o.requestRender();
+		} catch (err) {
+			if (!this.disposed) this.setStatus(t("status.listFailed", { error: (err as Error).message }));
 		} finally {
 			this.state.sessionStateBusy = false;
 			this.o.requestRender();
 		}
 	}
 
-	private archiveViewHint(): string {
-		const key = labelsForFocus(this.keymap, "sessions", "session-archive-view")[0];
-		return key ? t("hint.viewArchive", { key }) : "";
+	/** Re-read the archived sessions after a restore / delete; no-op once the dialog is closed. */
+	private async refreshArchivedSessions(): Promise<void> {
+		if (!this.archiveDialog.isOpen) return;
+		const load = this.o.data.listArchivedSessions;
+		if (!load) return;
+		try {
+			const files = this.o.data.loadSessionState ? await this.o.data.loadSessionState() : undefined;
+			if (files) applySessionFileState(this.state, files);
+			const rows = await load(new Set(this.state.archivedFiles));
+			if (this.disposed) return;
+			if (this.archiveDialog.isOpen) this.archiveDialog.setRows(rows);
+		} catch (err) {
+			if (!this.disposed) this.setStatus(t("status.listFailed", { error: (err as Error).message }));
+		}
+		this.o.requestRender();
 	}
 
-	private archiveHints(): KeyHint[] {
-		const actions: [ActionId, string][] = [
-			["session-archive-view", t("hint.normalSessions")],
-			["session-archive", t("hint.unarchive")],
-			["session-resume", t("footer.session-resume")],
-			["search", t("footer.search")],
-			["help", t("footer.help")],
-			["quit", t("footer.quit")],
-		];
-		return actions.flatMap(([action, text]) => {
-			const keys = labelsForFocus(this.keymap, "sessions", action);
-			return keys.length ? [[compactKeys(keys), text] as KeyHint] : [];
+	private closeArchiveDialog(): void {
+		this.archiveDialog.close();
+		this.archiveDialog.focused = false;
+		this.state.mode = this.baseMode();
+		this.o.requestRender();
+	}
+
+	/** Keys while the archive dialog is open: its search row first, then the global search, then the list (Esc / q close it). */
+	private handleArchiveInput(data: string): void {
+		if (this.archiveDialog.searchFocused) {
+			this.archiveDialog.handleSearchInput(data);
+			return;
+		}
+		if (this.isAction(data, "global", "search")) {
+			this.archiveDialog.focusSearch();
+			return;
+		}
+		this.archiveDialog.handleInput(data);
+	}
+
+	/** Archive dialog mouse: click a search row / list row, double-click restores, wheel moves. */
+	private archiveMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+		return this.overlayMouse(
+			event,
+			() => this.archiveDialog.wheel(event.x, event.y, event.wheelDelta ?? 0),
+			(double) => {
+				const hit = this.archiveDialog.indexAt(event.x, event.y);
+				if (hit === "search") {
+					this.archiveDialog.focusSearch();
+					return;
+				}
+				if (hit === undefined) return;
+				this.archiveDialog.leaveSearch();
+				this.archiveDialog.moveTo(hit);
+				if (double) {
+					const row = this.archiveDialog.selectedRow;
+					if (row) void restoreArchivedSession(this.flowHost, row);
+				}
+			},
+		);
+	}
+
+	/** p in the archive dialog: all projects, the current project, then every other archived project. */
+	private openArchiveProjectMenu(): void {
+		const choices = this.archiveDialog.projectChoices;
+		const selected = choices.findIndex((choice) => choice.value === this.archiveDialog.projectFilter);
+		this.openMenu("archive", {
+			title: t("archive.projectTitle"),
+			items: choices.map((choice) => choice.label),
+			maxRows: this.dialogMaxRows(),
+			...(selected >= 0 ? { initialIndex: selected } : {}),
+			hints: [["Enter", t("hint.choose")], ["Esc", t("hint.cancel")]],
+			onSelect: (index) => {
+				const choice = choices[index];
+				this.closeDialogs();
+				if (choice) this.archiveDialog.setProject(choice.value);
+				this.o.requestRender();
+			},
+			onCancel: () => this.closeDialogs(),
 		});
+	}
+
+	/** Hint naming the configured global key that opens the archive dialog (empty when unbound). */
+	private archiveOpenHint(): string {
+		const key = labelsFor(this.keymap, "global", "archive-open")[0];
+		return key ? t("hint.openArchive", { key }) : "";
 	}
 
 	// -----------------------------------------------------------------------
@@ -2287,14 +2375,13 @@ export class LazyPanel implements Component, Focusable {
 		}
 		return renderFooter({
 			...footer,
-			...(this.state.sessionView === "archived" && this.state.focus === "sessions" ? { hints: this.archiveHints() } : {}),
 			...(status ? { status } : {}),
 		}, width)[0]!;
 	}
 
 	/** Empty SESSIONS list: in Current scope point at the scope-all key (rebindable) instead of just "no sessions". */
 	private sessionsEmptyMessage(): string {
-		if (this.state.sessionView !== "normal" || this.state.scope !== "current-folder") return t("pane.sessionsEmpty");
+		if (this.state.scope !== "current-folder") return t("pane.sessionsEmpty");
 		const key = labelsForFocus(this.keymap, "sessions", "scope-all")[0];
 		return key ? t("pane.sessionsEmptyCurrent", { key }) : t("pane.sessionsEmpty");
 	}
@@ -2308,7 +2395,7 @@ export class LazyPanel implements Component, Focusable {
 	/** "[1] SESSIONS": the jump key comes from the resolved keymap, so rebinding shows up here. */
 	private paneTitle(pane: PaneId): string {
 		const key = labelsFor(this.keymap, "global", FOCUS_ACTIONS[pane])[0];
-		const title = pane === "sessions" && this.state.sessionView === "archived" ? t("pane.archivedSessionsTitle") : paneTitleText(pane);
+		const title = paneTitleText(pane);
 		return key ? `[${key}] ${title}` : title;
 	}
 }
