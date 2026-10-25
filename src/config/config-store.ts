@@ -6,7 +6,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
 import { KEY_SCOPES, LEFT_COLUMN_RATIO_MAX, LEFT_COLUMN_RATIO_MIN } from "../constants.ts";
 import type { ActionId, KeyChord, KeyScope } from "../types.ts";
-import { parseChord } from "./keys.ts";
+import { normalizeOpenShortcut, parseChord } from "./keys.ts";
 
 export interface ConfigSnapshot {
 	raw: Record<string, unknown>;
@@ -19,9 +19,22 @@ export interface SettingsPatch {
 	defaultScope?: "all" | "current-folder" | null;
 	defaultSort?: "recent" | "created" | "title" | "threaded" | null;
 	leftColumnRatio?: number | null;
+	/** pi 级打开面板的快捷键编辑；见 OpenShortcutPatch。 */
+	openShortcut?: OpenShortcutPatch;
 	/** Per-(scope, action) key binding edits; see KeymapPatchValue. */
 	keymap?: KeymapPatch;
 }
+
+/**
+ * One edit of the pi-level open-panel shortcut:
+ *   { set }   write this key
+ *   { off }   write null (do not register a shortcut in pi)
+ *   { reset } delete the user value (fall back to DEFAULT_OPEN_SHORTCUT)
+ *
+ * null is a real value for openShortcut (disabled), so unlike the other fields
+ * it cannot double as "delete the override".
+ */
+export type OpenShortcutPatch = { set: string } | { off: true } | { reset: true };
 
 /**
  * One key binding edit relative to the on-disk user config:
@@ -47,7 +60,7 @@ const FIELD_VALUES = {
 	locale: ["en", "zh"],
 	defaultScope: ["all", "current-folder"],
 	defaultSort: ["recent", "created", "title", "threaded"],
-} satisfies Record<Exclude<keyof SettingsPatch, "leftColumnRatio" | "keymap">, string[]>;
+} satisfies Record<Exclude<keyof SettingsPatch, "leftColumnRatio" | "openShortcut" | "keymap">, string[]>;
 
 /** How far `resolveTarget` follows a chain of links, mirroring the kernel's ELOOP cap. */
 const MAX_LINK_DEPTH = 32;
@@ -141,6 +154,22 @@ export async function savePatch(file: string, baseline: ConfigSnapshot, patch: S
 				}
 				if (Object.keys(desired).length) raw.keymap = desired;
 				else delete raw.keymap;
+				continue;
+			}
+			if (field === "openShortcut") {
+				// null 在这里是"关闭快捷键"这个真实取值，不能沿用其他字段 null = 删除的写法，
+				// 所以 { reset } 单独表示删除用户值（回到内置默认键）。
+				const edit = changes.openShortcut!;
+				const writesValue = !("reset" in edit);
+				// 写规范化后的键位（validatePatch 已经确认能规范化），磁盘上不留 "Alt+L" 这种写法。
+				const desired = "set" in edit ? normalizeOpenShortcut(edit.set)! : null;
+				const baseHas = Object.hasOwn(base.raw, field);
+				const latestHas = Object.hasOwn(latest.raw, field);
+				const sameBase = baseHas === latestHas && isDeepStrictEqual(base.raw[field], latest.raw[field]);
+				const sameDesired = writesValue ? latestHas && isDeepStrictEqual(latest.raw[field], desired) : !latestHas;
+				if (!sameBase && !sameDesired) throw new Error(`Config conflict in ${field}; reload settings before saving`);
+				if (writesValue) raw[field] = desired;
+				else delete raw[field];
 				continue;
 			}
 			const desired = changes[field];
@@ -437,11 +466,24 @@ function validatePatch(patch: SettingsPatch): void {
 			validateKeymapPatch(value);
 			continue;
 		}
+		if (field === "openShortcut") {
+			validateOpenShortcutPatch(value);
+			continue;
+		}
 		const valid = field === "leftColumnRatio"
 			? value === null || (typeof value === "number" && Number.isFinite(value) && value >= LEFT_COLUMN_RATIO_MIN && value <= LEFT_COLUMN_RATIO_MAX)
 			: Object.hasOwn(FIELD_VALUES, field) && (value === null || (FIELD_VALUES[field as keyof typeof FIELD_VALUES] as readonly unknown[]).includes(value));
 		if (!valid) throw new Error(`Invalid settings patch field ${field}`);
 	}
+}
+
+function validateOpenShortcutPatch(value: unknown): void {
+	const valid = isPlainObject(value) && (
+		("off" in value && value.off === true) ||
+		("reset" in value && value.reset === true) ||
+		("set" in value && typeof value.set === "string" && normalizeOpenShortcut(value.set) !== undefined)
+	);
+	if (!valid) throw new Error("Invalid settings patch field openShortcut");
 }
 
 function validateKeymapPatch(value: unknown): void {

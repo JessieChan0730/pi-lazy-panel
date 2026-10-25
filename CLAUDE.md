@@ -58,9 +58,9 @@ npm run ci             # CI 入口（.github/workflows/ci.yml 调用）：跑和
 
 ```
 src/
-├── index.ts                  # 入口：registerCommand("/lazy-panel")，用 ctx.ui.custom 打开全屏面板
+├── index.ts                  # 入口：registerCommand("/lazy-panel")（命令本体在 openPanel）用 ctx.ui.custom 打开全屏面板；同时 registerShortcut 注册 pi 全局快捷键（默认 alt+l，走 sendUserMessage 重新进入命令）
 ├── types.ts                  # 共享类型（只放类型，禁止运行时代码）
-├── constants.ts              # 常量：扩展 id、命令名、布局比例、面板 id、排序循环顺序（SESSION_SORT_MODES）、键位 scope（KEY_SCOPES = global + 面板 + tree-dialog）
+├── constants.ts              # 常量：扩展 id、命令名、pi 级快捷键默认值（DEFAULT_OPEN_SHORTCUT = alt+l）、布局比例、面板 id、排序循环顺序（SESSION_SORT_MODES）、键位 scope（KEY_SCOPES = global + 面板 + tree-dialog）
 ├── ui/                       # 渲染层：pi-tui Component。不做 I/O，不调用 pi 会话 API
 │   ├── app.ts                # 根组件 LazyPanel，只做协调：加载光标下的会话、TREE 光标驱动 CONTENT 高亮、/ 搜索的编排（原位置、实时跳转、n/N、折叠展开）、树对话框、鼠标、render。overlays 一张表决定按键归谁 / footer 提示 / 鼠标屏蔽 / 叠加顺序（新增弹窗只加一项）；dispatch 对 ActionId 做了穷尽检查（新增动作漏了分发 tsc 会报错）
 │   ├── state.ts              # PanelState + createInitialState：全部可变 UI 状态（焦点、光标、搜索、多选、置顶、折叠……）
@@ -118,8 +118,8 @@ src/
 │   └── search.ts             # 纯函数：parseSearchQuery 解析 name:/model:/path:/tag:/role:/after:/before: + 自由文本；普通词只搜 名称 / 标题 / label，其他字段都要限定词：matchTreeRow（TREE 面板和树对话框：每个词都要出现在 label + 正文里，tag: 只看 label，role: 只看角色，after:/before: 看时间）；matchSessionRow（SESSIONS：普通词只看 名称 + 首条消息预览，模型 / 路径只通过 model: / path: 匹配，path: 也认 ~/… 写法，after:/before: 看更新时间）；matchesTokens（CONTENT 行）；highlightTerms / findMatchRanges 给高亮用；firstMatchFrom / stepMatch / cycleMatch：实时搜索、n / N 跳到哪个匹配（回绕）
 ├── config/
 │   ├── keymap.ts             # 默认键位 + 动作描述 + footer 提示顺序（纯数据），含 tree-dialog scope（d/t/u/l/a 过滤、q 关闭）；DISABLED_ACTIONS 列出在某个 scope 里关掉的外层动作（对话框里的切面板 / C A / n N / quit / help / tree-open / changelog）；TREE_DIALOG_FOOTER 是对话框提示的顺序
-│   ├── keys.ts               # 纯函数：chord 解析（ctrl+d / G / gg）、按键匹配、按 scope 解析 ActionId；scopeChain 定义查找顺序（对话框 → tree → global，面板 → global）
-│   ├── config.ts             # 唯一知道 ~/.pi/agent/lazy-panel.json 的模块，深合并用户配置（null 解绑）
+│   ├── keys.ts               # 纯函数：chord 解析（ctrl+d / G / gg）、按键匹配、按 scope 解析 ActionId；scopeChain 定义查找顺序（对话框 → tree → global，面板 → global）；normalizeOpenShortcut 校验 pi 级快捷键（单键、带修饰键或 F 键）
+│   ├── config.ts             # 唯一知道 ~/.pi/agent/lazy-panel.json 的模块，深合并用户配置（null 解绑）；openShortcut 是 pi 级打开面板的快捷键（校验 + 规范化），loadConfigSync 供扩展加载时同步注册
 │   └── pi-settings.ts        # 唯一读 pi 自己 settings.json 的模块（SettingsManager.create 只读），目前取 branchSummary.skipPrompt、treeFilterMode（TREE 的初始过滤）和 sessionShareDestination（S 目的地菜单的初始光标）
 ├── i18n/                     # 国际化：唯一知道 i18next 的层
 │   ├── index.ts              # initI18n(lng?)（同步、按系统语言、fallback en、returnEmptyString:false 让空占位回退英文）、detectLocale / normalizeLocale、导出 t()。约定：不在模块顶层用 t() 算 const，文案一律写成函数、渲染时才 t()
@@ -157,6 +157,7 @@ test/
 ├── search.test.ts            # parseSearchQuery 的限定词解析、matchTreeRow / matchSessionRow / matchesTokens 的匹配规则、findMatchRanges、firstMatchFrom / stepMatch / cycleMatch
 ├── i18n.test.ts              # 语言检测 / 初始化 / 插值 / 复数 / 缺失回退（initI18n / detectLocale / normalizeLocale / t）
 ├── lint.test.ts              # i18n/no-hardcoded-text 规则：报 / 不报的场景、只作用于 src
+├── open-shortcut.test.ts     # pi 级快捷键：loadConfigSync（默认 / 自定义 / null / 坏 JSON）和 registerOpenShortcut（注册键位、description、重新发 /lazy-panel、null 不注册）
 └── ui.test.ts                # 格式化、frame 几何、树过滤 / 折叠、TreeDialog 搜索行、highlightLine / searchMeta、ContentViewport（滚动夹取 / zz 越界 / 行匹配缓存）、TreeView（reveal / keepCursorOn / z / 搜索期间暂停折叠）
 
 docs/keybindings.md           # 默认快捷键表，新增 ActionId 时同步更新
@@ -168,6 +169,8 @@ AGENTS.md                     # 仅指向本文件，规则统一在这里维护
 数据流：`sessions.ts` → `SessionRow[]` → SESSIONS 面板；选中行驱动 `tree.ts` → `TreeRow[]` → `tree-fold.ts` 隐藏折叠段（`PanelState.treeFolded`，默认旁支折叠）→ TREE 面板；选中节点（或活动叶子）驱动 `content.ts` → `ContentBlock[]` → CONTENT 面板。所有 UI 状态集中在 `PanelState`（`src/ui/state.ts`），TREE / CONTENT 由此派生的视图（可见行、排版、滚动规则）在 `ui/tree-view.ts` / `ui/content-viewport.ts`。`/` 搜索是每个面板一份的 `PanelState.search`（关键字 + 匹配行号），列表不过滤只跳转；面板拿到的是 `SearchView`（可见行号的匹配集合、当前匹配、要高亮的词），高亮由 `ui/search-highlight.ts` 在画好的行上叠加。
 
 快捷键是间接绑定：按键 → `resolveKeys`（`src/config/keys.ts`，按 `scopeChain` 的顺序查：面板 scope 再 global，树对话框是 tree-dialog → tree → global，支持 `gg` 这类多键序列） → `ActionId`（`src/types.ts`） → `LazyPanel.dispatch`（对话框里是 `dispatchInTreeDialog`）。默认值在 `src/config/keymap.ts`，`loadConfig` 深合并用户覆盖。新增动作时要同时改：`ActionId`、默认键位、`ACTION_DESCRIPTIONS`、`dispatch` 里的分发（漏了 tsc 会报错）、`docs/keybindings.md`。要弹窗或调 action 的命令，流程写成 `ui/flows/` 里的顶级函数（第一个参数是 `FlowHost`），`dispatch` 里只调用它；需要面板的新能力就加到 `FlowHost` 上。
+
+面板之外还有一个 pi 级快捷键（默认 `alt+l`，配置 `openShortcut`）：`src/index.ts` 在扩展工厂里同步注册，处理器只调 `pi.sendUserMessage("/lazy-panel", { expandPromptTemplates: true })` 回到命令路径（扩展快捷键自带的 ctx 没有 newSession / switchSession / navigateTree / fork，不能直接开面板）。改键要 pi `/reload` 才生效；设置页「快捷键」分类里也能改（`settings-flows.ts` 的 openOpenShortcutEditor：修改 / 关闭 / 恢复默认，补丁形状是 `OpenShortcutPatch`，因为 `null` 是「关闭」这个真实取值而不是删除）。
 
 ## 代码风格/合作规范
 

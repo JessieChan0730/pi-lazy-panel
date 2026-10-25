@@ -7,6 +7,7 @@
  * 用户配置示例（所有字段可选）：
  * {
  *   "locale": "zh",
+ *   "openShortcut": "alt+l",
  *   "defaultScope": "all",
  *   "keymap": {
  *     "global":   { "help": "F1", "scope-all": ["A", "ctrl+space"] },
@@ -17,12 +18,13 @@
  * locale 缺省时按系统语言自动检测（见 i18n/index.ts）。
  */
 
+import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { CONFIG_FILE_NAME, KEY_SCOPES, LEFT_COLUMN_RATIO, LEFT_COLUMN_RATIO_MAX, LEFT_COLUMN_RATIO_MIN, SESSION_SORT_MODES } from "../constants.ts";
+import { CONFIG_FILE_NAME, DEFAULT_OPEN_SHORTCUT, KEY_SCOPES, LEFT_COLUMN_RATIO, LEFT_COLUMN_RATIO_MAX, LEFT_COLUMN_RATIO_MIN, SESSION_SORT_MODES } from "../constants.ts";
 import { type Locale, SUPPORTED_LOCALES } from "../i18n/index.ts";
 import type { ActionId, KeyChord, Keymap, KeyScope, PaneKeymap, SessionSortMode, UserConfig, UserPaneKeymap } from "../types.ts";
-import { isReservedKey } from "./keys.ts";
+import { isReservedKey, normalizeOpenShortcut } from "./keys.ts";
 import type { ConfigSaveResult, ConfigSnapshot, SettingsPatch } from "./config-store.ts";
 import { readSnapshot, savePatch } from "./config-store.ts";
 import { DEFAULT_KEYMAP } from "./keymap.ts";
@@ -42,6 +44,8 @@ export interface ResolvedConfig {
 	keymap: Keymap;
 	/** UI 语言；缺省（未在用户配置里指定）时按系统语言自动检测。 */
 	locale?: Locale;
+	/** pi 级打开面板的快捷键（规范化后的单个键位）；null 表示不注册。 */
+	openShortcut: string | null;
 	defaultScope: NonNullable<UserConfig["defaultScope"]>;
 	defaultSort: NonNullable<UserConfig["defaultSort"]>;
 	leftColumnRatio: number;
@@ -51,11 +55,26 @@ export interface ResolvedConfig {
 
 export const DEFAULT_CONFIG: ResolvedConfig = {
 	keymap: DEFAULT_KEYMAP,
+	openShortcut: DEFAULT_OPEN_SHORTCUT,
 	defaultScope: "current-folder",
 	defaultSort: "recent",
 	leftColumnRatio: LEFT_COLUMN_RATIO,
 	warnings: [],
 };
+
+/**
+ * Parse file text into a resolved config. Shared by the async and sync loaders
+ * so both report broken files exactly the same way.
+ */
+function parseConfigText(raw: string, file: string): ResolvedConfig {
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(raw);
+	} catch (err) {
+		return { ...DEFAULT_CONFIG, warnings: [`config: invalid JSON in ${file}: ${(err as Error).message}`] };
+	}
+	return resolveConfig(parsed);
+}
 
 /**
  * Load user config from disk and merge over defaults.
@@ -71,13 +90,26 @@ export async function loadConfig(agentDir: string): Promise<ResolvedConfig> {
 		if ((err as NodeJS.ErrnoException).code === "ENOENT") return DEFAULT_CONFIG;
 		return { ...DEFAULT_CONFIG, warnings: [`config: cannot read ${file}: ${(err as Error).message}`] };
 	}
-	let parsed: unknown;
+	return parseConfigText(raw, file);
+}
+
+/**
+ * Synchronous variant used while the extension registers itself: pi requires
+ * `registerShortcut` to be called from the extension factory, before any async
+ * work. Errors are reported the same way as `loadConfig`.
+ *
+ * 扩展加载时就必须同步注册 pi 快捷键，所以这里用同步读；错误处理与 loadConfig 一致。
+ */
+export function loadConfigSync(agentDir: string): ResolvedConfig {
+	const file = join(agentDir, CONFIG_FILE_NAME);
+	let raw: string;
 	try {
-		parsed = JSON.parse(raw);
+		raw = readFileSync(file, "utf8");
 	} catch (err) {
-		return { ...DEFAULT_CONFIG, warnings: [`config: invalid JSON in ${file}: ${(err as Error).message}`] };
+		if ((err as NodeJS.ErrnoException).code === "ENOENT") return DEFAULT_CONFIG;
+		return { ...DEFAULT_CONFIG, warnings: [`config: cannot read ${file}: ${(err as Error).message}`] };
 	}
-	return resolveConfig(parsed);
+	return parseConfigText(raw, file);
 }
 
 /** Pure merge step, separated from I/O so it can be unit-tested. */
@@ -116,6 +148,20 @@ export function resolveConfig(user: unknown): ResolvedConfig {
 		}
 	}
 
+	// pi 级打开面板的快捷键：单个按键，必须带修饰键或为 F1–F12；null 关闭注册。
+	let openShortcut = DEFAULT_CONFIG.openShortcut;
+	if (u.openShortcut !== undefined) {
+		if (u.openShortcut === null) {
+			openShortcut = null;
+		} else if (typeof u.openShortcut === "string") {
+			const normalized = normalizeOpenShortcut(u.openShortcut);
+			if (normalized) openShortcut = normalized;
+			else warnings.push(`config: openShortcut "${u.openShortcut}" must be one key with a modifier or an F-key`);
+		} else {
+			warnings.push("config: openShortcut must be a string or null");
+		}
+	}
+
 	const keymap = mergeKeymap(DEFAULT_KEYMAP, u.keymap, warnings);
 	// 主题不在这里配置：面板没有自己的主题，颜色一律取自 pi，主题选择写进 pi 的
 	// settings.json（见 docs/theme.md）。写了这一项的人多半是以为面板能单独设主题。
@@ -123,7 +169,7 @@ export function resolveConfig(user: unknown): ResolvedConfig {
 		warnings.push("config: \"theme\" is not a plugin setting; the panel follows pi's theme (set it with pi's /settings)");
 	}
 	// locale 未指定时不写入该键（exactOptionalPropertyTypes），运行时按系统语言。
-	return { keymap, defaultScope, defaultSort, leftColumnRatio, warnings, ...(locale !== undefined ? { locale } : {}) };
+	return { keymap, openShortcut, defaultScope, defaultSort, leftColumnRatio, warnings, ...(locale !== undefined ? { locale } : {}) };
 }
 
 /**

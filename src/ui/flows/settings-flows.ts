@@ -1,12 +1,12 @@
 /** Settings menus and persistence orchestration. Widgets never read or write files. */
 import { resolveConfig, type ResolvedConfig, type SettingsPatch } from "../../config/config.ts";
 import type { KeymapPatchValue } from "../../config/config-store.ts";
-import { chordLabel, conflictKey, keymapConflicts, labelsFor, parseChord, type KeyConflict } from "../../config/keys.ts";
+import { chordLabel, conflictKey, keymapConflicts, labelsFor, normalizeOpenShortcut, parseChord, type KeyConflict } from "../../config/keys.ts";
 import { actionDescription, DEFAULT_KEYMAP, scopeTitle } from "../../config/keymap.ts";
-import { KEY_SCOPES, LEFT_COLUMN_RATIO_MAX, LEFT_COLUMN_RATIO_MIN } from "../../constants.ts";
+import { DEFAULT_OPEN_SHORTCUT, KEY_SCOPES, LEFT_COLUMN_RATIO_MAX, LEFT_COLUMN_RATIO_MIN } from "../../constants.ts";
 import { t } from "../../i18n/index.ts";
 import type { ActionId, KeyChord, KeyHint, KeyScope } from "../../types.ts";
-import { keymapDraftChords, restoreKeymapDraft, setKeymapDraft, setSettingsDraft, settingsDirtyCount, settingsDraft, settingsRetryKind, type EditableSetting, type SettingsState } from "../settings-state.ts";
+import { keymapDraftChords, restoreKeymapDraft, setKeymapDraft, setOpenShortcutDraft, setSettingsDraft, settingsDirtyCount, settingsDraft, settingsRetryKind, type EditableSetting, type SettingsState } from "../settings-state.ts";
 import { confirmDialogSpec } from "../widgets/confirm-dialog.ts";
 import { numericInputValue } from "../widgets/input-dialog.ts";
 import type { SettingsFlowHost } from "./host.ts";
@@ -139,6 +139,10 @@ export function editSetting(h: SettingsFlowHost, key: string): void {
 		});
 		return;
 	}
+	if (key === "openShortcut") {
+		if (s.baseline) openOpenShortcutEditor(h, generation);
+		return;
+	}
 	if (s.category === "keybindings") {
 		if (s.baseline) openBindingEditor(h, key as ActionId);
 		return;
@@ -185,6 +189,67 @@ export function editSetting(h: SettingsFlowHost, key: string): void {
 			commitDraft(h);
 		},
 		onCancel: () => h.closeDialogs(),
+	});
+}
+
+/**
+ * pi 级打开面板的快捷键（「快捷键」分类里作用域下面那一行）。它不是面板键位表的一部分：
+ * 只有"修改 / 关闭 / 恢复默认"，改完写进 lazy-panel.json；pi 只在扩展加载时注册快捷键，
+ * 所以保存后的提示会说明要 `/reload` 才生效。
+ */
+function openOpenShortcutEditor(h: SettingsFlowHost, generation: number): void {
+	const s = h.state.settings;
+	const draft = settingsDraft(s);
+	if (!draft) return;
+	const enabled = draft.openShortcut !== null;
+	// 用户文件里写了这一项才有"恢复默认"（删掉它，回到内置键）；只写 null 也算。
+	const custom = s.baseline !== undefined && Object.hasOwn(s.baseline.raw, "openShortcut");
+	const items = [
+		t("settings.openShortcutChange"),
+		...(enabled ? [t("settings.openShortcutDisable")] : []),
+		...(custom ? [t("settings.openShortcutReset", { key: chordLabel(DEFAULT_OPEN_SHORTCUT) })] : []),
+	];
+	const disableIndex = enabled ? 1 : -1;
+	const resetIndex = custom ? (enabled ? 2 : 1) : -1;
+	h.openMenu("settings", {
+		title: t("settings.openShortcut"), items, hints: hints(),
+		onSelect: (index) => {
+			h.closeDialogs();
+			if (!current(h, generation)) return;
+			if (index === 0) {
+				openOpenShortcutCapture(h, generation);
+				return;
+			}
+			if (index === disableIndex) setOpenShortcutDraft(s, { off: true });
+			else if (index === resetIndex) setOpenShortcutDraft(s, { reset: true });
+			commitDraft(h);
+		},
+		onCancel: () => h.closeDialogs(),
+	});
+}
+
+/**
+ * 录制 pi 级快捷键：单键录入（`capture: "single"`），按下一个合格的键就立刻保存；
+ * 裸字母 / Enter / Tab / 未知修饰键留在弹窗里显示原因，等下一个键。
+ */
+function openOpenShortcutCapture(h: SettingsFlowHost, generation: number): void {
+	const s = h.state.settings;
+	h.openPrompt("settings", {
+		title: t("settings.openShortcut"), capture: "single", placeholder: t("settings.key.press"),
+		hints: [["Esc", t("hint.cancel")]],
+		validate: (value) => normalizeOpenShortcut(value) ? undefined : t("settings.openShortcutInvalid"),
+		onSubmit: (text) => {
+			const shortcut = normalizeOpenShortcut(text);
+			if (!shortcut) return;
+			h.closeDialogs();
+			if (!current(h, generation)) return;
+			setOpenShortcutDraft(s, { set: shortcut });
+			commitDraft(h);
+		},
+		onCancel: () => {
+			h.closeDialogs();
+			if (current(h, generation)) openOpenShortcutEditor(h, generation);
+		},
 	});
 }
 
@@ -535,6 +600,11 @@ function appliedNotices(config: ResolvedConfig, patch: SettingsPatch): string[] 
 					}));
 				}
 			}
+			continue;
+		}
+		// pi 级快捷键不是"面板设置"：保存后还要 pi 的 /reload 才重新注册，提示里说清楚。
+		if (key === "openShortcut") {
+			notices.push(t("settings.openShortcutApplied", { value: config.openShortcut ? chordLabel(config.openShortcut) : t("settings.openShortcutOff") }));
 			continue;
 		}
 		const setting = settingTitle(key);

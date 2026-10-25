@@ -116,6 +116,37 @@ export function normalizeKeyStep(step: string): string | undefined {
 }
 
 /**
+ * Normalise the pi-level shortcut that opens the panel (`openShortcut` in the
+ * user config). Unlike a panel chord it has to be a single key, and it must
+ * carry a modifier or be an F-key: a bare printable key (or Enter / Tab) would
+ * swallow ordinary typing in pi's editor, and pi's shortcut matching treats
+ * unknown modifiers ("hyper+l") as the plain key.
+ *
+ * 打开面板的 pi 级快捷键合法化：只接受单个按键，且必须带修饰键或是 F1–F12，
+ * 否则会把 pi 输入框里的普通输入抢走。和面板键位不同，这里不做「大写=Shift」的
+ * 简写（pi 的快捷键本身大小写不敏感），"Alt+L" 就是 alt+l。
+ */
+export function normalizeOpenShortcut(value: string): string | undefined {
+	const raw = value.trim();
+	if (!raw) return undefined;
+	// A bare "+" is a valid symbol key; anything else is split on "+".
+	const parts = raw === "+" ? ["+"] : raw.split("+").map((part) => part.trim()).filter((part) => part.length > 0);
+	const key = parts[parts.length - 1];
+	if (key === undefined) return undefined;
+	const mods = new Set(parts.slice(0, -1).map((mod) => mod.toLowerCase()));
+	for (const mod of mods) if (!MODIFIERS.has(mod)) return undefined;
+
+	const lower = key.toLowerCase();
+	if (key.length > 1 && !NAMED_KEYS.has(lower)) return undefined;
+	// pi-tui spells these two in camelCase.
+	const base = lower === "pageup" ? "pageUp" : lower === "pagedown" ? "pageDown" : lower;
+	if (mods.size === 0 && !/^f\d{1,2}$/.test(base)) return undefined;
+	if (RESERVED_KEYS.has(base)) return undefined;
+	const order = ["ctrl", "shift", "alt", "super"].filter((mod) => mods.has(mod));
+	return order.length ? `${order.join("+")}+${base}` : base;
+}
+
+/**
  * Parse a chord into a key sequence.
  *   "j"          -> ["j"]
  *   "ctrl+d"     -> ["ctrl+d"]

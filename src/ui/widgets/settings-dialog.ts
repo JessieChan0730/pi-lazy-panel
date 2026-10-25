@@ -4,7 +4,7 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import type { ResolvedConfig } from "../../config/config.ts";
 import { actionDescription, DEFAULT_KEYMAP, scopeTitle } from "../../config/keymap.ts";
-import { labelsFor, matchesKeyId } from "../../config/keys.ts";
+import { labelsFor, chordLabel, matchesKeyId } from "../../config/keys.ts";
 import { t } from "../../i18n/index.ts";
 import type { ActionId, KeyHint } from "../../types.ts";
 import { clamp } from "../../utils/indices.ts";
@@ -303,13 +303,24 @@ export class SettingsDialog {
 				// 快捷键保留说明：这里"只显示本层"和"实际还受继承 / 优先级 / 禁用影响"最容易看错。
 				// 说明框不再重复列表行，作用域名字要写进文案里（见 locales 的 scopeDescription / layerDescription）。
 				const scope = scopeTitle(state.keyScope);
-				return [{ id: "keyScope", label: t("settings.keyScope"), value: scope, description: t("settings.scopeDescription", { scope }) }, ...[...actions].map((id) => ({
-					id,
-					label: actionDescription(id as ActionId),
-					value: labelsFor(config.keymap, state.keyScope, id as ActionId).join(" / ") || t("settings.unbound"),
-					description: t("settings.layerDescription", { scope }),
-					dirty: keymapActionDirty(state, state.keyScope, id as ActionId),
-				}))];
+				// pi 级快捷键（打开面板本身）排在作用域行下面：它不在任何面板 scope 里，也不受继承影响。
+				return [
+					{ id: "keyScope", label: t("settings.keyScope"), value: scope, description: t("settings.scopeDescription", { scope }) },
+					{
+						id: "openShortcut",
+						label: t("settings.openShortcut"),
+						value: config.openShortcut ? chordLabel(config.openShortcut) : t("settings.openShortcutOff"),
+						description: t("settings.openShortcutDescription"),
+						dirty: dirty("openShortcut"),
+					},
+					...[...actions].map((id) => ({
+						id,
+						label: actionDescription(id as ActionId),
+						value: labelsFor(config.keymap, state.keyScope, id as ActionId).join(" / ") || t("settings.unbound"),
+						description: t("settings.layerDescription", { scope }),
+						dirty: keymapActionDirty(state, state.keyScope, id as ActionId),
+					})),
+				];
 			}
 		}
 	}

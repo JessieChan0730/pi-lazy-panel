@@ -535,3 +535,24 @@ test("keymap conflict only when another writer changed the same binding", async 
 	await fs.writeFile(file, JSON.stringify({ keymap: { tree: { "tree-copy": "x" } } }));
 	await assert.rejects(savePatch(file, base, { keymap: { tree: { "tree-copy": { set: ["c"] } } } }), /Config conflict in keymap\.tree\.tree-copy/);
 });
+
+test("openShortcut edits write a normalised key / null / reset and conflict on the same field", async (t) => {
+	const file = await fixture(t);
+	// set 写规范化后的键位（大写写法落盘也统一成小写）。
+	const set = await savePatch(file, await readSnapshot(file), { openShortcut: { set: "Ctrl+Shift+L" } });
+	assert.equal(set.snapshot.raw.openShortcut, "ctrl+shift+l");
+	// off 写 null（关掉注册），和「删除用户值」的 reset 不是一回事。
+	const off = await savePatch(file, set.snapshot, { openShortcut: { off: true } });
+	assert.equal(off.snapshot.raw.openShortcut, null);
+	// reset 删掉用户值，回到内置默认键。
+	const reset = await savePatch(file, off.snapshot, { openShortcut: { reset: true } });
+	assert.ok(!Object.hasOwn(reset.snapshot.raw, "openShortcut"));
+	// 另一个窗口改了同一个字段 → 冲突；已经是想写的内容则收敛。
+	await fs.writeFile(file, JSON.stringify({ openShortcut: "f2" }));
+	await assert.rejects(savePatch(file, reset.snapshot, { openShortcut: { set: "alt+l" } }), /Config conflict in openShortcut/);
+	const converged = await savePatch(file, reset.snapshot, { openShortcut: { set: "F2" } });
+	assert.equal(converged.snapshot.raw.openShortcut, "f2");
+	// 不合法的键位（裸键 / 未知修饰键）在 I/O 之前就被拒绝。
+	await assert.rejects(savePatch(file, converged.snapshot, { openShortcut: { set: "l" } }), /Invalid settings patch/);
+	await assert.rejects(savePatch(file, converged.snapshot, { openShortcut: { set: "hyper+l" } }), /Invalid settings patch/);
+});

@@ -11,6 +11,7 @@ The config file lives at `~/.pi/agent/lazy-panel.json`. Every field is optional 
 ```json
 {
   "locale": "zh",
+  "openShortcut": "alt+l",
   "defaultScope": "all",
   "defaultSort": "recent",
   "leftColumnRatio": 0.25,
@@ -24,6 +25,7 @@ The config file lives at `~/.pi/agent/lazy-panel.json`. Every field is optional 
 | Field | Description | Values / range | Default |
 | --- | --- | --- | --- |
 | `locale` | UI language | `"en"` / `"zh"` | follows system language |
+| `openShortcut` | pi-level key that opens the panel (see below) | one key with a modifier, or `F1`–`F12`; `null` disables | `"alt+l"` |
 | `defaultScope` | session scope on open | `"current-folder"` / `"all"` | `"current-folder"` |
 | `defaultSort` | session list ordering | `"recent"` / `"created"` / `"title"` / `"threaded"` | `"recent"` |
 | `leftColumnRatio` | left column width ratio | `0.15` ~ `0.6` | `0.25` |
@@ -31,6 +33,15 @@ The config file lives at `~/.pi/agent/lazy-panel.json`. Every field is optional 
 
 - Invalid `locale` / `defaultScope` / `defaultSort` fall back to the default, an out-of-range `leftColumnRatio` is ignored too, and the panel reports it in the footer when it opens.
 - When `locale` is omitted it is auto-detected from the system language (see `src/i18n/index.ts`).
+
+## Opening the panel
+
+Installing the plugin also registers a pi-level shortcut, **`alt+l`**, so the panel opens straight from pi's editor without typing `/lazy-panel`. It runs the very same command, so everything the command can do (resume, fork, import, …) works from the shortcut too; pi lists it under **Extensions** in its own keyboard-shortcut help.
+
+- It is read from `openShortcut` **once, when the extension loads**: after editing the key, run pi's `/reload` (or restart pi) to apply it. `null` disables the shortcut.
+- The key has to be a single key with a modifier (`ctrl` / `shift` / `alt` / `super`) or an F-key. A bare letter, Enter or Tab is rejected (with a warning in the panel footer), because it would swallow ordinary typing in pi's editor.
+- It only fires in pi's editor — inside the panel the normal keymap applies.
+- The settings page edits it too: **Keybindings → Open shortcut (pi)** presses-to-record a new key, turns it off, or falls back to the default. That page shows the saved value right away, but pi only re-registers it after `/reload`.
 
 ## Plugin settings
 

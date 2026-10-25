@@ -2,7 +2,7 @@
 
 ## Introduction
 
-pi-lazy-panel is a panel for managing [pi](https://pi.dev) sessions and session trees, offering a lazygit-style workflow and TUI look. Once installed, run `/lazy-panel` inside pi to open a full-terminal three-pane interface:
+pi-lazy-panel is a panel for managing [pi](https://pi.dev) sessions and session trees, offering a lazygit-style workflow and TUI look. Once installed, run `/lazy-panel` — or press the `alt+l` shortcut it registers in pi — to open a full-terminal three-pane interface:
 
 - Top-left **SESSIONS**: the history of past sessions (mirrors `/resume`)
 - Bottom-left **TREE**: the conversation tree of the selected session (mirrors `/tree`, switches automatically with the selection above)
@@ -10,7 +10,7 @@ pi-lazy-panel is a panel for managing [pi](https://pi.dev) sessions and session 
 
 The everyday session operations (new / resume / fork / clone / rename / delete / compact / export / import / share / copy) are all condensed into single-key shortcuts — no mouse required.
 
-Press `,` for the built-in **settings page**: General (language, default scope, default sort), Layout (how wide the left column is), Keybindings (per scope, recorded by pressing the keys you want) and Theme (switches pi's own theme). Every edit takes effect at once and is written back to `~/.pi/agent/lazy-panel.json` — no hand-editing JSON.
+Press `,` for the built-in **settings page**: General (language, default scope, default sort), Layout (how wide the left column is), Keybindings (per scope, recorded by pressing the keys you want; the pi-level open shortcut sits at the top of this page) and Theme (switches pi's own theme). Every edit takes effect at once and is written back to `~/.pi/agent/lazy-panel.json` — no hand-editing JSON.
 
 ## Preview
 
@@ -28,6 +28,7 @@ Press `,` for the built-in **settings page**: General (language, default scope, 
 8. Fully customizable keybindings: rebind any action in the settings page or in `~/.pi/agent/lazy-panel.json`
 9. Light mouse support (wheel to scroll, click to focus, double-click to enter / fold)
 10. Built-in settings page (`,`): General / Layout / Keybindings / Theme edited in place — key bindings are recorded by pressing the keys, conflicts are caught before they are written, and each edit is saved as you make it
+11. A global shortcut: installing the plugin registers `alt+l` in pi, so the panel opens without typing `/lazy-panel` (change or disable it with `openShortcut` in the config)
 
 ## Quick start
 
@@ -41,7 +42,7 @@ pi install npm:pi-lazy-panel
 pi install git:github.com/JessieChan0730/pi-lazy-panel
 ```
 
-After installing, run `/lazy-panel` inside pi to open the panel; `?` shows all shortcuts for the current pane, and `,` opens the settings page.
+After installing, run `/lazy-panel` (or press `alt+l`) inside pi to open the panel; `?` shows all shortcuts for the current pane, and `,` opens the settings page.
 
 ## Local development
 
@@ -78,6 +79,7 @@ The config file lives at `~/.pi/agent/lazy-panel.json`. Every field is optional 
 ```json
 {
  "locale": "zh",
+ "openShortcut": "alt+l",
  "defaultScope": "all",
  "defaultSort": "recent",
  "leftColumnRatio": 0.25,
@@ -91,12 +93,15 @@ The config file lives at `~/.pi/agent/lazy-panel.json`. Every field is optional 
 | Field             | Description                     | Values / range                                      | Default                |
 | ----------------- | ------------------------------- | --------------------------------------------------- | ---------------------- |
 | `locale`          | UI language                     | `"en"` / `"zh"`                                     | follows system language |
+| `openShortcut`    | pi-level key that opens the panel | one key with a modifier, or `F1`–`F12`; `null` disables | `"alt+l"`          |
 | `defaultScope`    | session scope on open           | `"current-folder"` / `"all"`                        | `"current-folder"`     |
 | `defaultSort`     | session list ordering           | `"recent"` / `"created"` / `"title"` / `"threaded"` | `"recent"`             |
 | `leftColumnRatio` | left column width ratio         | `0.15` ~ `0.6`                                      | `0.25`                 |
 | `keymap`          | custom keybindings              | see below                                           | built-in keys          |
 
 `keymap` is grouped by `scope` (`global` / `sessions` / `tree` / `content` / `tree-dialog`); the key is an action id and the value is one or more chords (e.g. `"ctrl+d"`, `["A", "ctrl+space"]`). A user-provided binding **replaces the action's default entirely**, and `null` unbinds it. See [docs/keybindings.md](./docs/keybindings.md) for the full list of action ids and keybindings.
+
+`openShortcut` is read once when the extension loads — run pi's `/reload` after changing it. Set it to `null` to keep only `/lazy-panel`. The settings page edits it too (**Keybindings → Open shortcut (pi)**: press a new key, turn it off, or fall back to the default).
 
 The settings page (`,`) edits this same file: it patches only the fields you changed, leaves the rest of the file — including its indentation and line endings — as it was, and merges unrelated changes made in another window (a conflict on the same field stops the write and offers a retry).
 

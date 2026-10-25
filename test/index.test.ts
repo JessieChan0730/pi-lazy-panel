@@ -37,11 +37,14 @@ type PanelFactory = (tui: unknown, theme: Theme, keybindings: unknown, done: () 
 
 function registeredCommand(): Command {
 	const commands: Command[] = [];
-	const pi: Pick<ExtensionAPI, "registerCommand"> = {
+	const pi: Pick<ExtensionAPI, "registerCommand" | "registerShortcut" | "sendUserMessage"> = {
 		registerCommand: (name, command) => {
 			assert.equal(name, "lazy-panel");
 			commands.push(command);
 		},
+		// 扩展加载时还会注册 pi 级快捷键；这里不需要它，给个 no-op 即可（注册本身在 open-shortcut.test.ts 里测）。
+		registerShortcut: () => {},
+		sendUserMessage: () => {},
 	};
 	extension(pi as ExtensionAPI);
 	return commands[0]!;

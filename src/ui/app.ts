@@ -37,7 +37,7 @@ import type { ResolvedConfig } from "../config/config.ts";
 import type { Component, Focusable, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
 import { type Binding, compileKeymap, labelsFor, labelsForFocus, matchesKeyId, resolveKeys } from "../config/keys.ts";
 import { DEFAULT_KEYMAP, FOCUS_ACTIONS, isDisabledIn, paneTitleText, TREE_DIALOG_FOOTER, treeDialogHintText } from "../config/keymap.ts";
-import { LEFT_COLUMN_RATIO, PANE_IDS, SESSION_SORT_MODES, SPINNER_INTERVAL_MS, TREE_DIALOG_SCOPE } from "../constants.ts";
+import { DEFAULT_OPEN_SHORTCUT, LEFT_COLUMN_RATIO, PANE_IDS, SESSION_SORT_MODES, SPINNER_INTERVAL_MS, TREE_DIALOG_SCOPE } from "../constants.ts";
 import { t } from "../i18n/index.ts";
 import { clamp, findLastIndex, indicesWhere } from "../utils/indices.ts";
 import { sessionFileKey } from "../utils/session-file-key.ts";
@@ -122,7 +122,7 @@ export interface LazyPanelOptions {
 	initialState?: Partial<PanelState>;
 	leftColumnRatio?: number;
 	/** Configured defaults for settings, independent of browsing state. */
-	configDefaults?: Pick<ResolvedConfig, "locale" | "defaultScope" | "defaultSort">;
+	configDefaults?: Pick<ResolvedConfig, "locale" | "defaultScope" | "defaultSort" | "openShortcut">;
 	/** Raw configuration persistence and save-time language application. */
 	settingsSource?: SettingsSource;
 	/** pi's themes: the settings page lists them and switches to one (the panel has no theme of its own). */
@@ -297,6 +297,7 @@ export class LazyPanel implements Component, Focusable {
 				defaultScope: this.state.scope,
 				defaultSort: this.state.sort,
 				...o.configDefaults,
+				openShortcut: o.configDefaults?.openShortcut ?? DEFAULT_OPEN_SHORTCUT,
 				leftColumnRatio: this.ratio,
 				keymap: this.keymap,
 			},

@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { mergeKeymap, resolveConfig } from "../src/config/config.ts";
 import { DEFAULT_KEYMAP } from "../src/config/keymap.ts";
-import { chordFromKeypress, chordLabel, compileKeymap, isReservedKey, keymapConflicts, labelsForFocus, matchesKeyId, normalizeKeyStep, parseChord, type ResolveResult, resolveKeys, scopeChain } from "../src/config/keys.ts";
+import { chordFromKeypress, chordLabel, compileKeymap, isReservedKey, keymapConflicts, labelsForFocus, matchesKeyId, normalizeKeyStep, normalizeOpenShortcut, parseChord, type ResolveResult, resolveKeys, scopeChain } from "../src/config/keys.ts";
 import { KeySequencer, PENDING_TIMEOUT_MS } from "../src/ui/key-sequencer.ts";
 
 /** Action of a resolve result, or undefined when it did not resolve to one. */
@@ -331,6 +331,33 @@ test("resolveConfig: locale overrides system language or falls back with a warni
 	const bad = resolveConfig({ locale: "fr" });
 	assert.equal(bad.locale, undefined);
 	assert.equal(bad.warnings.length, 1);
+});
+
+test("resolveConfig: openShortcut is normalised, disabled by null and validated", () => {
+	// 缺省就是内置的 alt+l。
+	assert.equal(resolveConfig({}).openShortcut, "alt+l");
+	// 大小写、修饰键顺序都规范化。
+	assert.equal(resolveConfig({ openShortcut: "Alt+L" }).openShortcut, "alt+l");
+	assert.equal(resolveConfig({ openShortcut: "F2" }).openShortcut, "f2");
+	assert.equal(resolveConfig({ openShortcut: "shift+ctrl+p" }).openShortcut, "ctrl+shift+p");
+	// null 关闭注册（不是退回默认）。
+	assert.equal(resolveConfig({ openShortcut: null }).openShortcut, null);
+	// 会抢走输入的裸键、未知修饰键、非字符串都退回默认并提示。
+	for (const value of ["l", "enter", "hyper+l", 42]) {
+		const cfg = resolveConfig({ openShortcut: value });
+		assert.equal(cfg.openShortcut, "alt+l", String(value));
+		assert.equal(cfg.warnings.length, 1, String(value));
+		assert.match(cfg.warnings[0]!, /openShortcut/);
+	}
+});
+
+test("normalizeOpenShortcut: one key with a modifier or an F-key", () => {
+	assert.equal(normalizeOpenShortcut("alt+l"), "alt+l");
+	assert.equal(normalizeOpenShortcut("Ctrl+D"), "ctrl+d");
+	assert.equal(normalizeOpenShortcut("f12"), "f12");
+	// 裸键会把输入抢走；Esc / Backspace 也不能当快捷键。
+	for (const value of ["l", "G", "space", "enter", "tab", "escape", "backspace", "hyper+l", ""])
+		assert.equal(normalizeOpenShortcut(value), undefined, value);
 });
 
 test("chordLabel / labelsForFocus produce readable hints", () => {

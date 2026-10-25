@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { ConfigSaveResult, ConfigSnapshot, SettingsPatch } from "../src/config/config-store.ts";
+import type { ConfigSaveResult, ConfigSnapshot, OpenShortcutPatch, SettingsPatch } from "../src/config/config-store.ts";
 import { applyKeymapPatch } from "../src/config/config-store.ts";
 import { initI18n } from "../src/i18n/index.ts";
 import type { Theme } from "@earendil-works/pi-coding-agent";
@@ -73,6 +73,11 @@ function fixture(raw: Record<string, unknown> = {}, overrides: Partial<SettingsS
 					const applied = applyKeymapPatch(next.keymap, value as NonNullable<SettingsPatch["keymap"]>);
 					if (Object.keys(applied).length) next.keymap = applied;
 					else delete next.keymap;
+				} else if (key === "openShortcut") {
+					// null 是真实取值（关闭注册），只有 reset 才删掉用户值。
+					const edit = value as OpenShortcutPatch;
+					if ("reset" in edit) delete next.openShortcut;
+					else next.openShortcut = "set" in edit ? edit.set : null;
 				} else if (value === null)
 					delete next[key];
 				else
@@ -466,6 +471,44 @@ test("keybinding editor adds, removes, unbinds and resets a binding, writing eac
 	assert.ok(!keymapActionDirty(h.state, "sessions", "session-delete"));
 	assert.equal(h.state.baseline?.raw.keymap, undefined);
 	assert.match(h.state.notice!, /set to: d$/);
+	assert.equal(h.writes(), 3);
+});
+test("pi-level open shortcut: capture one key, disable it, then reset to the built-in default", async () => {
+	const h = fixture();
+	await readSettings(h.host);
+	h.state.category = "keybindings";
+	// 没有用户值时只有「修改 / 关闭」：「恢复默认」要真的写过这一项才出现。
+	editSetting(h.host, "openShortcut");
+	assert.deepEqual(h.menu()?.items, ["Press a new key…", "Turn off"]);
+	h.menu()!.onSelect(0);
+	const prompt = h.prompt()!;
+	// 单键录入：按下一个键就提交，裸字母 / Enter 被挡下并给出原因。
+	assert.equal(prompt.capture, "single");
+	assert.ok(prompt.validate!("l"));
+	assert.ok(prompt.validate!("enter"));
+	assert.equal(prompt.validate!("ctrl+l"), undefined);
+	prompt.onSubmit("ctrl+l");
+	await settle();
+	// 立即落盘，通知里提醒要 /reload 才重新注册。
+	assert.equal(h.state.baseline?.raw.openShortcut, "ctrl+l");
+	assert.equal(settingsDirtyCount(h.state), 0);
+	assert.equal(h.state.notice, "Open shortcut saved: Ctrl+l. Run /reload in pi to apply it");
+	assert.equal(h.writes(), 1);
+	// 关闭把 null 写进文件（不是删掉用户值）。
+	editSetting(h.host, "openShortcut");
+	assert.deepEqual(h.menu()?.items, ["Press a new key…", "Turn off", "Use default (Alt+l)"]);
+	h.menu()!.onSelect(1);
+	await settle();
+	assert.equal(h.state.baseline?.raw.openShortcut, null);
+	assert.equal(h.state.notice, "Open shortcut saved: Off. Run /reload in pi to apply it");
+	// 已关闭时没有「关闭」这一项，但「恢复默认」还在。
+	editSetting(h.host, "openShortcut");
+	assert.deepEqual(h.menu()?.items, ["Press a new key…", "Use default (Alt+l)"]);
+	h.menu()!.onSelect(1);
+	await settle();
+	// reset 删掉用户值，回到内置默认键。
+	assert.ok(!Object.hasOwn(h.state.baseline!.raw, "openShortcut"));
+	assert.equal(h.state.notice, "Open shortcut saved: Alt+l. Run /reload in pi to apply it");
 	assert.equal(h.writes(), 3);
 });
 test("unbinding a default binding persists null and reset deletes the override on save", async () => {
