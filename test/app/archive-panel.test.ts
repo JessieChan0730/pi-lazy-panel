@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { basename, resolve } from "node:path";
 import { test, type TestContext } from "node:test";
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import { stripTerminalSequences, type TuiMouseEvent, type TuiMouseEventType, visibleWidth } from "@earendil-works/pi-tui";
 import { mergeKeymap } from "../../src/config/config.ts";
 import { DEFAULT_KEYMAP } from "../../src/config/keymap.ts";
 import { filterArchivedSessions, filterSessions, sortSessions } from "../../src/data/sessions.ts";
@@ -60,6 +60,7 @@ function harness(t: TestContext, opts: Options = {}) {
 	const deletes: string[] = [];
 	let shown: SessionRow[] = [];
 	let archivedRows: SessionRow[] = [];
+	let archiveLoads = 0;
 	let closed = false;
 	const data: DataSource = {
 		loadSessionState: async () => structuredClone(store.value),
@@ -70,6 +71,7 @@ function harness(t: TestContext, opts: Options = {}) {
 		},
 		// The real adapter lists every directory, independent of the C/A scope.
 		listArchivedSessions: async (archived) => {
+			archiveLoads++;
 			archivedRows = sortSessions(filterArchivedSessions(rows, archived), "recent");
 			return archivedRows;
 		},
@@ -119,6 +121,7 @@ function harness(t: TestContext, opts: Options = {}) {
 		closed: () => closed,
 		shown: () => shown,
 		archivedShown: () => archivedRows,
+		archiveLoads: () => archiveLoads,
 		cursorFile: () => shown[panel.state.cursor.sessions]?.file,
 		text: (width = 180) => panel.render(width).map(stripTerminalSequences).join("\n"),
 		footer: () => stripTerminalSequences(panel.render(180).at(-1)!),
@@ -149,6 +152,32 @@ function rowOrder(text: string, names: readonly string[]): string[] {
 	});
 }
 
+/** Synthetic normalized mouse event; the archive dialog draws into the same screen cells. */
+function mouseEvent(type: TuiMouseEventType, x: number, y: number, extra: Partial<TuiMouseEvent> = {}): TuiMouseEvent {
+	return {
+		type,
+		button: type === "wheel" ? "none" : "left",
+		x,
+		y,
+		screenX: x,
+		screenY: y,
+		width: 180,
+		height: 30,
+		shift: false,
+		alt: false,
+		ctrl: false,
+		...extra,
+	};
+}
+
+/** Screen cell of `needle` in the rendered frame (the archived row names only appear inside the box). */
+function cellOn(h: { panel: LazyPanel }, needle: string, width = 180): { x: number; y: number } {
+	const lines = h.panel.render(width).map(stripTerminalSequences);
+	const y = lines.findIndex((line) => line.includes(needle));
+	assert.ok(y >= 0, `"${needle}" is on screen`);
+	return { x: lines[y]!.indexOf(needle), y };
+}
+
 test("x archives atomically; X opens the archive, Enter restores it and keeps the box open", async (t) => {
 	const alpha = row("alpha").file;
 	const h = harness(t, { store: { value: { pinned: [alpha], archived: [] } } });
@@ -165,6 +194,7 @@ test("x archives atomically; X opens the archive, Enter restores it and keeps th
 
 	await h.press("X");
 	assert.equal(h.panel.state.mode, "archive");
+	assert.equal(h.archiveLoads(), 1, "opening reads the archive once");
 	assert.deepEqual(h.archivedShown().map((r) => r.id), ["alpha"]);
 	assert.match(h.text(), /ARCHIVE/);
 	assert.match(h.footer(), /Enter restore.*D delete all/);
@@ -174,8 +204,8 @@ test("x archives atomically; X opens the archive, Enter restores it and keeps th
 	assert.equal(h.panel.state.mode, "archive", "restoring leaves the dialog open");
 	assert.deepEqual(h.changes.at(-1), { type: "unarchive", files: [alpha] });
 	assert.deepEqual(h.store.value.archived, []);
-	assert.deepEqual(h.archivedShown(), []);
 	assert.match(h.text(), /0\/0/);
+	assert.equal(h.archiveLoads(), 1, "restoring drops the row locally instead of rescanning every directory");
 	assert.ok(h.shown().some((r) => r.id === "alpha"), "restored row is back in SESSIONS");
 	assert.match(h.footer(), /session unarchived/);
 });
@@ -300,7 +330,8 @@ test("d refuses the current session; a confirmed archive delete removes the file
 	await h.press("y");
 	assert.deepEqual(h.deletes, [beta]);
 	assert.deepEqual(h.store.value.archived, [alpha]);
-	assert.deepEqual(h.archivedShown().map((r) => r.id), ["alpha"]);
+	assert.match(h.text(), /1\/1/);
+	assert.equal(h.archiveLoads(), 1, "deleting drops the row locally instead of rescanning every directory");
 	assert.match(h.footer(), /moved to trash/);
 });
 
@@ -336,7 +367,7 @@ test("a failed single archive delete reports the error and keeps the row", async
 	await h.press("d");
 	await h.press("y");
 	assert.deepEqual(h.store.value.archived, [alpha]);
-	assert.deepEqual(h.archivedShown().map((r) => r.id), ["alpha"]);
+	assert.match(h.text(), /1\/1/);
 	assert.match(h.footer(), /delete failed: .*permission denied/);
 });
 
@@ -356,7 +387,7 @@ test("metadata cleanup failure after an archive delete is reported without claim
 	await h.press("d");
 	await h.press("y");
 	assert.deepEqual(h.deletes, [alpha]);
-	assert.equal(h.archivedShown().length, 0);
+	assert.match(h.text(), /0\/0/);
 	assert.match(h.footer(), /moved to trash.*metadata cleanup failed: disk full/);
 });
 
@@ -448,6 +479,53 @@ test("archive-open is a global action: custom bindings, help execution and dispa
 	await h.press("q");
 	h.panel.dispatch("archive-open");
 	await flush();
+	assert.equal(h.panel.state.mode, "archive");
+});
+
+test("archive mouse: a click selects, the wheel moves the cursor, a double-click restores", async (t) => {
+	const archived = [row("alpha").file, row("beta").file, row("gamma").file];
+	const h = harness(t, { store: { value: { pinned: [], archived } } });
+	await h.panel.load();
+	await h.press("X");
+	assert.equal(h.panel.state.mode, "archive");
+	assert.match(h.text(), /1\/3/);
+
+	const beta = cellOn(h, "beta");
+	assert.deepEqual(h.panel.handleMouse(mouseEvent("click", beta.x, beta.y)), { handled: true });
+	assert.match(h.text(), /2\/3/, "a single click only moves the cursor");
+	assert.deepEqual(h.store.value.archived, archived, "and does not restore");
+
+	assert.deepEqual(h.panel.handleMouse(mouseEvent("wheel", beta.x, beta.y, { wheelDelta: 1 })), { handled: true });
+	assert.match(h.text(), /3\/3/, "the wheel moves the cursor without restoring");
+
+	assert.deepEqual(h.panel.handleMouse(mouseEvent("click", beta.x, beta.y, { clickCount: 2 })), { handled: true });
+	await flush();
+	assert.equal(h.panel.state.mode, "archive", "restoring keeps the box open");
+	assert.deepEqual(h.store.value.archived, [row("alpha").file, row("gamma").file]);
+	assert.match(h.text(), /2\/2/);
+	assert.equal(h.archiveLoads(), 1);
+});
+
+test("archive mouse: the search row takes the click, and clicks outside the box are swallowed", async (t) => {
+	const archived = [row("alpha").file, row("beta").file];
+	const h = harness(t, { store: { value: { pinned: [], archived } } });
+	await h.panel.load();
+	await h.press("X");
+	assert.match(h.text(), /1\/2/);
+
+	// 框外（x 在弹窗左边）：事件被吞掉，框不关，光标不动。
+	assert.deepEqual(h.panel.handleMouse(mouseEvent("click", 2, 3)), { handled: true });
+	assert.equal(h.panel.state.mode, "archive", "an outside click never closes the box");
+	assert.match(h.text(), /1\/2/);
+
+	// 搜索行：点击后拿到按键，实时过滤。
+	const search = cellOn(h, "Search");
+	h.panel.handleMouse(mouseEvent("click", search.x, search.y));
+	h.panel.handleInput("bet");
+	await flush();
+	assert.match(h.text(), /1\/1/);
+	assert.match(h.text(), /beta/);
+	assert.doesNotMatch(h.text(), /alpha/);
 	assert.equal(h.panel.state.mode, "archive");
 });
 

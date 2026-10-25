@@ -66,7 +66,7 @@ function fakeHost(opts: FakeHostOptions = {}) {
 		currentSessionFile: opts.currentSessionFile,
 		skipSummaryPrompt: false,
 		archiveOpenHint: () => "X open archive",
-		refreshArchivedSessions: async () => {},
+		removeArchivedRows: () => {},
 		isDisposed: opts.disposed ?? (() => false),
 		setStatus: (text) => {
 			if (text !== undefined) statuses.push(text);

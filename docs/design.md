@@ -106,7 +106,7 @@ v: 暂定
 - 归档框内 `/` 实时过滤（沿用会话搜索：裸词匹配名称 / 预览，支持 `model:` / `path:` / `after:` / `before:`）；`Enter` 离开输入框并保留筛选，`Esc` 同样离开。`s` 循环 更新时间 → 创建时间 → 标题 A–Z。`p` 打开项目菜单：当前项目（pi 打开面板时的工作目录，也是打开归档框时的默认范围）→ 所有项目 → 归档行里出现过的其他项目（按 cwd 去重）。`Esc` / `q` 关闭（全局 `X` 只负责打开，框内不再关闭）。
 - 归档后 SESSIONS 选最近的下一条，末尾选上一条；空列表清空 TREE / CONTENT。允许归档当前会话，不中断它；重开面板仍显示普通列表，当前会话已归档时 footer 提示 `X`。取消归档不恢复原置顶；归档同时取消置顶。所有提示使用配置的全局 `archive-open` / `search` 键位。
 - 置顶与归档仍原子写入同一 `lazy-panel-state.json`，旧置顶文件只读迁移、原样保留；跨进程锁内读最新状态后应用明确目标操作，防止多窗口互相覆盖。损坏状态不覆盖、暂时不可访问的会话不自动清理。锁异常 / 元数据清理失败明确提示，保存成功但解锁失败不能显示成回滚。详见快捷键文档的归档小节。
-- 实现分层：`ui/widgets/archive-dialog.ts` 只负责搜索、排序、项目筛选、光标、鼠标与绘制；`ui/flows/archive-flows.ts` 负责归档 / 恢复 / 删除及确认；`data/sessions.ts` 的 `filterArchivedSessions` 只做行过滤；`src/index.ts` 用 pi 的 `listAll()` 提供跨目录归档行。
+- 实现分层：`ui/widgets/archive-dialog.ts` 只负责搜索、排序、项目筛选、光标、鼠标与绘制；`ui/flows/archive-flows.ts` 负责归档 / 恢复 / 删除及确认；`data/sessions.ts` 的 `listArchivedSessions` 只把归档路径映射成行（空集合直接返回）；`src/index.ts` 用 pi 的 `listAll()` 提供跨目录归档行（恢复 / 删除成功后只在框内移除对应行，不重扫所有目录）。
 
 ### 左侧列表第二个面板(tree)
 

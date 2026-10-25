@@ -97,8 +97,8 @@ export async function restoreArchivedSession(host: FlowHost, row: SessionRow): P
 		if (host.isDisposed()) return;
 		applySessionFileState(host.state, saved);
 		const keep = host.sessionRows()[host.state.cursor.sessions]?.file;
-		await host.refreshArchivedSessions();
-		if (host.isDisposed()) return;
+		// 恢复成功后这行不可能还在归档里：本地删掉即可，不用再扫一遍所有目录。
+		host.removeArchivedRows([row.file]);
 		if (await host.relist(keep)) {
 			host.setStatus(saved.warning
 				? t("status.sessionStateSavedWarning", { error: saved.warning })
@@ -176,8 +176,8 @@ async function deleteArchivedSessions(host: FlowHost, targets: readonly SessionR
 	}
 	const warning = await forgetDeletedSessions(host, removed);
 	if (host.isDisposed()) return;
-	await host.refreshArchivedSessions();
-	if (host.isDisposed()) return;
+	// 删除成功的行直接本地移除；失败的仍留在框里。
+	host.removeArchivedRows(removed);
 	const failed = targets.length - deleted;
 	const summary = targets.length === 1
 		? failed

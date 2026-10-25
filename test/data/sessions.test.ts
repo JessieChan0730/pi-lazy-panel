@@ -7,7 +7,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import path from "node:path";
-import { findSessionIndex } from "../../src/data/sessions.ts";
+import { SessionManager, type SessionInfo } from "@earendil-works/pi-coding-agent";
+import { findSessionIndex, listArchivedSessions } from "../../src/data/sessions.ts";
 import type { SessionRow } from "../../src/types.ts";
 
 function row(file: string): SessionRow {
@@ -23,6 +24,29 @@ test("findSessionIndex compares resolved paths and returns -1 when absent", () =
 	assert.equal(findSessionIndex(rows, path.resolve("sessions", "c.jsonl")), -1);
 	assert.equal(findSessionIndex(rows, undefined), -1);
 	assert.equal(findSessionIndex([], a), -1);
+});
+
+test("listArchivedSessions does not scan anything when the archive is empty", async (ctx) => {
+	let scans = 0;
+	ctx.mock.method(SessionManager, "listAll", async () => {
+		scans++;
+		return [];
+	});
+	assert.deepEqual(await listArchivedSessions(new Set()), []);
+	assert.equal(scans, 0);
+});
+
+test("listArchivedSessions maps only the archived files listed across every directory", async (ctx) => {
+	const a = path.resolve("fixtures", "a.jsonl");
+	const b = path.resolve("fixtures", "b.jsonl");
+	const c = path.resolve("fixtures", "c.jsonl");
+	const info = (file: string, id: string): SessionInfo => ({
+		path: file, id, cwd: `/w/${id}`, created: new Date(1), modified: new Date(2),
+		messageCount: 1, firstMessage: `first ${id}`, allMessagesText: "",
+	});
+	ctx.mock.method(SessionManager, "listAll", async () => [info(a, "a"), info(b, "b"), info(c, "c")]);
+	const rows = await listArchivedSessions(new Set([b]));
+	assert.deepEqual(rows.map((r) => [r.id, r.cwd, r.preview]), [["b", "/w/b", "first b"]]);
 });
 
 test("sortSessions: recent / created by time, title sorts by shown title (name or preview) A–Z, threaded nests forks", async () => {

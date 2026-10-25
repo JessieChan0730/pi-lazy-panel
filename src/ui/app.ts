@@ -381,7 +381,7 @@ export class LazyPanel implements Component, Focusable {
 			skipSummaryPrompt: o.skipSummaryPrompt ?? false,
 			isDisposed: () => this.disposed,
 			archiveOpenHint: () => this.archiveOpenHint(),
-			refreshArchivedSessions: () => this.refreshArchivedSessions(),
+			removeArchivedRows: (files) => this.archiveDialog.removeRows(files),
 			setStatus: (text) => this.setStatus(text),
 			sessionRows: () => this.sessions,
 			currentSessionRow: () => this.currentSessionRow(),
@@ -1392,23 +1392,6 @@ export class LazyPanel implements Component, Focusable {
 			this.state.sessionStateBusy = false;
 			this.o.requestRender();
 		}
-	}
-
-	/** Re-read the archived sessions after a restore / delete; no-op once the dialog is closed. */
-	private async refreshArchivedSessions(): Promise<void> {
-		if (!this.archiveDialog.isOpen) return;
-		const load = this.o.data.listArchivedSessions;
-		if (!load) return;
-		try {
-			const files = this.o.data.loadSessionState ? await this.o.data.loadSessionState() : undefined;
-			if (files) applySessionFileState(this.state, files);
-			const rows = await load(new Set(this.state.archivedFiles));
-			if (this.disposed) return;
-			if (this.archiveDialog.isOpen) this.archiveDialog.setRows(rows);
-		} catch (err) {
-			if (!this.disposed) this.setStatus(t("status.listFailed", { error: (err as Error).message }));
-		}
-		this.o.requestRender();
 	}
 
 	private closeArchiveDialog(): void {

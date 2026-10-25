@@ -41,8 +41,8 @@ export interface FlowHost {
 	isDisposed(): boolean;
 	/** Localised hint using the configured archive-open key (empty when unbound). */
 	archiveOpenHint(): string;
-	/** Re-read the archive dialog's rows after a restore / delete; no-op while it is closed. */
-	refreshArchivedSessions(): Promise<void>;
+	/** Drop restored / deleted rows from the open archive dialog, keeping filters and cursor; no-op while it is closed. */
+	removeArchivedRows(files: readonly string[]): void;
 	/** Footer status text (undefined clears it). */
 	setStatus(text: string | undefined): void;
 	/** Listed sessions, in display order. */

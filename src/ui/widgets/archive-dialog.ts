@@ -34,6 +34,7 @@ import { t } from "../../i18n/index.ts";
 import type { KeyHint, SessionRow, SessionSortMode } from "../../types.ts";
 import { formatShortDate, shortenPath } from "../../utils/format.ts";
 import { clamp } from "../../utils/indices.ts";
+import { sessionFileKey } from "../../utils/session-file-key.ts";
 import { cursorTone } from "../cursor-tone.ts";
 import { boxCell, boxContains, centeredRect, fit, frame, FRAME_DIVIDER, overlayCentered, type BoxRect } from "../frame.ts";
 import { scrollOffset } from "../panes/sessions-pane.ts";
@@ -225,11 +226,16 @@ export class ArchiveDialog {
 		this.search.focused = false;
 	}
 
-	/** Replace the archived rows after a restore / delete; keep the same row (or the next one) selected. */
-	setRows(rows: SessionRow[]): void {
-		if (!this.spec) return;
+	/**
+	 * Drop rows the panel just restored / deleted without re-reading every
+	 * directory: the operation already succeeded, so these rows cannot still be
+	 * archived. Filters, sort and the cursor position stay.
+	 */
+	removeRows(files: readonly string[]): void {
+		if (!this.spec || files.length === 0) return;
 		const keep = this.selectedRow?.file;
-		this.allRows = rows;
+		const removed = new Set(files.map(sessionFileKey));
+		this.allRows = this.allRows.filter((row) => !removed.has(sessionFileKey(row.file)));
 		this.rebuild(keep, this.index);
 		this.o.onChange();
 	}

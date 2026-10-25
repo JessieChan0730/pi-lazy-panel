@@ -44,7 +44,7 @@ import { loadChangelog } from "./data/changelog.ts";
 import { loadContent, loadForkPoints, loadSessionInfo } from "./data/content.ts";
 import { loadContextUsage } from "./data/context-usage.ts";
 import { initI18n, t } from "./i18n/index.ts";
-import { filterArchivedSessions, filterSessions, listSessions, sortSessions } from "./data/sessions.ts";
+import { filterSessions, listArchivedSessions as loadArchivedSessions, listSessions, sortSessions } from "./data/sessions.ts";
 import { applyTreeFilter, loadTree } from "./data/tree.ts";
 import { LazyPanel } from "./ui/app.ts";
 import type { ActionSource, DataSource } from "./ui/ports.ts";
@@ -99,7 +99,8 @@ async function openPanel(pi: ExtensionAPI, ctx: ExtensionCommandContext, args: s
 		loadSessionState: async () => loadSessionFileState(getAgentDir()),
 		listSessions: async (scope, sort, pinned, filter) => sortSessions(filterSessions(await listSessions({ cwd: ctx.cwd, scope }), filter), sort, pinned),
 		// 归档框读取所有目录的归档行（不受 C/A 范围限制），打开时默认只看当前项目，`p` 可切到所有项目。
-		listArchivedSessions: async (archived) => sortSessions(filterArchivedSessions(await listSessions({ cwd: ctx.cwd, scope: "all" }), archived), "recent"),
+		// 没有归档时直接返回，不扫全库。
+		listArchivedSessions: async (archived) => sortSessions(await loadArchivedSessions(archived), "recent"),
 		loadTree: async (file, filter) => applyTreeFilter(await loadTree(file), filter),
 		loadContent: (file, leafEntryId) =>
 			loadContent(leafEntryId ? { sessionFile: file, leafEntryId } : { sessionFile: file }),
