@@ -98,7 +98,7 @@ async function openPanel(pi: ExtensionAPI, ctx: ExtensionCommandContext, args: s
 	const data: DataSource = {
 		loadSessionState: async () => loadSessionFileState(getAgentDir()),
 		listSessions: async (scope, sort, pinned, filter) => sortSessions(filterSessions(await listSessions({ cwd: ctx.cwd, scope }), filter), sort, pinned),
-		// 归档框不限 C/A 目录范围：列所有目录里已归档的会话，按最近更新排序。
+		// 归档框读取所有目录的归档行（不受 C/A 范围限制），打开时默认只看当前项目，`p` 可切到所有项目。
 		listArchivedSessions: async (archived) => sortSessions(filterArchivedSessions(await listSessions({ cwd: ctx.cwd, scope: "all" }), archived), "recent"),
 		loadTree: async (file, filter) => applyTreeFilter(await loadTree(file), filter),
 		loadContent: (file, leafEntryId) =>

@@ -1352,8 +1352,9 @@ export class LazyPanel implements Component, Focusable {
 
 	/**
 	 * X: load the archived sessions of every directory and open the management
-	 * dialog. Read-only until the user restores / deletes something, so this only
-	 * reads the metadata and the session list.
+	 * dialog. It starts filtered to the current project; `p` reaches the others.
+	 * Read-only until the user restores / deletes something, so this only reads
+	 * the metadata and the session list.
 	 */
 	private async openArchiveDialog(): Promise<void> {
 		if (this.disposed || this.entering || this.state.sessionStateBusy || this.state.mode === "search" || this.activeOverlay()) return;
@@ -1452,7 +1453,7 @@ export class LazyPanel implements Component, Focusable {
 		);
 	}
 
-	/** p in the archive dialog: all projects, the current project, then every other archived project. */
+	/** p in the archive dialog: the current project first, then all projects, then every other archived project. */
 	private openArchiveProjectMenu(): void {
 		const choices = this.archiveDialog.projectChoices;
 		const selected = choices.findIndex((choice) => choice.value === this.archiveDialog.projectFilter);

@@ -180,7 +180,7 @@ test("x archives atomically; X opens the archive, Enter restores it and keeps th
 	assert.match(h.footer(), /session unarchived/);
 });
 
-test("X works from any pane and lists archived sessions from every directory", async (t) => {
+test("X works from any pane and opens on the current project; p reaches every directory", async (t) => {
 	const alpha = row("alpha");
 	const other = row("other", "/tmp/opencode/other");
 	const rows = [alpha, row("beta"), row("gamma"), other];
@@ -191,7 +191,13 @@ test("X works from any pane and lists archived sessions from every directory", a
 	await h.press("X");
 	assert.equal(h.panel.state.mode, "archive");
 	assert.equal(h.panel.state.focus, "tree");
-	assert.deepEqual(h.archivedShown().map((r) => r.id).sort(), ["alpha", "other"]);
+	assert.deepEqual(h.archivedShown().map((r) => r.id).sort(), ["alpha", "other"], "the adapter still loads every directory");
+	assert.match(h.text(), /Current project/);
+	assert.doesNotMatch(h.text(), /tmp\/opencode\/other/, "the box opens scoped to the current project");
+	await h.press("p");
+	await h.press("j");
+	await h.press("\r");
+	assert.match(h.text(), /All projects/);
 	assert.match(h.text(), /tmp\/opencode\/other/);
 	await h.press("X");
 	assert.equal(h.panel.state.mode, "archive", "X no longer closes the box");
@@ -236,7 +242,7 @@ test("s cycles updated / created / title and keeps the cursor on its row", async
 	assert.match(h.text(), /Updated/);
 });
 
-test("p filters by all / current / other projects and includes the current project when empty", async (t) => {
+test("the box opens on the current project; p switches to all / other projects", async (t) => {
 	const project = "/tmp/opencode/project";
 	const other = "/tmp/opencode/other";
 	const h = harness(t, {
@@ -246,20 +252,30 @@ test("p filters by all / current / other projects and includes the current proje
 	});
 	await h.panel.load();
 	await h.press("X");
-	assert.match(h.text(), /All projects/);
+	assert.match(h.text(), /Current project/);
+	assert.match(h.text(), /\/tmp\/opencode\/project/);
+	assert.doesNotMatch(h.text(), /\/tmp\/opencode\/other/, "another project's archive stays hidden by default");
+	assert.deepEqual(h.archivedShown().map((r) => r.id), ["a", "b"], "adapter rows are unfiltered; the dialog filters the view");
 	await h.press("p");
 	assert.equal(h.panel.state.mode, "archive");
 	assert.match(h.text(), /Project/);
+	assert.match(h.text(), /All projects/);
 	assert.match(h.text(), /Current project \(~?\/tmp\/opencode\/project\)/);
 	await h.press("j");
 	await h.press("\r");
+	assert.match(h.text(), /All projects/);
+	assert.match(h.text(), /\/tmp\/opencode\/other/);
+	await h.press("p");
+	await h.press("k");
+	await h.press("\r");
 	assert.match(h.text(), /Current project/);
-	assert.deepEqual(h.archivedShown().map((r) => r.id), ["a", "b"], "adapter rows are unfiltered; the dialog filters the view");
 	assert.doesNotMatch(h.text(), /\/tmp\/opencode\/other/);
 	await h.press("p");
 	await h.press("j");
+	await h.press("j");
 	await h.press("\r");
 	assert.match(h.text(), /\/tmp\/opencode\/other/);
+	assert.doesNotMatch(h.text(), /\/tmp\/opencode\/project/);
 });
 
 test("d refuses the current session; a confirmed archive delete removes the file and its metadata", async (t) => {

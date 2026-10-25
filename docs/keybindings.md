@@ -174,7 +174,7 @@ When the panel opens, the cursor lands on the session pi currently has open (so 
 | Key | Config name | Action |
 | --- | --- | --- |
 | `x` (SESSIONS) | `session-archive` | Archive the cursor session, or all selected sessions. No confirmation, including batches. Archiving also removes its pin. The archived rows leave SESSIONS; `X` manages them |
-| `X` (any pane) | `archive-open` | Open the archive dialog (close it with `Esc` / `q`; `X` itself only opens). It lists archived sessions from every directory, regardless of the `C` / `A` scope. Inside the tree dialog this global key is disabled (the tree dialog uses uppercase keys for its filters) |
+| `X` (any pane) | `archive-open` | Open the archive dialog (close it with `Esc` / `q`; `X` itself only opens). It loads archived sessions from every directory regardless of the `C` / `A` scope, but starts filtered to the current project (`p` switches to all projects). Inside the tree dialog this global key is disabled (the tree dialog uses uppercase keys for its filters) |
 
 Inside the archive dialog (fixed list keys; the footer shows them):
 
@@ -186,7 +186,7 @@ Inside the archive dialog (fixed list keys; the footer shows them):
 | `D` | Delete every archived row still visible after the live search and project filter. One confirmation names the count; the session pi has open is skipped with a note (if it is the only visible row, the same refusal alert appears) |
 | `/` | Live-search the archived rows (name / preview / model / path / date, like the SESSIONS search). `Enter` leaves the search field and keeps the filter; `Esc` does the same |
 | `s` | Cycle the sort: updated → created → title A–Z |
-| `p` | Project menu: *All projects* → *Current project* (the directory pi opened in) → every other project that appears in the archived rows |
+| `p` | Project menu: *Current project* (the directory pi opened in, and the dialog's default scope) → *All projects* → every other project that appears in the archived rows |
 | `Esc` / `q` | Close the dialog |
 
 - The archive dialog is a management view, not a second SESSIONS pane: it has no TREE / CONTENT, no resume and no export. Restoring is the only way back to a normal session; use `Enter` (or double-click a row). Search and the project filter only narrow the dialog and decide what `D` deletes.

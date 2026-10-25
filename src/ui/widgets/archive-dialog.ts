@@ -4,7 +4,7 @@
  * second sessions pane: there is no content preview and no resume; Enter
  * restores a session (back into SESSIONS) and d / D delete files permanently.
  *
- *   ┌─ ARCHIVE ─────────────────────── 2/5 · Updated · All projects ┐
+ *   ┌─ ARCHIVE ───────────────── 2/5 · Updated · Current project (~…) ┐
  *   │ / to search                                                    │
  *   ├────────────────────────────────────────────────────────────────┤
  *   │ › Fix the router              ~/code/panel  10-22 14:03          │
@@ -14,9 +14,11 @@
  *
  * The rows come from the panel (all archived sessions, newest update first);
  * the dialog owns the live search, sorting, project filter, cursor and mouse.
- * `/` filters live, `s` cycles updated / created / title, `p` asks the panel
- * for its project menu. The panel resolves the keys (global scope) and passes
- * them in; this widget only has the list's own d / D / s / p / q / Esc.
+ * It opens scoped to the current project (the directory pi was started in) so
+ * another project's archives stay behind the `p` menu. `/` filters live,
+ * `s` cycles updated / created / title, `p` asks the panel for its project
+ * menu. The panel resolves the keys (global scope) and passes them in; this
+ * widget only has the list's own d / D / s / p / q / Esc.
  *
  * 归档管理框：只列出已归档会话，不查看、不进入。搜索 / 排序 / 项目筛选 / 光标和画法在这里，
  * 恢复和删除的 I/O 由 app.ts 的流程完成（始终带确认）。
@@ -50,7 +52,11 @@ const CHROME_ROWS = 4;
 export interface ArchiveDialogSpec {
 	/** Archived sessions from every directory (the dialog filters / sorts them itself). */
 	rows: SessionRow[];
-	/** Working directory of the pi session that opened the panel, for the "current project" filter. */
+	/**
+	 * Working directory of the pi session that opened the panel. The box opens
+	 * with this as its project filter (undefined = all projects) so `p` is only
+	 * needed to reach another project's archives.
+	 */
 	currentProject?: string;
 	/** Label of the key that focuses the search row, for the idle row's `/ to search` hint. */
 	searchKey?: string;
@@ -179,12 +185,13 @@ export class ArchiveDialog {
 		return out.sort((a, b) => shortenPath(a).localeCompare(shortenPath(b), undefined, { sensitivity: "base" }));
 	}
 
-	/** Items of the `p` menu: all projects, the current project, then every other archived project. */
+	/** Items of the `p` menu: the current project first, then all projects, then every other archived project. */
 	get projectChoices(): ArchiveProjectChoice[] {
-		const choices: ArchiveProjectChoice[] = [{ label: t("archive.allProjects"), value: undefined }];
+		const choices: ArchiveProjectChoice[] = [];
 		if (this.currentProject) {
 			choices.push({ label: t("archive.currentProject", { path: shortenPath(this.currentProject) }), value: this.currentProject });
 		}
+		choices.push({ label: t("archive.allProjects"), value: undefined });
 		for (const project of this.projects) {
 			if (this.currentProject && projectKey(project) === projectKey(this.currentProject)) continue;
 			choices.push({ label: shortenPath(project) || project, value: project });
@@ -198,7 +205,8 @@ export class ArchiveDialog {
 		this.currentProject = spec.currentProject;
 		this.query = "";
 		this.sort = "recent";
-		this.project = undefined;
+		// 默认只看当前项目；`p` 菜单里第一项是当前项目，第二项才是所有项目。
+		this.project = spec.currentProject;
 		this.index = 0;
 		this._searchFocused = false;
 		this.boxRect = undefined;
@@ -362,7 +370,8 @@ export class ArchiveDialog {
 
 		const body: string[] = [` ${this.renderSearchRow(inner - 1)}`, FRAME_DIVIDER];
 		if (this.visible.length === 0) {
-			const message = this.query.trim() || this.project ? t("archive.noMatches") : t("archive.empty");
+			// 只有整个归档都空时才是"暂无归档"；当前项目没行但别处有，仍算筛选无匹配。
+			const message = this.allRows.length === 0 ? t("archive.empty") : t("archive.noMatches");
 			body.push(theme.fg("muted", ` ${message}`));
 		} else {
 			const first = scrollOffset(this.index, this.visible.length, visible);
