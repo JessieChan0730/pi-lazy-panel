@@ -428,6 +428,7 @@
     "compact": "compact"
   },
   "notify": {
+    "openCommandUnavailable": "Cannot uniquely resolve /{{command}} for this extension ({{path}}). Run /reload; if the problem persists, check duplicate extensions with pi config.",
     "tuiOnly": "/{{command}} is only available in TUI mode"
   },
   "status": {

@@ -428,6 +428,7 @@
     "compact": "压缩"
   },
   "notify": {
+    "openCommandUnavailable": "无法唯一确定当前插件的 /{{command}} 命令（{{path}}）。请运行 /reload；若仍有问题，请用 pi config 检查重复扩展。",
     "tuiOnly": "/{{command}} 仅在 TUI 模式下可用"
   },
   "status": {
