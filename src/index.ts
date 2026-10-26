@@ -1,8 +1,10 @@
 /**
  * pi-lazy-panel — entry point.
  *
- * Registers the `/lazy-panel` command. When invoked, it opens the full-screen
- * lazygit-style panel (see ./ui/app.ts). Everything else lives in sub-modules:
+ * Registers the `/lazy-panel` command (and a pi-level shortcut that runs the
+ * same command, see `registerOpenShortcut`). When invoked, it opens the
+ * full-screen lazygit-style panel (see ./ui/app.ts). Everything else lives in
+ * sub-modules:
  *
  *   config/   keymap + user configuration
  *   data/     read-only adapters over pi's SessionManager (sessions, tree, content)
@@ -10,8 +12,8 @@
  *   ui/       TUI components (panes, dialogs, footer, search bar)
  */
 
-import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import type { OverlayHandle } from "@earendil-works/pi-tui";
+import { getAgentDir, type ExtensionAPI, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { KeyId, OverlayHandle } from "@earendil-works/pi-tui";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -34,7 +36,7 @@ import {
 } from "./actions/session-actions.ts";
 import { loginRadius, logoutRadius, openExternalUrl } from "./actions/radius-auth.ts";
 import { copyNodeText, labelNode, restoreNode } from "./actions/tree-actions.ts";
-import { loadConfig, readConfigSnapshot, saveConfigPatch } from "./config/config.ts";
+import { loadConfig, loadConfigSync, readConfigSnapshot, saveConfigPatch } from "./config/config.ts";
 import { loadSessionFileState, updateSessionFileState } from "./config/archive.ts";
 import { loadPiSettings } from "./config/pi-settings.ts";
 import { COMMAND_NAME } from "./constants.ts";
@@ -70,172 +72,216 @@ function activeToolSchemas(pi: ExtensionAPI): Array<{ name: string; description:
 		.map((tool) => ({ name: tool.name, description: tool.description, parameters: tool.parameters }));
 }
 
-export default function (pi: ExtensionAPI) {
-	// 按系统语言初始化 i18n（命令描述在注册时就要用到，一次会话内固定）。
+/** 面板同一时间只开一个：快捷键连按 / 命令重复触发时忽略后来的请求。 */
+let panelOpen = false;
+
+/**
+ * Open the full-screen panel — the body of the `/lazy-panel` command.
+ *
+ * Kept outside the command registration because the global shortcut re-enters
+ * it through `pi.sendUserMessage` (see `registerOpenShortcut`): only the
+ * command path hands a handler the session control methods the panel needs.
+ */
+async function openPanel(pi: ExtensionAPI, ctx: ExtensionCommandContext, args: string): Promise<void> {
+	// 按系统语言初始化 i18n（一次会话内固定），之后所有 UI 文案走 t()。
 	initI18n();
+	if (ctx.mode !== "tui") {
+		ctx.ui.notify(t("notify.tuiOnly", { command: COMMAND_NAME }), "warning");
+		return;
+	}
+	const config = await loadConfig(getAgentDir());
+	// 用户配置里的 locale（en / zh）覆盖系统语言；没配就沿用上面按系统语言检测的结果。t() 在渲染时才调用，这里切换后面板 UI 即用新语言。
+	if (config.locale) initI18n(config.locale);
+	// pi 自己的 branchSummary.skipPrompt 打开时，TREE Enter 和内置 /tree 一样不弹摘要菜单；
+	// treeFilterMode 是内置 /tree 的默认过滤，面板的 TREE 也从它开始。
+	const piSettings = loadPiSettings(ctx.cwd, getAgentDir(), ctx.isProjectTrusted());
+	const data: DataSource = {
+		loadSessionState: async () => loadSessionFileState(getAgentDir()),
+		listSessions: async (scope, sort, pinned, filter) => sortSessions(filterSessions(await listSessions({ cwd: ctx.cwd, scope }), filter), sort, pinned),
+		loadTree: async (file, filter) => applyTreeFilter(await loadTree(file), filter),
+		loadContent: (file, leafEntryId) =>
+			loadContent(leafEntryId ? { sessionFile: file, leafEntryId } : { sessionFile: file }),
+		loadSessionInfo,
+		loadForkPoints,
+		loadChangelog: () => loadChangelog(),
+		// 上下文占用：当前会话给 pi footer 那份 + 运行态（系统提示词 / 记忆 / 技能 / 工具定义），其他会话按最后的 model 反查窗口。
+		loadContextUsage: (file) =>
+			loadContextUsage(file, {
+				...(isCurrentSession(ctx, file)
+					? { live: { usage: ctx.getContextUsage(), systemPrompt: ctx.getSystemPrompt(), systemPromptOptions: ctx.getSystemPromptOptions(), tools: pi.getAllTools() } }
+					: {}),
+				findContextWindow: (modelId) => ctx.modelRegistry.getAll().find((m) => m.id === modelId)?.contextWindow,
+			}),
+	};
+	// 副作用统一走 actions 层；目标是当前会话时用 pi 内存里的 API（setLabel / setSessionName / navigateTree），
+	// 其他历史会话则直接读写文件或先 switchSession。
+	const actions: ActionSource = {
+		copyNodeText,
+		setNodeLabel: (file, entryId, label) => labelNode(pi, ctx, file, entryId, label),
+		resumeSession: (file) => resumeSession(ctx, file),
+		restoreNode: (file, entryId, options) => restoreNode(ctx, file, entryId, options),
+		deleteSession: (file) => deleteSession(ctx, file),
+		updateSessionState: (change) => updateSessionFileState(getAgentDir(), change),
+		renameSession: (file, name) => renameSession(pi, ctx, file, name),
+		newSession: (name) => newSession(ctx, name),
+		forkSession: (file, entryId) => forkSession(ctx, file, entryId),
+		cloneSession: (file) => cloneSession(ctx, file),
+		compactSession: (file, customInstructions) => compactSession(ctx, file, customInstructions),
+		copyLastReply,
+		copyText,
+		// 导出 / 分享的 HTML 走 pi 自己的 `pi --export`；相对路径和默认文件名都按 pi 的工作目录算。
+		exportTarget: (file, format, input) => exportTarget(ctx.cwd, file, format, input),
+		exportSession: (file, format, outputPath) => exportSession(ctx, file, format, outputPath),
+		importSession: (input) => importSession(ctx, input),
+		// 目的地来自 S 菜单（auto / gist / radius；auto 优先 Gist）；凭据用 pi 同一个
+		// modelRegistry（Radius 的 OAuth 刷新由它负责）。当前会话的分享带上内存 manager 和
+		// 系统提示词 / 工具定义，让 Radius 查看器显示完整信息。
+		shareSession: (file, destination) =>
+			shareSession(file, {
+				destination,
+				auth: ctx.modelRegistry,
+				...(isCurrentSession(ctx, file)
+					? {
+							live: {
+								manager: ctx.sessionManager,
+								systemPrompt: ctx.getSystemPrompt(),
+								// pi 的 pi.share 只带当前启用的工具（session.state.tools），不是所有已配置工具。
+								tools: activeToolSchemas(pi),
+							},
+						}
+					: {}),
+			}),
+		// S 选 Radius 时先查凭据；没有就走面板里的 `/login radius`，登录后继续分享。
+		radiusAuthenticated: () => radiusAuthenticated(ctx.modelRegistry),
+		loginRadius: (method, interaction) => loginRadius(method, interaction),
+		logoutRadius: () => logoutRadius(),
+		openUrl: openExternalUrl,
+		shareDestination: piSettings.shareDestination,
+	};
+	// overlay 句柄在面板显示后才拿到；Enter 等待 pi 切换时用它暂时隐藏面板。
+	let setHidden: ((hidden: boolean) => void) | undefined;
+	let onOverlayHandle: ((handle: OverlayHandle) => void) | undefined;
+	// regular 模式下 pi 不开鼠标追踪，面板自己开；关闭时再关掉（fullscreen 由 pi 管，不碰）。
+	let disableMouse: (() => void) | undefined;
+	// 设了 LAZY_PANEL_KEY_LOG 才生效：把原始按键 dump 到文件，排查终端键位编码用。
+	let disableKeyLog: (() => void) | undefined;
+	const currentFile = ctx.sessionManager.getSessionFile();
+	const version = extensionVersion();
+
+	await ctx.ui.custom<void>(
+		(tui, theme, _keybindings, done) => {
+			// 等 onHandle 确认 overlay 已挂载后再强刷，避免只重绘了底下的 pi 对话。
+			onOverlayHandle = (handle) => {
+				setHidden = mountPanelOverlay(tui, handle);
+			};
+			// overlay 关闭、底层内容缩短后清理腾空区域；pi 在有 overlay 时跳过此分支，
+			// 因此显示边界的错位另由 mountPanelOverlay 强刷处理。旧版本保留存在性判断。
+			if (typeof tui.setClearOnShrink === "function") tui.setClearOnShrink(true);
+			const panel = new LazyPanel({
+				// 回调参数 `theme` 是构造时的快照（pi 换主题时整体替换掉），面板要用 `ctx.ui.theme`
+				// 这个 live proxy，否则用户在 pi 的 /settings 里换了主题，面板会一直是旧颜色。
+				// 面板不拥有主题：颜色一律取自 pi 的主题，见 docs/theme.md。
+				theme: ctx.ui.theme as unknown as typeof theme,
+				data,
+				actions,
+				getHeight: () => tui.terminal.rows,
+				requestRender: () => tui.requestRender(),
+				onClose: () => done(),
+				setHidden: (hidden) => setHidden?.(hidden),
+				keymap: config.keymap,
+				initialState: { scope: config.defaultScope, sort: config.defaultSort, treeFilter: piSettings.treeFilter },
+				leftColumnRatio: config.leftColumnRatio,
+				configDefaults: config,
+				settingsSource: {
+					read: () => readConfigSnapshot(getAgentDir()),
+					save: (baseline, patch) => saveConfigPatch(getAgentDir(), baseline, patch),
+					apply: (saved) => { initI18n(saved.locale); },
+				},
+				// 主题只有一个来源：pi。设置页列出 pi 能加载的主题，选中即切（走
+				// ctx.ui.setTheme，由 pi 负责写它自己的 settings.json 和热重载）；
+				// 失败时面板留下待重试的主题，s 再试一次。
+				themeSource: {
+					list: () => ctx.ui.getAllThemes(),
+					theme: ctx.ui.theme,
+					// 面板不自己记主题：ctx.ui.theme 就是 pi 当前活动（也是它保存）的那个。
+					savedName: () => ctx.ui.theme.name,
+					set: (name) => {
+						const result = ctx.ui.setTheme(name);
+						if (result.success) {
+							// 换主题后带颜色的缓存（CONTENT 排版 / changelog）要跟着丢，
+							// 面板自己的重绘交给 requestRender。
+							tui.invalidate();
+							tui.requestRender();
+						}
+						return result;
+					},
+				},
+				skipSummaryPrompt: piSettings.skipBranchSummaryPrompt,
+				// 打开时 SESSIONS 光标落到 pi 当前打开的会话上；新会话没有文件 / 还没列出时留在第一行。
+				...(currentFile ? { currentSessionFile: currentFile } : {}),
+				// 配置文件有问题时在底部提示，但不阻止面板打开。
+				...(config.warnings.length ? { status: config.warnings[0] } : {}),
+				// footer 右下角的版本号（读不到 package.json 时为空、不显示）。
+				...(version ? { version } : {}),
+			});
+			// fullscreen 模式 pi 已经开了鼠标并派给 overlay 的 handleMouse；regular 模式
+			// 由 attachMouse 自己开 SGR 上报并解析（fullscreen 下是 no-op）。
+			disableMouse = attachMouse(tui, panel);
+			disableKeyLog = attachKeyLog(tui);
+			if (args.trim() === "settings") panel.openSettings();
+			void panel.load();
+			return panel;
+		},
+		{
+			// Full-screen overlay: covers pi's own header/editor/footer instead of
+			// being embedded in the editor slot (which would overflow the terminal).
+			overlay: true,
+			overlayOptions: { anchor: "top-left", width: "100%", maxHeight: "100%", margin: 0 },
+			onHandle: (handle) => onOverlayHandle?.(handle),
+		},
+	);
+	// 面板关闭后恢复终端自己的滚动 / 选择。
+	disableMouse?.();
+	disableKeyLog?.();
+}
+
+/** `pi` surface the shortcut needs; kept minimal so tests can pass a fake. */
+export type ShortcutHost = Pick<ExtensionAPI, "registerShortcut" | "sendUserMessage">;
+
+/**
+ * Register the pi-level shortcut that opens the panel (default `alt+l`, see
+ * `DEFAULT_OPEN_SHORTCUT`). `shortcut === null` skips registration.
+ *
+ * 注册打开面板的 pi 全局快捷键。按键只交给命令路径：`pi.sendUserMessage` 会先尝试
+ * 执行扩展命令，这样处理器拿到的 command ctx 才带 newSession / switchSession /
+ * navigateTree / fork（快捷键自带的 ctx 没有这些会话控制方法）。
+ */
+export function registerOpenShortcut(pi: ShortcutHost, shortcut: string | null): void {
+	if (!shortcut) return;
+	pi.registerShortcut(shortcut as KeyId, {
+		description: t("command.description"),
+		handler: () => {
+			pi.sendUserMessage(`/${COMMAND_NAME}`, { expandPromptTemplates: true });
+		},
+	});
+}
+
+export default function (pi: ExtensionAPI) {
+	// 按系统语言初始化 i18n（命令描述和快捷键描述在注册时就要用到）。
+	initI18n();
+	// 快捷键必须在扩展工厂里同步注册；配置文件也只在这里同步读一次（改键后 /reload 生效）。
+	registerOpenShortcut(pi, loadConfigSync(getAgentDir()).openShortcut);
 	pi.registerCommand(COMMAND_NAME, {
 		description: t("command.description"),
 		handler: async (args, ctx) => {
-			// 按系统语言初始化 i18n（一次会话内固定），之后所有 UI 文案走 t()。
-			initI18n();
-			if (ctx.mode !== "tui") {
-				ctx.ui.notify(t("notify.tuiOnly", { command: COMMAND_NAME }), "warning");
-				return;
+			// 同一时间只开一个面板（alt+l 连按 / 命令重复触发时忽略后来的）。
+			if (panelOpen) return;
+			panelOpen = true;
+			try {
+				await openPanel(pi, ctx, args);
+			} finally {
+				panelOpen = false;
 			}
-			const config = await loadConfig(getAgentDir());
-			// 用户配置里的 locale（en / zh）覆盖系统语言；没配就沿用上面按系统语言检测的结果。t() 在渲染时才调用，这里切换后面板 UI 即用新语言。
-			if (config.locale) initI18n(config.locale);
-			// pi 自己的 branchSummary.skipPrompt 打开时，TREE Enter 和内置 /tree 一样不弹摘要菜单；
-			// treeFilterMode 是内置 /tree 的默认过滤，面板的 TREE 也从它开始。
-			const piSettings = loadPiSettings(ctx.cwd, getAgentDir(), ctx.isProjectTrusted());
-			const data: DataSource = {
-				loadSessionState: async () => loadSessionFileState(getAgentDir()),
-				listSessions: async (scope, sort, pinned, filter) => sortSessions(filterSessions(await listSessions({ cwd: ctx.cwd, scope }), filter), sort, pinned),
-				loadTree: async (file, filter) => applyTreeFilter(await loadTree(file), filter),
-				loadContent: (file, leafEntryId) =>
-					loadContent(leafEntryId ? { sessionFile: file, leafEntryId } : { sessionFile: file }),
-				loadSessionInfo,
-				loadForkPoints,
-				loadChangelog: () => loadChangelog(),
-				// 上下文占用：当前会话给 pi footer 那份 + 运行态（系统提示词 / 记忆 / 技能 / 工具定义），其他会话按最后的 model 反查窗口。
-				loadContextUsage: (file) =>
-					loadContextUsage(file, {
-						...(isCurrentSession(ctx, file)
-							? { live: { usage: ctx.getContextUsage(), systemPrompt: ctx.getSystemPrompt(), systemPromptOptions: ctx.getSystemPromptOptions(), tools: pi.getAllTools() } }
-							: {}),
-						findContextWindow: (modelId) => ctx.modelRegistry.getAll().find((m) => m.id === modelId)?.contextWindow,
-					}),
-			};
-			// 副作用统一走 actions 层；目标是当前会话时用 pi 内存里的 API（setLabel / setSessionName / navigateTree），
-			// 其他历史会话则直接读写文件或先 switchSession。
-			const actions: ActionSource = {
-				copyNodeText,
-				setNodeLabel: (file, entryId, label) => labelNode(pi, ctx, file, entryId, label),
-				resumeSession: (file) => resumeSession(ctx, file),
-				restoreNode: (file, entryId, options) => restoreNode(ctx, file, entryId, options),
-				deleteSession: (file) => deleteSession(ctx, file),
-				updateSessionState: (change) => updateSessionFileState(getAgentDir(), change),
-				renameSession: (file, name) => renameSession(pi, ctx, file, name),
-				newSession: (name) => newSession(ctx, name),
-				forkSession: (file, entryId) => forkSession(ctx, file, entryId),
-				cloneSession: (file) => cloneSession(ctx, file),
-				compactSession: (file, customInstructions) => compactSession(ctx, file, customInstructions),
-				copyLastReply,
-				copyText,
-				// 导出 / 分享的 HTML 走 pi 自己的 `pi --export`；相对路径和默认文件名都按 pi 的工作目录算。
-				exportTarget: (file, format, input) => exportTarget(ctx.cwd, file, format, input),
-				exportSession: (file, format, outputPath) => exportSession(ctx, file, format, outputPath),
-				importSession: (input) => importSession(ctx, input),
-				// 目的地来自 S 菜单（auto / gist / radius；auto 优先 Gist）；凭据用 pi 同一个
-				// modelRegistry（Radius 的 OAuth 刷新由它负责）。当前会话的分享带上内存 manager 和
-				// 系统提示词 / 工具定义，让 Radius 查看器显示完整信息。
-				shareSession: (file, destination) =>
-					shareSession(file, {
-						destination,
-						auth: ctx.modelRegistry,
-						...(isCurrentSession(ctx, file)
-							? {
-									live: {
-										manager: ctx.sessionManager,
-										systemPrompt: ctx.getSystemPrompt(),
-										// pi 的 pi.share 只带当前启用的工具（session.state.tools），不是所有已配置工具。
-										tools: activeToolSchemas(pi),
-									},
-								}
-							: {}),
-					}),
-				// S 选 Radius 时先查凭据；没有就走面板里的 `/login radius`，登录后继续分享。
-				radiusAuthenticated: () => radiusAuthenticated(ctx.modelRegistry),
-				loginRadius: (method, interaction) => loginRadius(method, interaction),
-				logoutRadius: () => logoutRadius(),
-				openUrl: openExternalUrl,
-				shareDestination: piSettings.shareDestination,
-			};
-			// overlay 句柄在面板显示后才拿到；Enter 等待 pi 切换时用它暂时隐藏面板。
-			let setHidden: ((hidden: boolean) => void) | undefined;
-			let onOverlayHandle: ((handle: OverlayHandle) => void) | undefined;
-			// regular 模式下 pi 不开鼠标追踪，面板自己开；关闭时再关掉（fullscreen 由 pi 管，不碰）。
-			let disableMouse: (() => void) | undefined;
-			// 设了 LAZY_PANEL_KEY_LOG 才生效：把原始按键 dump 到文件，排查终端键位编码用。
-			let disableKeyLog: (() => void) | undefined;
-			const currentFile = ctx.sessionManager.getSessionFile();
-			const version = extensionVersion();
-
-			await ctx.ui.custom<void>(
-				(tui, theme, _keybindings, done) => {
-					// 等 onHandle 确认 overlay 已挂载后再强刷，避免只重绘了底下的 pi 对话。
-					onOverlayHandle = (handle) => {
-						setHidden = mountPanelOverlay(tui, handle);
-					};
-					// overlay 关闭、底层内容缩短后清理腾空区域；pi 在有 overlay 时跳过此分支，
-					// 因此显示边界的错位另由 mountPanelOverlay 强刷处理。旧版本保留存在性判断。
-					if (typeof tui.setClearOnShrink === "function") tui.setClearOnShrink(true);
-					const panel = new LazyPanel({
-						// 回调参数 `theme` 是构造时的快照（pi 换主题时整体替换掉），面板要用 `ctx.ui.theme`
-						// 这个 live proxy，否则用户在 pi 的 /settings 里换了主题，面板会一直是旧颜色。
-						// 面板不拥有主题：颜色一律取自 pi 的主题，见 docs/theme.md。
-						theme: ctx.ui.theme as unknown as typeof theme,
-						data,
-						actions,
-						getHeight: () => tui.terminal.rows,
-						requestRender: () => tui.requestRender(),
-						onClose: () => done(),
-						setHidden: (hidden) => setHidden?.(hidden),
-						keymap: config.keymap,
-						initialState: { scope: config.defaultScope, sort: config.defaultSort, treeFilter: piSettings.treeFilter },
-						leftColumnRatio: config.leftColumnRatio,
-						configDefaults: config,
-						settingsSource: {
-							read: () => readConfigSnapshot(getAgentDir()),
-							save: (baseline, patch) => saveConfigPatch(getAgentDir(), baseline, patch),
-							apply: (saved) => { initI18n(saved.locale); },
-						},
-						// 主题只有一个来源：pi。设置页列出 pi 能加载的主题，选中即切（走
-						// ctx.ui.setTheme，由 pi 负责写它自己的 settings.json 和热重载）；
-						// 失败时面板留下待重试的主题，s 再试一次。
-						themeSource: {
-							list: () => ctx.ui.getAllThemes(),
-							theme: ctx.ui.theme,
-							// 面板不自己记主题：ctx.ui.theme 就是 pi 当前活动（也是它保存）的那个。
-							savedName: () => ctx.ui.theme.name,
-							set: (name) => {
-								const result = ctx.ui.setTheme(name);
-								if (result.success) {
-									// 换主题后带颜色的缓存（CONTENT 排版 / changelog）要跟着丢，
-									// 面板自己的重绘交给 requestRender。
-									tui.invalidate();
-									tui.requestRender();
-								}
-								return result;
-							},
-						},
-						skipSummaryPrompt: piSettings.skipBranchSummaryPrompt,
-						// 打开时 SESSIONS 光标落到 pi 当前打开的会话上；新会话没有文件 / 还没列出时留在第一行。
-						...(currentFile ? { currentSessionFile: currentFile } : {}),
-						// 配置文件有问题时在底部提示，但不阻止面板打开。
-						...(config.warnings.length ? { status: config.warnings[0] } : {}),
-						// footer 右下角的版本号（读不到 package.json 时为空、不显示）。
-						...(version ? { version } : {}),
-					});
-					// fullscreen 模式 pi 已经开了鼠标并派给 overlay 的 handleMouse；regular 模式
-					// 由 attachMouse 自己开 SGR 上报并解析（fullscreen 下是 no-op）。
-					disableMouse = attachMouse(tui, panel);
-					disableKeyLog = attachKeyLog(tui);
-					if (args.trim() === "settings") panel.openSettings();
-					void panel.load();
-					return panel;
-				},
-				{
-					// Full-screen overlay: covers pi's own header/editor/footer instead of
-					// being embedded in the editor slot (which would overflow the terminal).
-					overlay: true,
-					overlayOptions: { anchor: "top-left", width: "100%", maxHeight: "100%", margin: 0 },
-					onHandle: (handle) => onOverlayHandle?.(handle),
-				},
-			);
-			// 面板关闭后恢复终端自己的滚动 / 选择。
-			disableMouse?.();
-			disableKeyLog?.();
 		},
 	});
 }

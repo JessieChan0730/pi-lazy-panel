@@ -129,9 +129,13 @@ test("setting details show localized labels and descriptions without internal ke
 			assert.doesNotMatch(h.text(), /keyScope/);
 			assert.ok(h.text().includes(t("settings.keyScope")));
 			assert.ok(h.text().includes(t("settings.scopeDescription", { scope: t("scopeTitle.global") }).slice(0, 25)));
+			// pi 级快捷键（打开面板本身）有自己的说明，同样不漏内部字段名。
 			h.state.positions.global = { cursor: 1, scroll: 0, detailScroll: 0 };
-			assert.doesNotMatch(h.text(), /move-down/);
+			assert.doesNotMatch(h.text(), /openShortcut/);
+			assert.ok(h.text().includes(t("settings.openShortcutDescription").slice(0, 25)));
 			// 动作行同理：光标行的动作名和绑定值都不出现在说明框里。
+			h.state.positions.global = { cursor: 2, scroll: 0, detailScroll: 0 };
+			assert.doesNotMatch(h.text(), /move-down/);
 			assert.ok(!h.text().includes(`${t("action.move-down")}: `));
 			assert.ok(h.text().includes(t("settings.layerDescription", { scope: t("scopeTitle.global") }).slice(0, 25)));
 		}
@@ -450,6 +454,8 @@ test("a long description scrolls on its own without changing the selected action
 	h.dialog.open();
 	h.state.category = "keybindings";
 	h.state.region = "list";
+	// 跳到 move-down（作用域行、pi 级快捷键行之后第一个动作）。
+	h.dialog.handleInput("j");
 	h.dialog.handleInput("j");
 	// 说明比说明框高（矮终端）：给 PgDn 提示，滚到底才看得到最后一行。
 	let all = h.text(42, 13);
@@ -459,7 +465,7 @@ test("a long description scrolls on its own without changing the selected action
 		all += h.text(42, 13);
 	}
 	assert.match(all, /what fires/);
-	assert.equal(h.state.positions.global?.cursor, 1);
+	assert.equal(h.state.positions.global?.cursor, 2);
 	h.dialog.handleInput("j");
 	assert.equal(h.state.positions.global?.detailScroll, 0);
 });
@@ -507,11 +513,26 @@ test("keybinding category is editable: no read-only note, dirty marker, Enter ed
 	h.state.patch = { keymap: { sessions: { "session-delete": { set: ["ctrl+x"] } } } };
 	assert.match(h.text(108, 40), /\* Delete session/);
 	assert.match(h.text(108, 40), /Ctrl\+x/);
-	// Enter on an action row (not the scope row) edits that action.
+	// Enter on an action row (not the scope row or the pi shortcut row) edits that action.
 	h.state.region = "list";
-	h.state.positions.sessions = { cursor: 1, scroll: 0, detailScroll: 0 };
+	h.state.positions.sessions = { cursor: 2, scroll: 0, detailScroll: 0 };
 	h.dialog.handleInput("\r");
 	assert.equal(h.edits.at(-1), "session-resume");
+});
+test("the pi-level open shortcut row shows the key, Off when disabled, and its own dirty marker", () => {
+	const h = makeDialog(resolveConfig({ openShortcut: "ctrl+shift+l" }));
+	h.dialog.open();
+	h.state.category = "keybindings";
+	assert.match(h.text(108, 40), /Open shortcut \(pi\)/);
+	// chordLabel 把结尾的 Shift+字母收成大写。
+	assert.match(h.text(108, 40), /Ctrl\+L/);
+	// 关闭注册时显示 Off，而不是空值。
+	h.state.baseline = { raw: { openShortcut: null }, fingerprint: null };
+	assert.match(h.text(108, 40), /Off/);
+	// 草稿里的改动照旧打 `*`，和动作行一样的标记。
+	h.state.patch = { openShortcut: { set: "f2" } };
+	assert.match(h.text(108, 40), /\* Open shortcut/);
+	assert.match(h.text(108, 40), /F2/);
 });
 
 test("mouse: a click focuses the sidebar category, the setting row or the button it lands on", () => {

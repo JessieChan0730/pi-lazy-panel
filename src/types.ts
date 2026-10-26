@@ -488,6 +488,11 @@ export interface UserConfig {
 	keymap?: Partial<Record<KeyScope, UserPaneKeymap>>;
 	/** UI 语言（"en" / "zh"）；缺省时按系统语言自动检测。 */
 	locale?: Locale;
+	/**
+	 * pi 级打开面板的快捷键（如 "alt+l" / "F2"）；null 关闭。必须带修饰键或为
+	 * F1–F12。扩展加载时注册，改完需要 pi 的 `/reload` 才生效。
+	 */
+	openShortcut?: string | null;
 	defaultScope?: ListScope;
 	defaultSort?: SessionSortMode;
 	leftColumnRatio?: number;

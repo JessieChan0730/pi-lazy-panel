@@ -2,7 +2,7 @@
 
 ## 简介
 
-pi-lazy-panel 是 [pi](https://pi.dev) 会话和会话树管理的面板，提供类似于 lazygit 的操作方式和 TUI 风格。安装后在 pi 中执行 `/lazy-panel`，即可打开一个占满终端的三面板界面：
+pi-lazy-panel 是 [pi](https://pi.dev) 会话和会话树管理的面板，提供类似于 lazygit 的操作方式和 TUI 风格。安装后在 pi 中执行 `/lazy-panel`（或直接按插件注册的 `alt+l` 快捷键），即可打开一个占满终端的三面板界面：
 
 - 左上 **SESSIONS**：历史会话列表（对应 `/resume`）
 - 左下 **TREE**：当前所选会话的对话树（对应 `/tree`，随上方选择自动切换）
@@ -10,7 +10,7 @@ pi-lazy-panel 是 [pi](https://pi.dev) 会话和会话树管理的面板，提�
 
 围绕会话的常用操作（新建 / 恢复 / 分叉 / 克隆 / 改名 / 删除 / 压缩 / 导出 / 导入 / 分享 / 复制）都收敛成单键快捷键，全程无需鼠标。
 
-按 `,` 打开内置的**设置面板**：常规（语言、默认范围、默认排序）、布局（左侧栏宽度）、快捷键（按作用域，直接按下想绑的键来录入）、主题（切 pi 自己的主题）。每一处改动立即生效并写回 `~/.pi/agent/lazy-panel.json`，不需要手写 JSON。
+按 `,` 打开内置的**设置面板**：常规（语言、默认范围、默认排序）、布局（左侧栏宽度）、快捷键（按作用域，直接按下想绑的键来录入；页面顶部还有 pi 级打开面板的快捷键）、主题（切 pi 自己的主题）。每一处改动立即生效并写回 `~/.pi/agent/lazy-panel.json`，不需要手写 JSON。
 
 ## 界面预览
 
@@ -28,6 +28,7 @@ pi-lazy-panel 是 [pi](https://pi.dev) 会话和会话树管理的面板，提�
 8. 快捷键完全可自定义：在设置页里改，或直接改 `~/.pi/agent/lazy-panel.json`
 9. 鼠标轻量适配（滚轮滚动、单击聚焦、双击进入 / 折叠）
 10. 内置设置面板（`,`）：常规 / 布局 / 快捷键 / 主题四类就地编辑，快捷键靠按键录入，会被按键冲突挡在写入之前，改一处立刻落盘一处
+11. 全局快捷键：安装插件时给 pi 注册 `alt+l`，不用再输入 `/lazy-panel` 就能打开面板（可用配置里的 `openShortcut` 改键或关闭）
 
 ## 快速开始
 
@@ -41,7 +42,7 @@ pi install npm:pi-lazy-panel
 pi install git:github.com/JessieChan0730/pi-lazy-panel
 ```
 
-安装后在 pi 里执行 `/lazy-panel` 打开面板，`?` 可查看当前面板的全部快捷键，`,` 打开设置页。
+安装后在 pi 里执行 `/lazy-panel`（或按 `alt+l`）打开面板，`?` 可查看当前面板的全部快捷键，`,` 打开设置页。
 
 ## 本地开发
 
@@ -78,6 +79,7 @@ npm run i18n:check     # 中英文案对齐
 ```json
 {
  "locale": "zh",
+ "openShortcut": "alt+l",
  "defaultScope": "all",
  "defaultSort": "recent",
  "leftColumnRatio": 0.25,
@@ -91,12 +93,15 @@ npm run i18n:check     # 中英文案对齐
 | 字段              | 说明             | 可选值 / 范围                                       | 默认               |
 | ----------------- | ---------------- | --------------------------------------------------- | ------------------ |
 | `locale`          | UI 语言          | `"en"` / `"zh"`                                     | 跟随系统语言       |
+| `openShortcut`    | 在 pi 里打开面板的全局快捷键 | 带修饰键的单个键，或 `F1`–`F12`；`null` 关闭 | `"alt+l"` |
 | `defaultScope`    | 打开时的会话范围 | `"current-folder"` / `"all"`                        | `"current-folder"` |
 | `defaultSort`     | 会话列表排序     | `"recent"` / `"created"` / `"title"` / `"threaded"` | `"recent"`         |
 | `leftColumnRatio` | 左侧列宽占比     | `0.15` ~ `0.6`                                      | `0.25`             |
 | `keymap`          | 自定义快捷键     | 见下                                                | 内置键位           |
 
 `keymap` 按 `scope`（`global` / `sessions` / `tree` / `content` / `tree-dialog`）分组，键为动作 id、值为一个或多个 chord（如 `"ctrl+d"`、`["A", "ctrl+space"]`）；用户提供的键位**整体替换**该动作的默认值，`null` 表示解绑。完整的动作 id 与键位说明见 [docs/keybindings.zh.md](./docs/keybindings.zh.md)。
+
+`openShortcut` 在扩展加载时读一次——改完要在 pi 里 `/reload` 才生效；设为 `null` 就只保留 `/lazy-panel` 命令。设置页里也能改（**快捷键 → 打开面板快捷键（pi）**：按下新键 / 关闭 / 恢复默认）。
 
 设置页（`,`）改的就是这个文件：只改动过的字段，其余内容（含缩进、行尾）原样保留；其他窗口的不相交修改会自动合并，同字段冲突时停下写入并提供重试。
 

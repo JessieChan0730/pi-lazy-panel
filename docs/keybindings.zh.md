@@ -11,6 +11,7 @@
 ```json
 {
   "locale": "zh",
+  "openShortcut": "alt+l",
   "defaultScope": "all",
   "defaultSort": "recent",
   "leftColumnRatio": 0.25,
@@ -24,6 +25,7 @@
 | 字段 | 说明 | 可选值 / 范围 | 默认 |
 | --- | --- | --- | --- |
 | `locale` | UI 语言 | `"en"` / `"zh"` | 跟随系统语言 |
+| `openShortcut` | 在 pi 里打开面板的全局快捷键（见下） | 带修饰键的单个键，或 `F1`–`F12`；`null` 关闭 | `"alt+l"` |
 | `defaultScope` | 打开时的会话范围 | `"current-folder"` / `"all"` | `"current-folder"` |
 | `defaultSort` | 会话列表排序 | `"recent"` / `"created"` / `"title"` / `"threaded"` | `"recent"` |
 | `leftColumnRatio` | 左侧列宽占比 | `0.15` ~ `0.6` | `0.25` |
@@ -31,6 +33,15 @@
 
 - 非法的 `locale` / `defaultScope` / `defaultSort` 会退回默认值，越界的 `leftColumnRatio` 也会被忽略，并在面板打开时于 footer 提示。
 - `locale` 缺省时按系统语言自动检测（见 `src/i18n/index.ts`）。
+
+## 从 pi 打开面板
+
+安装插件时还会给 pi 注册一个全局快捷键 **`alt+l`**，在 pi 的输入框里直接按下就能打开面板，不用再输入 `/lazy-panel`。它走的就是同一个命令，所以恢复 / 分叉 / 导入等一切命令能做的事都能用；pi 自己的快捷键帮助里会把它列在 **Extensions** 一节。
+
+- 快捷键在**扩展加载时**从 `openShortcut` 读一次：改完键位要在 pi 里 `/reload`（或重启 pi）才生效。把 `openShortcut` 设为 `null` 可关闭。
+- 必须是带修饰键（`ctrl` / `shift` / `alt` / `super`）的单个按键，或 `F1`–`F12`。裸字母、Enter、Tab 会被拒绝（面板 footer 里提示原因），否则会抢走 pi 输入框里的正常输入。
+- 它只在 pi 的输入框里生效；面板打开后仍按面板自己的键位表。
+- 设置页里也能改：**快捷键 → 打开面板快捷键（pi）**，按下新键即可录入，也可以关闭或恢复默认。设置页会立即显示新值，但 pi 要到 `/reload` 后才重新注册。
 
 ## 插件设置
 

@@ -15,6 +15,16 @@ export const RADIUS_GATEWAY = "https://radius.pi.dev";
 /** Slash command that opens the panel: `/lazy-panel`. */
 export const COMMAND_NAME = "lazy-panel";
 
+/**
+ * Default pi-level shortcut that opens the panel. Registered once when the
+ * extension loads, so it only fires in pi's editor (never inside the panel).
+ * Users can override it with `openShortcut` in the config or disable it with
+ * `null`; a change takes effect after pi's `/reload`.
+ *
+ * 打开面板的 pi 全局快捷键默认值（用户配置 `openShortcut` 可覆盖，`null` 关闭）。
+ */
+export const DEFAULT_OPEN_SHORTCUT = "alt+l";
+
 /** Name of the optional user config file inside the pi agent directory. */
 export const CONFIG_FILE_NAME = "lazy-panel.json";
 

@@ -34,6 +34,8 @@
 
 用户安装插件之后，使用 /lazy-panel 命令可以打开一个 tui 对话框，整体布局是参考项目描述
 
+- ~~打开方式不只命令：安装插件时通过 `pi.registerShortcut` 给 pi 注册全局快捷键（默认 `alt+l`，配置项 `openShortcut` 可改、`null` 关闭），在 pi 输入框里按下即打开；快捷键走 `pi.sendUserMessage('/lazy-panel')` 重新进入命令处理器，拿到的 ctx 才带 newSession / switchSession / navigateTree / fork。扩展加载时同步读配置，改键后 `/reload` 生效~~（2026-10-25 完成）
+
 - ~~打开时 SESSIONS 光标自动落到 pi 当前打开的会话上，TREE / CONTENT 随之显示当前对话；新对话（还没有会话文件或还没列出来）则选中第一行~~（2026-09-22 完成；C / A 切换范围后仍回到顶部）
 
 ## 快捷键操作

@@ -274,7 +274,7 @@ test("settings reports startup defaults, not temporary scope/sort, and closing l
 		getHeight: () => 28,
 		requestRender: () => { renders++; },
 		onClose: () => {},
-		configDefaults: { defaultScope: "current-folder", defaultSort: "created", locale: "en" },
+		configDefaults: { defaultScope: "current-folder", defaultSort: "created", locale: "en", openShortcut: "alt+l" },
 	});
 	panel.state.scope = "all";
 	panel.state.sort = "title";
@@ -2088,6 +2088,30 @@ test("InputDialog capture mode records key presses instead of text", () => {
 	dlg.handleInput("\x1b");
 	assert.equal(cancelled, 1);
 	assert.equal(submitted.length, 3);
+});
+
+test("InputDialog single capture submits the first valid key and keeps invalid ones with the reason", () => {
+	const submitted: string[] = [];
+	let cancelled = 0;
+	const dlg = new InputDialog({ theme: fakeTheme, onChange: () => {} });
+	dlg.open({
+		title: "Open shortcut", capture: "single", placeholder: "Press a key…", hints: [["Esc", "cancel"]],
+		validate: (value) => /^(?:ctrl|alt|shift|super)\+/.test(value) ? undefined : "Use a modifier",
+		onSubmit: (v) => submitted.push(v), onCancel: () => cancelled++,
+	});
+	const field = (): string => stripTerminalSequences(dlg.render(40)[1] ?? "");
+	// 裸字母被挡下：留在弹窗里，显示原因和刚按的键，继续等下一个键。
+	dlg.handleInput("x");
+	assert.equal(submitted.length, 0);
+	assert.equal(dlg.isOpen, true);
+	assert.ok(field().includes("x"), field());
+	assert.ok(stripTerminalSequences(dlg.render(40).join("\n")).includes("Use a modifier"));
+	// 合格的键位立刻提交，不需要 Enter。
+	dlg.handleInput("\x01");
+	assert.deepEqual(submitted, ["ctrl+a"]);
+	// Esc 仍然先当取消。
+	dlg.handleInput("\x1b");
+	assert.equal(cancelled, 1);
 });
 
 test("SelectDialog is a reusable centered menu: items / cursor / subject / hints come from open()", () => {

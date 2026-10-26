@@ -1,7 +1,8 @@
 /** Settings navigation and draft state, owned by PanelState. */
 
 import { resolveConfig, type ResolvedConfig } from "../config/config.ts";
-import { applyKeymapPatch, type ConfigSnapshot, type KeymapPatchValue, type SettingsPatch } from "../config/config-store.ts";
+import { DEFAULT_OPEN_SHORTCUT } from "../constants.ts";
+import { applyKeymapPatch, type ConfigSnapshot, type KeymapPatchValue, type OpenShortcutPatch, type SettingsPatch } from "../config/config-store.ts";
 import type { ActionId, KeyChord, KeyScope } from "../types.ts";
 import type { ThemeRef } from "./ports.ts";
 
@@ -98,7 +99,7 @@ export function settingsDraft(state: SettingsState): ResolvedConfig | undefined 
 	if (!state.baseline) return state.config;
 	const raw = { ...state.baseline.raw };
 	for (const [key, value] of Object.entries(state.patch)) {
-		if (key === "keymap") continue; // 嵌套 keymap diff 单独合并，见下。
+		if (key === "keymap" || key === "openShortcut") continue; // 这两个用自己的补丁形状，见下。
 		if (value === null) delete raw[key];
 		else raw[key] = value;
 	}
@@ -106,6 +107,13 @@ export function settingsDraft(state: SettingsState): ResolvedConfig | undefined 
 		const applied = applyKeymapPatch(raw.keymap, state.patch.keymap);
 		if (Object.keys(applied).length) raw.keymap = applied;
 		else delete raw.keymap;
+	}
+	if (state.patch.openShortcut) {
+		// null 是 openShortcut 的真实取值（关闭注册），只有 reset 才删除用户值。
+		const edit = state.patch.openShortcut;
+		if ("reset" in edit) delete raw.openShortcut;
+		else if ("off" in edit) raw.openShortcut = null;
+		else raw.openShortcut = edit.set;
 	}
 	return resolveConfig(raw);
 }
@@ -118,6 +126,28 @@ export function setSettingsDraft<K extends EditableSetting>(state: SettingsState
 	const unchanged = value === null ? !present : baselineValue === value;
 	if (unchanged) delete state.patch[key];
 	else Object.assign(state.patch, { [key]: value });
+	state.error = undefined;
+	state.notice = undefined;
+}
+
+/**
+ * Record one pi-level open-panel shortcut edit. Like the other settings, an
+ * edit that round-trips to the on-disk value leaves no draft, so the `*`
+ * marker and the save only appear for a real change. Note `null` is a real
+ * config value here ("no shortcut"), hence the dedicated { off } / { reset }
+ * form instead of reusing the other fields' null = delete.
+ */
+export function setOpenShortcutDraft(state: SettingsState, edit: OpenShortcutPatch): void {
+	if (!state.baseline || state.loading || state.saving) return;
+	const has = Object.hasOwn(state.baseline.raw, "openShortcut");
+	const base = state.baseline.raw.openShortcut;
+	const unchanged = "reset" in edit
+		? !has
+		: "off" in edit
+			? has && base === null
+			: has ? base === edit.set : edit.set === DEFAULT_OPEN_SHORTCUT;
+	if (unchanged) delete state.patch.openShortcut;
+	else state.patch.openShortcut = edit;
 	state.error = undefined;
 	state.notice = undefined;
 }

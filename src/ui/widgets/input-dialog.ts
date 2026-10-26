@@ -52,8 +52,12 @@ export interface InputDialogSpec {
 	 * (see `InputDialog.handleInput`), and `onSubmit` receives the chord text
 	 * ("ctrl+d", or "g g" for a multi-key sequence). Used by the settings
 	 * keybindings page.
+	 *
+	 * `"single"` records exactly one key: a valid press is submitted right away
+	 * (`validate` can refuse it and keep the prompt open), which is what the
+	 * pi-level open shortcut needs — pi allows one key there, not a sequence.
 	 */
-	capture?: boolean;
+	capture?: boolean | "single";
 	onSubmit: (value: string) => void;
 	onCancel: () => void;
 }
@@ -159,6 +163,20 @@ export class InputDialog {
 		}
 		const chord = chordFromKeypress(data);
 		if (chord === undefined) return;
+		// 单键录入：按下一个键就校验并提交，不合格的键留在弹窗里并给出原因。
+		// 没有"退回一步"：Backspace / Enter 本身也会交给 validate 判断（pi 级快捷键不接受裸键）。
+		if (spec.capture === "single") {
+			const error = spec.validate?.(chord);
+			if (error) {
+				this.steps = [chord];
+				this.error = error;
+				this.showSteps();
+				this.o.onChange();
+				return;
+			}
+			spec.onSubmit(chord);
+			return;
+		}
 		if (isReservedKey(chord)) {
 			// Backspace 只用来退回上一步，没有可退的就什么都不做。
 			if (chord !== "backspace" || !this.steps.length) return;
