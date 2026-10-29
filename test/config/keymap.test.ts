@@ -1,0 +1,405 @@
+/**
+ * Keymap tests: chord parsing, multi-key resolution and user-config merging.
+ * Run with `npm test` (node --test via tsx).
+ */
+
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { mergeKeymap, resolveConfig } from "../../src/config/config.ts";
+import { DEFAULT_KEYMAP } from "../../src/config/keymap.ts";
+import { chordFromKeypress, chordLabel, compileKeymap, isReservedKey, keymapConflicts, labelsForFocus, matchesKeyId, normalizeKeyStep, normalizeOpenShortcut, parseChord, type ResolveResult, resolveKeys, scopeChain } from "../../src/config/keys.ts";
+import { KeySequencer, PENDING_TIMEOUT_MS } from "../../src/ui/key-sequencer.ts";
+
+/** Action of a resolve result, or undefined when it did not resolve to one. */
+function actionOf(r: ResolveResult): string | undefined {
+	return r.kind === "action" ? r.action : undefined;
+}
+
+test("movement inherits global bindings and pane overrides retain priority", () => {
+	const bindings = compileKeymap(DEFAULT_KEYMAP);
+	for (const scope of ["sessions", "tree", "content", "tree-dialog"] as const) {
+		for (const key of ["j", "\x1b[B"]) assert.deepEqual(resolveKeys(bindings, scope, [key]), { kind: "action", action: "move-down", scope: "global" });
+		for (const key of ["k", "\x1b[A"]) assert.deepEqual(resolveKeys(bindings, scope, [key]), { kind: "action", action: "move-up", scope: "global" });
+	}
+	const custom = compileKeymap(mergeKeymap(DEFAULT_KEYMAP, { tree: { "move-up": "j" } }));
+	assert.deepEqual(resolveKeys(custom, "tree-dialog", ["j"]), { kind: "action", action: "move-up", scope: "tree" });
+	const unbound = compileKeymap(mergeKeymap(DEFAULT_KEYMAP, { global: { "move-down": null } }));
+	assert.deepEqual(resolveKeys(unbound, "sessions", ["j"]), { kind: "none" });
+});
+
+test("normalizeKeyStep: uppercase means shift, modifiers are ordered, named keys are recognised", () => {
+	assert.equal(normalizeKeyStep("G"), "shift+g");
+	assert.equal(normalizeKeyStep("shift+g"), "shift+g");
+	assert.equal(normalizeKeyStep("Shift+Ctrl+D"), "ctrl+shift+d");
+	assert.equal(normalizeKeyStep("Tab"), "tab");
+	assert.equal(normalizeKeyStep("PageDown"), "pageDown");
+	assert.equal(normalizeKeyStep("?"), "?");
+	assert.equal(normalizeKeyStep("+"), "+");
+	assert.equal(normalizeKeyStep("bogus"), undefined);
+	assert.equal(normalizeKeyStep("meta+x"), undefined);
+});
+
+test("reserved keys can never be bound, in any scope or form", () => {
+	// Esc is hard-coded by the panel, Backspace is the recorder's undo key.
+	for (const chord of ["escape", "esc", "Escape", "backspace", "Backspace"])
+		assert.equal(normalizeKeyStep(chord), undefined, chord);
+	assert.equal(isReservedKey("escape"), true);
+	assert.equal(isReservedKey(" Backspace "), true);
+	assert.equal(isReservedKey("ctrl+backspace"), false);
+	assert.equal(isReservedKey("enter"), false);
+	// With a modifier they are different keys, so they stay bindable …
+	assert.equal(normalizeKeyStep("ctrl+backspace"), "ctrl+backspace");
+	assert.deepEqual(parseChord("ctrl+backspace"), ["ctrl+backspace"]);
+	// … while the bare forms do not even parse, so they can never compile into a binding.
+	assert.equal(parseChord("escape"), undefined);
+	assert.equal(parseChord("backspace"), undefined);
+	assert.equal(parseChord("g backspace"), undefined);
+	const dropped = mergeKeymap(DEFAULT_KEYMAP, { global: { help: "escape", quit: "backspace" } });
+	assert.deepEqual(dropped.global.help, DEFAULT_KEYMAP.global.help, "the reserved value is dropped, the default stays");
+	assert.equal(compileKeymap(dropped).some((b) => b.chord === "escape" || b.chord === "backspace"), false);
+	// A hand-written reserved binding is dropped with a warning, not silently kept.
+	const warnings: string[] = [];
+	const merged = mergeKeymap(DEFAULT_KEYMAP, { sessions: { "session-resume": ["escape", "backspace"] } }, warnings);
+	assert.equal(warnings.length, 2);
+	assert.match(warnings[0]!, /"escape" is reserved/);
+	assert.equal(merged.sessions["session-resume"], "return", "the built-in default stays");
+	// A mixed list keeps the usable chords and only drops the reserved one.
+	const mixed: string[] = [];
+	assert.deepEqual(mergeKeymap(DEFAULT_KEYMAP, { global: { help: ["?", "escape"] } }, mixed).global.help, ["?"]);
+	assert.equal(mixed.length, 1);
+});
+
+test("parseChord: single keys, combos, verbatim sequences and spaced sequences", () => {
+	assert.deepEqual(parseChord("j"), ["j"]);
+	assert.deepEqual(parseChord("ctrl+d"), ["ctrl+d"]);
+	assert.deepEqual(parseChord("gg"), ["g", "g"]);
+	assert.deepEqual(parseChord("yy"), ["y", "y"]);
+	assert.deepEqual(parseChord("ctrl+w h"), ["ctrl+w", "h"]);
+	assert.deepEqual(parseChord("space"), ["space"]);
+	assert.deepEqual(parseChord("shift+tab"), ["shift+tab"]);
+	assert.equal(parseChord(""), undefined);
+	assert.equal(parseChord("ctrl+"), undefined);
+});
+
+test("matchesKeyId: raw terminal bytes match canonical ids", () => {
+	assert.ok(matchesKeyId("\t", "tab"));
+	assert.ok(matchesKeyId("\x1b[Z", "shift+tab"));
+	assert.ok(matchesKeyId("G", "shift+g"));
+	assert.ok(matchesKeyId("\x04", "ctrl+d"));
+	assert.ok(matchesKeyId("?", "?"));
+	assert.ok(matchesKeyId("/", "/"));
+	// kitty CSI-u for "?" (shift+/) is decoded as a printable
+	assert.ok(matchesKeyId("\x1b[47:63;2u", "?"));
+	// Function keys arrive as kitty CSI-u functional sequences when pi has the
+	// kitty keyboard protocol on (flags=7); pi-tui's matchesKey only knows the
+	// legacy forms, so matchesKeyId matches the functional codepoints itself.
+	assert.ok(matchesKeyId("\x1b[57365u", "f2"));
+	assert.ok(matchesKeyId("\x1b[57365;1u", "f2"));
+	assert.ok(matchesKeyId("\x1b[57365;1:1u", "f2"));
+	assert.ok(matchesKeyId("\x1bOQ", "f2")); // legacy still matches
+	assert.ok(matchesKeyId("\x1b[57375u", "f12"));
+	assert.ok(matchesKeyId("\x1b[57365;2u", "shift+f2"));
+	assert.equal(matchesKeyId("\x1b[57365;2u", "f2"), false); // modifier mismatch
+	assert.equal(matchesKeyId("\x1b[57366u", "f2"), false); // F3 is not F2
+	assert.equal(matchesKeyId("\x1b[57365;1:3u", "f2"), false); // release never matches
+	// The whole functional-key family arrives as kitty CSI-u in a kitty terminal
+	// (herdr), and pi-tui only maps the keypad codepoints 57421–57426.
+	assert.ok(matchesKeyId("\x1b[57349u", "delete"));
+	assert.ok(matchesKeyId("\x1b[57349;5u", "ctrl+delete"));
+	assert.ok(matchesKeyId("\x1b[57348u", "insert"));
+	assert.ok(matchesKeyId("\x1b[57356u", "home"));
+	assert.ok(matchesKeyId("\x1b[57357u", "end"));
+	assert.ok(matchesKeyId("\x1b[57354u", "pageUp"));
+	assert.ok(matchesKeyId("\x1b[57355u", "pageDown"));
+	assert.ok(matchesKeyId("\x1b[57352u", "up"));
+	assert.equal(matchesKeyId("\x1b[57352;2u", "up"), false); // shift+up is not up
+	assert.equal(matchesKeyId("\x1b[57349u", "insert"), false);
+	// key release events never match
+	assert.equal(matchesKeyId("\x1b[103;1:3u", "g"), false);
+	assert.equal(matchesKeyId("x", "y"), false);
+});
+
+test("chordFromKeypress: raw bytes become the chord the recorder stores", () => {
+	// Plain keys, uppercase-as-shift, named keys.
+	assert.equal(chordFromKeypress("a"), "a");
+	assert.equal(chordFromKeypress("G"), "shift+g");
+	assert.equal(chordFromKeypress("?"), "?");
+	assert.equal(chordFromKeypress("+"), undefined); // pi-tui cannot match "+" back, so it is not offered
+	assert.equal(chordFromKeypress("\t"), "tab");
+	assert.equal(chordFromKeypress("\r"), "enter");
+	assert.equal(chordFromKeypress(" "), "space");
+	assert.equal(chordFromKeypress("\x7f"), "backspace");
+	assert.equal(chordFromKeypress("\x1b"), "escape");
+	// Modifiers, legacy and kitty forms of the same key.
+	assert.equal(chordFromKeypress("\x04"), "ctrl+d");
+	assert.equal(chordFromKeypress("\x1b[100;5u"), "ctrl+d");
+	assert.equal(chordFromKeypress("\x1b[Z"), "shift+tab");
+	assert.equal(chordFromKeypress("\x1b[A"), "up");
+	assert.equal(chordFromKeypress("\x1b[1;5A"), "ctrl+up");
+	assert.equal(chordFromKeypress("\x1b[63;2u"), "shift+?");
+	// Function keys: the legacy sequence and the kitty functional codepoint that
+	// pi-tui's parseKey does not know.
+	assert.equal(chordFromKeypress("\x1bOP"), "f1");
+	assert.equal(chordFromKeypress("\x1b[57365u"), "f2");
+	assert.equal(chordFromKeypress("\x1b[57365;2u"), "shift+f2");
+	assert.equal(chordFromKeypress("\x1b[57375u"), "f12");
+	// Same for the rest of the functional family: Delete / Home / PageUp … only
+	// arrive as kitty CSI-u in a kitty terminal, and pi-tui cannot parse them.
+	assert.equal(chordFromKeypress("\x1b[57349u"), "delete");
+	assert.equal(chordFromKeypress("\x1b[57348u"), "insert");
+	assert.equal(chordFromKeypress("\x1b[57356u"), "home");
+	assert.equal(chordFromKeypress("\x1b[57357u"), "end");
+	assert.equal(chordFromKeypress("\x1b[57354u"), "pageUp");
+	assert.equal(chordFromKeypress("\x1b[57349;5u"), "ctrl+delete");
+	// A lone modifier key is not a chord (Fn never reaches the terminal at all).
+	assert.equal(chordFromKeypress("\x1b[57441u"), undefined);
+	assert.equal(chordFromKeypress("\x1b[57442u"), undefined);
+	// Nothing to record: releases, auto-repeats, pastes and unknown bytes.
+	assert.equal(chordFromKeypress("\x1b[103;1:3u"), undefined);
+	assert.equal(chordFromKeypress("\x1b[103;1:2u"), undefined);
+	assert.equal(chordFromKeypress("hello"), undefined);
+	assert.equal(chordFromKeypress(""), undefined);
+	// Whatever it returns is matched back by our own matcher, so a recorded key
+	// always fires later.
+	for (const data of ["a", "G", "\x04", "\x1b[100;5u", "\t", "\r", " ", "\x1b[Z", "\x1b[1;5A", "\x1b[57365u", "\x1b[57349u", "\x1b[57354u"])
+		assert.ok(matchesKeyId(data, chordFromKeypress(data)!), data);
+});
+
+test("resolveKeys: pane bindings shadow global, multi-key sequences go through pending", () => {
+	const bindings = compileKeymap(DEFAULT_KEYMAP);
+	// global
+	assert.deepEqual(resolveKeys(bindings, "sessions", ["\t"]), { kind: "action", action: "focus-next", scope: "global" });
+	assert.deepEqual(resolveKeys(bindings, "sessions", ["l"]), { kind: "action", action: "focus-next", scope: "global" });
+	assert.deepEqual(resolveKeys(bindings, "content", ["h"]), { kind: "action", action: "focus-prev", scope: "global" });
+	assert.deepEqual(resolveKeys(bindings, "content", ["2"]), { kind: "action", action: "focus-tree", scope: "global" });
+	assert.deepEqual(resolveKeys(bindings, "content", ["C"]), { kind: "action", action: "scope-current", scope: "global" });
+	assert.deepEqual(resolveKeys(bindings, "content", ["A"]), { kind: "action", action: "scope-all", scope: "global" });
+	assert.deepEqual(resolveKeys(bindings, "tree", ["?"]), { kind: "action", action: "help", scope: "global" });
+	assert.deepEqual(resolveKeys(bindings, "tree", ["/"]), { kind: "action", action: "search", scope: "global" });
+	// "n" is search-next globally but "session-new" in the sessions pane
+	assert.equal(actionOf(resolveKeys(bindings, "sessions", ["n"])), "session-new");
+	assert.equal(actionOf(resolveKeys(bindings, "tree", ["n"])), "search-next");
+	// Lowercase l still switches panes; uppercase L/T match native pi's label commands.
+	assert.equal(actionOf(resolveKeys(bindings, "tree", ["l"])), "focus-next");
+	assert.equal(actionOf(resolveKeys(bindings, "tree", ["L"])), "tree-label");
+	assert.equal(actionOf(resolveKeys(bindings, "tree", ["T"])), "tree-toggle-label-time");
+	assert.deepEqual(resolveKeys(bindings, "tree", ["\x14"]), { kind: "none" });
+	// gg: first g is pending, second completes
+	assert.deepEqual(resolveKeys(bindings, "sessions", ["g"]), { kind: "pending" });
+	assert.equal(actionOf(resolveKeys(bindings, "sessions", ["g", "g"])), "go-top");
+	assert.deepEqual(resolveKeys(bindings, "sessions", ["g", "x"]), { kind: "none" });
+	// content pane: "y" copies the selected message, "zz" centers it (two-key sequence)
+	assert.deepEqual(resolveKeys(bindings, "content", ["y"]), { kind: "action", action: "content-copy", scope: "content" });
+	assert.deepEqual(resolveKeys(bindings, "content", ["z"]), { kind: "pending" });
+	assert.equal(actionOf(resolveKeys(bindings, "content", ["z", "z"])), "content-center");
+	assert.deepEqual(resolveKeys(bindings, "sessions", ["z"]), { kind: "none" });
+});
+
+test("keymapConflicts: an unreachable binding is reported with whoever takes the keys first", () => {
+	const conflictsOf = (keymap: Parameters<typeof keymapConflicts>[0], action: string) => keymapConflicts(keymap, action as never);
+	// "d" 排在 session-rename 前面（默认表里的声明顺序）：给 rename 加 d 按不出来
+	const sameChord = mergeKeymap(DEFAULT_KEYMAP, { sessions: { "session-rename": ["r", "d"] } });
+	assert.deepEqual(conflictsOf(sameChord.sessions, "session-rename"), [
+		{ kind: "dead", other: "session-delete", chord: "d", otherChord: "d" },
+	]);
+	// 反方向看同一个场景：占用者那边报的是"rename 的 d 被吃掉了"
+	assert.deepEqual(conflictsOf(sameChord.sessions, "session-delete"), [
+		{ kind: "steals", other: "session-rename", chord: "d", otherChord: "d" },
+	]);
+	// 短键永远赢：session-archive 的 "x" 是 "x y" 的前缀（不管声明顺序）
+	const prefix = mergeKeymap(DEFAULT_KEYMAP, { sessions: { "session-rename": ["r", "x y"] } });
+	assert.deepEqual(conflictsOf(prefix.sessions, "session-rename"), [
+		{ kind: "dead", other: "session-archive", chord: "x y", otherChord: "x" },
+	]);
+	// 声明顺序在前的那一方拿到键，另一方被吃掉（steals）
+	const steals = mergeKeymap(DEFAULT_KEYMAP, { sessions: { "session-new": ["n", "d"] } });
+	assert.deepEqual(conflictsOf(steals.sessions, "session-new"), [
+		{ kind: "steals", other: "session-delete", chord: "d", otherChord: "d" },
+	]);
+	// 我们的键是别人长序列的前缀：我们触发，它不再触发
+	const stealsPrefix = mergeKeymap(DEFAULT_KEYMAP, { sessions: { "session-new": ["n", "g"] } });
+	assert.deepEqual(conflictsOf(stealsPrefix.sessions, "session-new"), [
+		{ kind: "steals", other: "go-top", chord: "g", otherChord: "gg" },
+	]);
+	// 完全同序的重复键只报第一条：先出现的那条能触发，后面的那条是死的
+	assert.deepEqual(conflictsOf({ "session-delete": "d", "session-rename": "d" }, "session-rename"), [
+		{ kind: "dead", other: "session-delete", chord: "d", otherChord: "d" },
+	]);
+	assert.deepEqual(conflictsOf({ "session-delete": "d", "session-rename": "d" }, "session-delete"), [
+		{ kind: "steals", other: "session-rename", chord: "d", otherChord: "d" },
+	]);
+	// 自己两条键重叠不算冲突（编辑器也不会造出来）
+	assert.deepEqual(conflictsOf({ "session-delete": ["d", "d d"] }, "session-delete"), []);
+	// 没有键的动作、认不出的键都不参与
+	assert.deepEqual(conflictsOf({ "session-delete": "d", "session-rename": "ctrl+foo" }, "session-rename"), []);
+	assert.deepEqual(conflictsOf({}, "session-rename"), []);
+});
+
+test("tree dialog scope: its keys shadow the tree pane's and the global ones, everything else falls through", () => {
+	const bindings = compileKeymap(DEFAULT_KEYMAP);
+	assert.deepEqual(scopeChain("tree-dialog"), ["tree-dialog", "tree", "global"]);
+	assert.deepEqual(scopeChain("tree"), ["tree", "global"]);
+	assert.deepEqual(scopeChain("global"), ["global"]);
+	// a: filter all (dialog) shadows tree-open (pane); l: the labeled filter shadows focus-next; q shadows quit
+	assert.deepEqual(resolveKeys(bindings, "tree-dialog", ["a"]), { kind: "action", action: "tree-filter-all", scope: "tree-dialog" });
+	assert.deepEqual(resolveKeys(bindings, "tree-dialog", ["l"]), { kind: "action", action: "tree-filter-labeled", scope: "tree-dialog" });
+	assert.deepEqual(resolveKeys(bindings, "tree-dialog", ["q"]), { kind: "action", action: "tree-dialog-close", scope: "tree-dialog" });
+	assert.equal(actionOf(resolveKeys(bindings, "tree-dialog", ["d"])), "tree-filter-default");
+	assert.equal(actionOf(resolveKeys(bindings, "tree-dialog", ["t"])), "tree-filter-no-tools");
+	assert.equal(actionOf(resolveKeys(bindings, "tree-dialog", ["T"])), "tree-toggle-label-time");
+	assert.equal(actionOf(resolveKeys(bindings, "tree-dialog", ["L"])), "tree-label");
+	// h and ? have no dialog binding: they fall through to global, where the panel switches them off
+	assert.deepEqual(resolveKeys(bindings, "tree-dialog", ["h"]), { kind: "action", action: "focus-prev", scope: "global" });
+	assert.deepEqual(resolveKeys(bindings, "tree-dialog", ["?"]), { kind: "action", action: "help", scope: "global" });
+	// shared keys come from the tree pane, / from global, gg still goes through pending
+	assert.deepEqual(resolveKeys(bindings, "tree-dialog", ["z"]), { kind: "action", action: "tree-fold", scope: "tree" });
+	assert.deepEqual(resolveKeys(bindings, "tree-dialog", ["j"]), { kind: "action", action: "move-down", scope: "global" });
+	assert.deepEqual(resolveKeys(bindings, "tree-dialog", ["/"]), { kind: "action", action: "search", scope: "global" });
+	assert.deepEqual(resolveKeys(bindings, "tree-dialog", ["g"]), { kind: "pending" });
+	assert.equal(actionOf(resolveKeys(bindings, "tree-dialog", ["g", "g"])), "go-top");
+	// the dialog's own keys mean nothing in the panes
+	assert.deepEqual(resolveKeys(bindings, "tree", ["d"]), { kind: "none" });
+	assert.equal(actionOf(resolveKeys(bindings, "tree", ["a"])), "tree-open");
+	// labels follow the same chain; the user file can override or unbind the dialog scope
+	assert.deepEqual(labelsForFocus(DEFAULT_KEYMAP, "tree-dialog", "search"), ["/"]);
+	assert.deepEqual(labelsForFocus(DEFAULT_KEYMAP, "tree-dialog", "tree-copy"), ["y"]);
+	assert.deepEqual(labelsForFocus(DEFAULT_KEYMAP, "tree-dialog", "tree-filter-labeled"), ["l"]);
+	const merged = mergeKeymap(DEFAULT_KEYMAP, { "tree-dialog": { "tree-filter-all": "A", "tree-dialog-close": null } });
+	const custom = compileKeymap(merged);
+	assert.equal(actionOf(resolveKeys(custom, "tree-dialog", ["A"])), "tree-filter-all");
+	assert.equal(actionOf(resolveKeys(custom, "tree-dialog", ["a"])), "tree-open", "unshadowed: falls through to the pane binding");
+	assert.equal(actionOf(resolveKeys(custom, "tree-dialog", ["q"])), "quit", "unbound close: falls through to global quit");
+});
+
+test("mergeKeymap: user chords replace defaults per action, null unbinds, other actions untouched", () => {
+	const warnings: string[] = [];
+	const merged = mergeKeymap(
+		DEFAULT_KEYMAP,
+		{
+			global: { help: "F1", "scope-all": ["A", "ctrl+space"] },
+			sessions: { "session-delete": "ctrl+d", "session-share": null },
+			// @ts-expect-error unknown scope on purpose
+			bogus: { quit: "x" },
+		},
+		warnings,
+	);
+	assert.equal(merged.global.help, "F1");
+	assert.deepEqual(merged.global["scope-all"], ["A", "ctrl+space"]);
+	assert.equal(merged.global.quit, DEFAULT_KEYMAP.global.quit);
+	assert.equal(merged.sessions["session-delete"], "ctrl+d");
+	assert.equal(merged.sessions["session-share"], undefined);
+	assert.equal(merged.sessions["session-rename"], "r");
+	assert.equal(merged.tree["tree-label"], "L");
+	assert.equal(warnings.length, 1);
+	assert.match(warnings[0]!, /unknown keymap scope/);
+	// defaults must not be mutated
+	assert.equal(DEFAULT_KEYMAP.sessions["session-delete"], "d");
+	assert.equal(DEFAULT_KEYMAP.global.help, "?");
+
+	// the override is what the resolver sees
+	const bindings = compileKeymap(merged);
+	assert.equal(actionOf(resolveKeys(bindings, "sessions", ["\x04"])), "session-delete");
+	assert.equal(resolveKeys(bindings, "sessions", ["d"]).kind, "none");
+	assert.equal(actionOf(resolveKeys(bindings, "sessions", ["\x1bOP"])), "help");
+});
+
+test("resolveConfig: invalid values fall back to defaults with warnings", () => {
+	const cfg = resolveConfig({ defaultScope: "everything", leftColumnRatio: 5, keymap: { global: { quit: 42 } } });
+	assert.equal(cfg.defaultScope, "current-folder");
+	assert.equal(cfg.leftColumnRatio, 0.25);
+	assert.equal(cfg.keymap.global.quit, DEFAULT_KEYMAP.global.quit);
+	assert.equal(cfg.warnings.length, 3);
+	const ok = resolveConfig({ defaultScope: "all", defaultSort: "threaded", leftColumnRatio: 0.3 });
+	assert.equal(ok.defaultScope, "all");
+	assert.equal(ok.defaultSort, "threaded");
+	assert.equal(ok.leftColumnRatio, 0.3);
+	assert.deepEqual(ok.warnings, []);
+	// 主题不是面板设置：写了只提示，颜色一律跟着 pi（见 docs/theme.md）。
+	const themed = resolveConfig({ theme: "nord" });
+	assert.equal(themed.warnings.length, 1);
+	assert.match(themed.warnings[0]!, /theme/);
+	assert.equal(resolveConfig("nope").warnings.length, 1);
+});
+
+test("resolveConfig: locale overrides system language or falls back with a warning", () => {
+	// 合法值原样保留。
+	assert.equal(resolveConfig({ locale: "zh" }).locale, "zh");
+	assert.equal(resolveConfig({ locale: "en" }).locale, "en");
+	// 未指定时不写入 locale（运行时按系统语言）。
+	assert.equal(resolveConfig({}).locale, undefined);
+	// 非法值退回系统语言并给出一条 warning。
+	const bad = resolveConfig({ locale: "fr" });
+	assert.equal(bad.locale, undefined);
+	assert.equal(bad.warnings.length, 1);
+});
+
+test("resolveConfig: openShortcut is normalised, disabled by null and validated", () => {
+	// 缺省就是内置的 alt+l。
+	assert.equal(resolveConfig({}).openShortcut, "alt+l");
+	// 大小写、修饰键顺序都规范化。
+	assert.equal(resolveConfig({ openShortcut: "Alt+L" }).openShortcut, "alt+l");
+	assert.equal(resolveConfig({ openShortcut: "F2" }).openShortcut, "f2");
+	assert.equal(resolveConfig({ openShortcut: "shift+ctrl+p" }).openShortcut, "ctrl+shift+p");
+	// null 关闭注册（不是退回默认）。
+	assert.equal(resolveConfig({ openShortcut: null }).openShortcut, null);
+	// 会抢走输入的裸键、未知修饰键、非字符串都退回默认并提示。
+	for (const value of ["l", "enter", "hyper+l", 42]) {
+		const cfg = resolveConfig({ openShortcut: value });
+		assert.equal(cfg.openShortcut, "alt+l", String(value));
+		assert.equal(cfg.warnings.length, 1, String(value));
+		assert.match(cfg.warnings[0]!, /openShortcut/);
+	}
+});
+
+test("normalizeOpenShortcut: one key with a modifier or an F-key", () => {
+	assert.equal(normalizeOpenShortcut("alt+l"), "alt+l");
+	assert.equal(normalizeOpenShortcut("Ctrl+D"), "ctrl+d");
+	assert.equal(normalizeOpenShortcut("f12"), "f12");
+	// 裸键会把输入抢走；Esc / Backspace 也不能当快捷键。
+	for (const value of ["l", "G", "space", "enter", "tab", "escape", "backspace", "hyper+l", ""])
+		assert.equal(normalizeOpenShortcut(value), undefined, value);
+});
+
+test("chordLabel / labelsForFocus produce readable hints", () => {
+	assert.equal(chordLabel("shift+g"), "G");
+	assert.equal(chordLabel("G"), "G");
+	assert.equal(chordLabel("ctrl+d"), "Ctrl+d");
+	assert.equal(chordLabel("gg"), "gg");
+	assert.equal(chordLabel("ctrl+w h"), "Ctrl+w h");
+	assert.equal(chordLabel("ctrl+shift+g"), "Ctrl+G");
+	assert.equal(chordLabel("shift+tab"), "Shift+Tab");
+	assert.equal(chordLabel("F1"), "F1");
+	assert.equal(chordLabel("down"), "↓");
+	assert.deepEqual(labelsForFocus(DEFAULT_KEYMAP, "sessions", "quit"), ["q", "Ctrl+c"]);
+	assert.deepEqual(labelsForFocus(DEFAULT_KEYMAP, "sessions", "move-down"), ["j", "↓"]);
+});
+
+test("KeySequencer buffers a prefix, resolves the whole sequence, and drops a half one after the timeout", (ctx) => {
+	ctx.mock.timers.enable({ apis: ["setTimeout"] });
+	let changes = 0;
+	const keys = new KeySequencer(compileKeymap(DEFAULT_KEYMAP), () => changes++);
+	// g is a prefix of gg: buffered, the footer is told
+	assert.equal(keys.feed("sessions", "g").kind, "pending");
+	assert.equal(keys.pendingKeys, "g");
+	assert.equal(changes, 1);
+	// the second g completes it: resolved and the buffer is empty again
+	assert.equal(actionOf(keys.feed("sessions", "g")), "go-top");
+	assert.equal(keys.hasPending, false);
+	// a half sequence is dropped once the timeout passes
+	keys.feed("sessions", "g");
+	ctx.mock.timers.tick(PENDING_TIMEOUT_MS - 1);
+	assert.equal(keys.hasPending, true);
+	ctx.mock.timers.tick(1);
+	assert.equal(keys.hasPending, false);
+	assert.equal(changes, 3, "buffered, then dropped by the timeout");
+	// clear() drops it at once and the cancelled timeout never fires
+	keys.feed("tree-dialog", "g");
+	keys.clear();
+	assert.equal(keys.pendingKeys, "");
+	ctx.mock.timers.tick(PENDING_TIMEOUT_MS);
+	assert.equal(changes, 4);
+	// a key that resolves to nothing also empties the buffer
+	keys.feed("sessions", "g");
+	assert.equal(keys.feed("sessions", "x").kind, "none");
+	assert.equal(keys.hasPending, false);
+});

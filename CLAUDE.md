@@ -46,8 +46,8 @@ npm run ci             # CI 入口（.github/workflows/ci.yml 调用）：跑和
 
 - git hooks（husky，`npm install` 时由 `prepare` 自动安装）：commit 时 `.husky/commit-msg` 用 commitlint 检查约定式提交；push 前 `.husky/pre-push` → `scripts/pre-push.mjs` 并行跑 提交消息 / eslint / i18n 写死文案（只查本次推送改动的代码文件）/ i18n:check / tsc / 全部测试，任何一项失败就拒绝 push（紧急时 `git push --no-verify`）。
 
-- 运行单个测试文件：`node --import tsx --test test/ui.test.ts`
-- 按名称过滤：`node --import tsx --test --test-name-pattern="frame" test/ui.test.ts`
+- 运行单个测试文件：`node --import tsx --test test/ui/ui.test.ts`
+- 按名称过滤：`node --import tsx --test --test-name-pattern="frame" test/ui/ui.test.ts`
 - 没有构建步骤：pi 直接加载 `src/index.ts`（见 `package.json` 的 `pi.extensions`）。`install:pi` 注册的是目录路径，改完代码后重启 pi 或在 pi 里输入 `/reload` 即为最新代码。
 - 格式规范是 `.editorconfig`（tab 缩进、LF）+ `eslint.config.js`，提交前跑 `npm run lint`。
 - pi 扩展 API 文档在安装后的 `node_modules/@earendil-works/pi-coding-agent/docs/{extensions,tui,session-format}.md`，涉及 pi / pi-tui API 时先查文档，不要猜。
@@ -145,20 +145,48 @@ commitlint.config.js          # 约定式提交（@commitlint/config-conventiona
 .husky/                       # pre-push、commit-msg 两个钩子（_/ 是 husky 生成的，已被忽略）
 .github/workflows/ci.yml      # GitHub Actions：PR（→ main）/ push（main）时装依赖后 npm run ci，跑和 pre-push 同一套检查
 
-test/
-├── smoke.test.ts             # 键位表、搜索解析的冒烟测试
-├── keymap.test.ts            # chord 解析、多键序列、scope 链（tree-dialog → tree → global）、用户配置合并、KeySequencer（前缀缓冲 / 超时）
-├── panel.test.ts             # LazyPanel 行为：焦点切换、C/A、? 帮助、/ 搜索（三个面板的实时跳转 / Enter / Esc / n N 回绕 / 标题计数 / 折叠展开 / 高亮 / 切面板保留关键字）、自定义键位、y/T/Enter（含摘要菜单）、树对话框（移动、搜索、过滤、z 折叠、y/T/Enter、关闭后面板光标跟随）、SESSIONS 的 space 多选 / 批量删除 / d 确认删除 / r 改名 / s 排序 / i 信息弹窗 / n o y Y / e I S、@ changelog 弹窗、InputDialog / SelectDialog；拆分 app.ts 时补的行为锁定：输入法光标（CURSOR_MARKER）跟着各输入框走、多键超时、弹窗打开时屏蔽鼠标、各流程的失败分支、绑错 scope / 写错名字的动作只在 footer 提示
-├── flows.test.ts             # 假 FlowHost 驱动 ui/flows：导出 格式 → 路径 → 覆盖确认（每一步 Esc / No 退回上一步）、fork 选择器 ↔ 确认、恢复菜单 ↔ 自定义指令、批量删除跳过当前会话、Radius 未登录的登录菜单（i18n）/ 浏览器链接复制与无弹窗等待 / API Key / 设备码 / 取消后继续分享、面板关掉后不再写 footer
-├── tree-actions.test.ts      # 临时会话文件上验证 loadNodeText / labelNode 的分流、loadTree 的 isLeaf 标记
-├── session-actions.test.ts   # 临时会话文件上验证 isEffectiveLeaf / resumeSession / restoreNode 的分流与摘要选项透传、deleteSession（当前会话拒绝、trash → unlink 回退）、renameSession 的分流、new / fork / clone、export（默认路径 / JSONL 链 / 假 pi）/ import（复制 / 重名 / 清理副本）/ share（假 gh、假 Radius fetch、auto 的 Gist 优先与 Radius 回退、radius 不回落、pi.share entry）/ radiusAuthenticated / loginRadius、utils/paths
-├── pi-settings.test.ts       # 临时目录上验证 branchSummary.skipPrompt 的全局 / 项目两级读取、treeFilterMode 映射、sessionShareDestination 的合并与非法值回落
-├── changelog.test.ts         # parseChangelog 的切分 / 跳过无版本段、文件缺失
-├── search.test.ts            # parseSearchQuery 的限定词解析、matchTreeRow / matchSessionRow / matchesTokens 的匹配规则、findMatchRanges、firstMatchFrom / stepMatch / cycleMatch
-├── i18n.test.ts              # 语言检测 / 初始化 / 插值 / 复数 / 缺失回退（initI18n / detectLocale / normalizeLocale / t）
-├── lint.test.ts              # i18n/no-hardcoded-text 规则：报 / 不报的场景、只作用于 src
-├── open-shortcut.test.ts     # pi 级快捷键：loadConfigSync（默认 / 自定义 / null / 坏 JSON）和 registerOpenShortcut（注册键位、description、重新发 /lazy-panel、null 不注册）
-└── ui.test.ts                # 格式化、frame 几何、树过滤 / 折叠、TreeDialog 搜索行、highlightLine / searchMeta、ContentViewport（滚动夹取 / zz 越界 / 行匹配缓存）、TreeView（reveal / keepCursorOn / z / 搜索期间暂停折叠）
+test/                        # 目录是 src 分层的镜像：一个模块的测试就放到对应层，别再平铺在 test 根下
+├── smoke.test.ts             # 键位表、搜索解析的冒烟测试（跨层，留在根）
+├── app/                      # LazyPanel 端到端（同一个操作要从按键一路验到渲染）+ 扩展入口
+│   ├── panel.test.ts         # LazyPanel 行为：焦点切换、C/A、? 帮助、/ 搜索（三个面板的实时跳转 / Enter / Esc / n N 回绕 / 标题计数 / 折叠展开 / 高亮 / 切面板保留关键字）、自定义键位、y/T/Enter（含摘要菜单）、树对话框（移动、搜索、过滤、z 折叠、y/T/Enter、关闭后面板光标跟随）、SESSIONS 的 space 多选 / 批量删除 / d 确认删除 / r 改名 / s 排序 / i 信息弹窗 / n o y Y / e I S、@ changelog 弹窗、InputDialog / SelectDialog；拆分 app.ts 时补的行为锁定：输入法光标（CURSOR_MARKER）跟着各输入框走、多键超时、弹窗打开时屏蔽鼠标、各流程的失败分支、绑错 scope / 写错名字的动作只在 footer 提示
+│   ├── archive-panel.test.ts # X 归档框：跨目录扫描 / 项目筛选 / 实时搜索 / s 排序、Enter 恢复并保留弹窗、d 拒绝当前会话、确认删除（文件 + 元数据）、加载失败、自定义多键
+│   ├── tree-filter.test.ts   # f 过滤菜单：五种模式 / 直选键 / 取消保留 / 面板与树对话框双向共享 / 清折叠 / 空结果恢复 / 失败回滚可重试 / 可配置与帮助 footer
+│   ├── label-time.test.ts    # T / L 与标签时间：可选的独立时间、宽度安全、选中背景与搜索高亮不断、跨树视图共享、清空同时移除、重新绑定 / 解绑 / 帮助执行
+│   ├── index.test.ts         # 扩展入口：带 settings 参数直开设置且不写配置、General 字段即时写入 / 语言即时生效 / scope·sort 下次打开生效、非 TUI 守卫
+│   └── open-shortcut.test.ts # pi 级快捷键：loadConfigSync（默认 / 自定义 / null / 坏 JSON）和 registerOpenShortcut（注册键位、description、重新发 /lazy-panel、null 不注册）
+├── actions/                  # 副作用层：临时会话文件 + 假外部命令
+│   ├── session-actions.test.ts # 临时会话文件上验证 isEffectiveLeaf / resumeSession / restoreNode 的分流与摘要选项透传、deleteSession（当前会话拒绝、trash → unlink 回退）、renameSession 的分流、new / fork / clone、export（默认路径 / JSONL 链 / 假 pi）/ import（复制 / 重名 / 清理副本）/ share（假 gh、假 Radius fetch、auto 的 Gist 优先与 Radius 回退、radius 不回落、pi.share entry）/ radiusAuthenticated / loginRadius、utils/paths
+│   └── tree-actions.test.ts  # 临时会话文件上验证 loadNodeText / labelNode 的分流、loadTree 的 isLeaf 标记、标签时间戳
+├── config/                   # 键位与配置文件
+│   ├── keymap.test.ts        # chord 解析、多键序列、scope 链（tree-dialog → tree → global）、用户配置合并、KeySequencer（前缀缓冲 / 超时）
+│   ├── config-store.test.ts  # 配置快照 / 保存：保留无关字段、缩进 / 行尾 / 单行 / 缺尾换行、no-op 不改字节、缺文件不创建、跨进程锁
+│   ├── pi-settings.test.ts   # 临时目录上验证 branchSummary.skipPrompt 的全局 / 项目两级读取、treeFilterMode 映射、sessionShareDestination 的合并与非法值回落
+│   ├── archive.test.ts       # 会话文件状态（pin / archive）：缺失不写、新旧格式迁移、损坏文件保留、原子 rename、Windows 大小写键
+│   └── pins.test.ts          # loadPins / savePins：缺文件与坏 JSON、裸数组兼容、去重与 { pinned } 形状
+├── data/                     # 只读适配与纯函数
+│   ├── sessions.test.ts      # findSessionIndex 的路径比较、listArchivedSessions 跨目录、sortSessions 的四种模式 / 置顶 / 分叉线程
+│   ├── search.test.ts        # parseSearchQuery 的限定词解析、matchTreeRow / matchSessionRow / matchesTokens 的匹配规则、findMatchRanges、firstMatchFrom / stepMatch / cycleMatch
+│   ├── changelog.test.ts     # parseChangelog 的切分 / 跳过无版本段、文件缺失
+│   └── context-usage.test.ts # loadContextUsage 的两个层级（当前会话逐项 / 其他会话折叠成 Other）、无窗口信息、文件不可读、capParts / usageSegments
+├── i18n/                     # 国际化与元检查
+│   ├── i18n.test.ts          # 语言检测 / 初始化 / 插值 / 复数 / 缺失回退（initI18n / detectLocale / normalizeLocale / t）
+│   ├── i18n-scan.test.ts     # scripts/i18n-usage.mjs：静态 / 动态 key 提取、前缀只覆盖自身子树、复数变体、isKeyPresent
+│   └── lint.test.ts          # i18n/no-hardcoded-text 规则：报 / 不报的场景、只作用于 src
+└── ui/                       # 渲染层
+    ├── ui.test.ts            # 格式化、frame 几何、树过滤 / 折叠、TreeDialog 搜索行、highlightLine / searchMeta、ContentViewport（滚动夹取 / zz 越界 / 行匹配缓存）、TreeView（reveal / keepCursorOn / z / 搜索期间暂停折叠）、mouse 命中映射、dialog subject
+    ├── key-log.test.ts       # attachKeyLog：没开 LAZY_PANEL_KEY_LOG 时什么都不做、开了逐 chunk 追加且照常把按键交回面板
+    ├── mouse-input.test.ts   # parseSgrMouse / parseSgrMouseChunk / MouseTracker：按下释放、只认左键、同格点击、双击计数、滚轮批量拆条
+    ├── overlay-lifecycle.test.ts # mountPanelOverlay：regular 首次挂载重绘一次、恢复可见才重绘、fullscreen 不额外重绘
+    ├── pane-highlight.test.ts # 三个面板 + 树对话框的行样式：光标色、命中高亮、帮助行不进候选
+    ├── flows/                # 假 FlowHost 驱动 ui/flows（不 import app.ts）
+    │   ├── flows.test.ts     # 导出 格式 → 路径 → 覆盖确认（每一步 Esc / No 退回上一步）、fork 选择器 ↔ 确认、恢复菜单 ↔ 自定义指令、批量删除跳过当前会话、Radius 未登录的登录菜单（i18n）/ 浏览器链接复制与无弹窗等待 / API Key / 设备码 / 取消后继续分享、面板关掉后不再写 footer、过滤菜单
+    │   └── settings-flows.test.ts # 设置流程：General 选择即写 / 取消与撤销不写、回到隐式默认清掉覆盖、成功提示带值、scope 菜单、恢复默认只删已有覆盖、脏退出二次确认
+    └── widgets/              # 弹窗组件级测试（构造组件、喂按键、看渲染）
+        ├── modal.test.ts     # 弹窗外观与叠加：背景降级、嵌套不叠加样式、窄边距裁剪、统一边框与 footer 优先级
+        ├── dialog-header.test.ts # 标题栏几何：Esc / 提示 / 主体在长标题下仍可见、窄宽度退让
+        ├── help.test.ts      # ? 帮助：固定高度与小终端收缩、边框提示、条目保留 ActionId / alias / 绑定、跨语言换行
+        ├── context-dialog.test.ts # u 上下文与 prompt 详情：分类导航夹取、Enter 与统计行、prompt 预览滚动 / 复制、footer 提示不重复、鼠标点选
+        └── settings-dialog.test.ts # 设置页渲染：值列对齐、分类详情框、本地只读提示、footer 只留导航键
 
 docs/keybindings.md           # 默认快捷键表，新增 ActionId 时同步更新
 docs/design.md                # 产品设计（原 计划.md）

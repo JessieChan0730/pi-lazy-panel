@@ -1,0 +1,4845 @@
+/**
+ * Panel behaviour tests: focus cycling, scope toggle, help overlay and the
+ * search bar, driven through `LazyPanel.handleInput` with a stub theme and
+ * an in-memory DataSource. Run with `npm test` (node --test via tsx).
+ */
+
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import type { Theme } from "@earendil-works/pi-coding-agent";
+import type { TuiMouseEvent, TuiMouseEventType } from "@earendil-works/pi-tui";
+import { CURSOR_MARKER, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import { DEFAULT_KEYMAP } from "../../src/config/keymap.ts";
+import { mergeKeymap } from "../../src/config/config.ts";
+import { initI18n, t } from "../../src/i18n/index.ts";
+
+// 测试统一按英文界面断言：先把 i18n 固定成 en（放在其它 src 模块的顶层 t() 别名之前）。
+initI18n("en");
+import type {
+	ActionId,
+	ContentBlock,
+	ContextUsageInfo,
+	ExportFormat,
+	ForkPoint,
+	RestoreOptions,
+	SessionInfo,
+	SessionRow,
+	SessionShareDestination,
+	SessionSortMode,
+	TreeFilter,
+	TreeRow,
+} from "../../src/types.ts";
+import { LazyPanel } from "../../src/ui/app.ts";
+import { ContentViewport } from "../../src/ui/content-viewport.ts";
+import type { ActionSource, DataSource, SettingsSource, ThemeSource } from "../../src/ui/ports.ts";
+import { settingsDirtyCount } from "../../src/ui/settings-state.ts";
+import { cannotDeleteActiveTitle } from "../../src/ui/widgets/alert-dialog.ts";
+import { compactDialogTitle } from "../../src/ui/widgets/compact-dialog.ts";
+import {
+	cloneSessionTitle,
+	deleteSessionTitle,
+	forkSessionTitle,
+	importSessionTitle,
+	overwriteFileTitle,
+	radiusSignOutTitle,
+} from "../../src/ui/widgets/confirm-dialog.ts";
+import { exportFormatTitle, exportPathSubject, exportPathTitle } from "../../src/ui/widgets/export-dialog.ts";
+import { forkDialogTitle } from "../../src/ui/widgets/fork-dialog.ts";
+import { buildHelpLines, helpBoxSize, helpLineCount, renderHelpBox } from "../../src/ui/widgets/help-overlay.ts";
+import { importDialogSubject, importDialogTitle } from "../../src/ui/widgets/import-dialog.ts";
+import { InputDialog } from "../../src/ui/widgets/input-dialog.ts";
+import { labelDialogTitle } from "../../src/ui/widgets/label-dialog.ts";
+import { newSessionDialogTitle } from "../../src/ui/widgets/new-session-dialog.ts";
+import { radiusLoginMethodLabel, radiusLoginMethodTitle } from "../../src/ui/widgets/radius-login-dialog.ts";
+import { radiusAccountTitle } from "../../src/ui/widgets/radius-account-dialog.ts";
+import { renameDialogTitle } from "../../src/ui/widgets/rename-dialog.ts";
+import { customPromptTitle, summaryMenu as restoreSummaryMenu, summaryMenuTitle } from "../../src/ui/widgets/restore-dialog.ts";
+import { searchLabel } from "../../src/ui/widgets/search-bar.ts";
+import { SelectDialog } from "../../src/ui/widgets/select-dialog.ts";
+import { sessionInfoText, sessionInfoTitle } from "../../src/ui/widgets/session-info-dialog.ts";
+import { shareTitle } from "../../src/ui/widgets/share-dialog.ts";
+import { contextUsageTitle } from "../../src/ui/widgets/context-usage-dialog.ts";
+
+// i18n 已在文件顶部固定为 en；这些别名让下面的断言仍然引用固定的英文文案（所见即所测）。
+const SUMMARIZING_STATUS = t("status.summarizing");
+const CLONE_SESSION_TITLE = cloneSessionTitle();
+const DELETE_SESSION_TITLE = deleteSessionTitle();
+const FORK_SESSION_TITLE = forkSessionTitle();
+const IMPORT_SESSION_TITLE = importSessionTitle();
+const OVERWRITE_FILE_TITLE = overwriteFileTitle();
+const SHARE_SESSION_TITLE = shareTitle();
+const RADIUS_SIGN_OUT_TITLE = radiusSignOutTitle();
+const EXPORT_FORMAT_TITLE = exportFormatTitle();
+const EXPORT_PATH_TITLE = exportPathTitle();
+const EXPORT_PATH_SUBJECT = exportPathSubject();
+const FORK_DIALOG_TITLE = forkDialogTitle();
+const IMPORT_DIALOG_TITLE = importDialogTitle();
+const IMPORT_DIALOG_SUBJECT = importDialogSubject();
+const LABEL_DIALOG_TITLE = labelDialogTitle();
+const NEW_SESSION_DIALOG_TITLE = newSessionDialogTitle();
+const RENAME_DIALOG_TITLE = renameDialogTitle();
+const CUSTOM_PROMPT_TITLE = customPromptTitle();
+const SUMMARY_MENU_TITLE = summaryMenuTitle();
+const SUMMARY_MENU = restoreSummaryMenu();
+const SEARCH_LABEL = searchLabel();
+const SESSION_INFO_TITLE = sessionInfoTitle();
+const CONTEXT_USAGE_TITLE = contextUsageTitle();
+const COMPACT_DIALOG_TITLE = compactDialogTitle();
+const CANNOT_DELETE_ACTIVE_TITLE = cannotDeleteActiveTitle();
+
+/** Styling is irrelevant here; return text unchanged so assertions stay simple. */
+const fakeTheme = {
+	fg: (_c: string, s: string) => s,
+	bg: (_c: string, s: string) => s,
+	bold: (s: string) => s,
+	italic: (s: string) => s,
+	underline: (s: string) => s,
+	inverse: (s: string) => s,
+	strikethrough: (s: string) => s,
+} as unknown as Theme;
+
+/**
+ * 假会话行。`file` 只是传给 DataSource 桩的不透明 id，面板本身不会对它做任何
+ * 路径处理，所以这里固定用 `/tmp/...` 字符串即可，不必按平台拼路径。
+ */
+function row(i: number, cwd: string): SessionRow {
+	return {
+		file: `/tmp/s${i}.jsonl`,
+		id: `id-${i}`,
+		cwd,
+		preview: `session ${i}`,
+		createdAt: 0,
+		updatedAt: 0,
+		messageCount: 1,
+	};
+}
+
+interface Harness {
+	panel: LazyPanel;
+	closed: () => boolean;
+	calls: () => Array<{ scope: string; sort: string }>;
+	text: (width?: number) => string[];
+}
+
+function makePanel(opts: { keymap?: typeof DEFAULT_KEYMAP; height?: number; themeSource?: ThemeSource; settingsSource?: SettingsSource; status?: string } = {}): Harness {
+	const calls: Array<{ scope: string; sort: string }> = [];
+	let closed = false;
+	const data: DataSource = {
+		listSessions: async (scope, sort) => {
+			calls.push({ scope, sort });
+			return scope === "all" ? [row(1, "/a"), row(2, "/b")] : [row(1, "/a")];
+		},
+		loadTree: async () => [],
+		loadContent: async () => [],
+	};
+	const panel = new LazyPanel({
+		theme: fakeTheme,
+		data,
+		getHeight: () => opts.height ?? 20,
+		requestRender: () => {},
+		onClose: () => {
+			closed = true;
+		},
+		...(opts.keymap ? { keymap: opts.keymap } : {}),
+		...(opts.themeSource ? { themeSource: opts.themeSource } : {}),
+		...(opts.settingsSource ? { settingsSource: opts.settingsSource } : {}),
+		// 启动时的 footer 状态（index.ts 传配置的第一条警告）。
+		...(opts.status ? { status: opts.status } : {}),
+	});
+	return {
+		panel,
+		closed: () => closed,
+		calls: () => calls,
+		text: (width = 80) => panel.render(width).map((l) => stripTerminalSequences(l)),
+	};
+}
+
+test("settings opens immediately in all panes, owns keys and mouse, and preserves browsing state", async () => {
+	for (const focus of ["sessions", "tree", "content"] as const) {
+		const h = makePanel();
+		await h.panel.load();
+		h.panel.state.focus = focus;
+		h.panel.state.selectedSessionFiles.add("/tmp/s1.jsonl");
+		h.panel.state.treeFolded.add("branch");
+		h.panel.state.search[focus] = { query: "keep", matches: [], current: -1 };
+		const before = structuredClone(h.panel.state);
+		h.panel.handleInput(",");
+		assert.equal(h.panel.state.mode, "settings");
+		assert.equal(h.panel.state.settings.phase, "open");
+		const click = () => h.panel.handleMouse(mouseEvent("click", 2, 3, { height: 20 }));
+		const wheel = () => h.panel.handleMouse(mouseEvent("wheel", 2, 3, { height: 20, wheelDelta: 1 }));
+		// （2, 3）落在设置框的边框上：吞掉，什么都不做（盒内的点击/滚轮见后面的设置鼠标测试）
+		assert.deepEqual(click(), { handled: true });
+		assert.deepEqual(wheel(), { handled: true });
+		assert.equal(h.panel.state.settings.category, before.settings.category, "边框上的点击不动分类");
+		h.panel.handleInput("3");
+		h.panel.handleInput("d");
+		assert.match(h.text(120).join("\n"), /Settings/);
+		assert.doesNotMatch(h.text(120).join("\n"), /Preview only|Settings · Read-only/);
+		assert.match(h.text(120).at(-1)!, /Esc\/q close/);
+		h.panel.handleInput("\x1b");
+		assert.equal(h.panel.state.settings.phase, "closed");
+		assert.equal(h.panel.state.mode, "normal");
+		assert.equal(h.closed(), false);
+		assert.deepEqual({ ...h.panel.state, settings: before.settings }, before);
+		h.panel.dispose();
+	}
+});
+
+test("settings supports remapped and multi-key entry, help execution and direct entry after unbinding", (ctx) => {
+	ctx.mock.timers.enable({ apis: ["setInterval"] });
+	const keymap = mergeKeymap(DEFAULT_KEYMAP, { global: { "settings-open": "g," } });
+	const h = makePanel({ keymap });
+	ctx.after(() => h.panel.dispose());
+	h.panel.handleInput(",");
+	assert.equal(h.panel.state.settings.phase, "closed");
+	h.panel.handleInput("g");
+	h.panel.handleInput(",");
+	assert.equal(h.panel.state.settings.phase, "open");
+	h.panel.handleInput("q");
+	ctx.mock.timers.tick(120);
+	h.panel.handleInput("?");
+	h.panel.state.helpCursor = buildHelpLines(keymap, "sessions").filter((line) => line.kind === "binding").findIndex((line) => line.kind === "binding" && line.action === "settings-open");
+	assert.ok(h.panel.state.helpCursor >= 0);
+	h.panel.handleInput("\r");
+	assert.equal(h.panel.state.helpOpen, false);
+	assert.equal(h.panel.state.settings.phase, "open");
+	const unbound = makePanel({ keymap: mergeKeymap(DEFAULT_KEYMAP, { global: { "settings-open": null } }) });
+	ctx.after(() => unbound.panel.dispose());
+	unbound.panel.handleInput(",");
+	assert.equal(unbound.panel.state.settings.phase, "closed");
+	unbound.panel.openSettings();
+	assert.equal(unbound.panel.state.settings.phase, "open");
+});
+
+test("settings entry cannot steal search input or keys from existing dialogs", async (ctx) => {
+	ctx.mock.timers.enable({ apis: ["setInterval"] });
+	const h = makePanel();
+	ctx.after(() => h.panel.dispose());
+	h.panel.handleInput("/");
+	h.panel.handleInput(",");
+	h.panel.openSettings();
+	assert.equal(h.panel.state.mode, "search");
+	assert.equal(h.panel.state.settings.phase, "closed");
+	assert.match(h.text().at(-1)!, /Search: ,/);
+	h.panel.handleInput("\x1b");
+	const loaded = makeSessionActionPanel();
+	ctx.after(() => loaded.panel.dispose());
+	await loaded.panel.load();
+	for (const key of ["r", "d"]) {
+		loaded.panel.handleInput(key);
+		loaded.panel.handleInput(",");
+		loaded.panel.openSettings();
+		assert.equal(loaded.panel.state.settings.phase, "closed");
+		loaded.panel.handleInput("\x1b");
+	}
+	loaded.panel.handleInput("2");
+	loaded.panel.handleInput("a");
+	loaded.panel.handleInput(",");
+	assert.equal(loaded.panel.state.mode, "tree");
+	assert.equal(loaded.panel.state.settings.phase, "closed");
+});
+
+test("async info requested before settings stays above it and restores the correct mode", async (ctx) => {
+	ctx.mock.timers.enable({ apis: ["setInterval"] });
+	for (const closing of [false, true]) {
+		let finish!: (info: SessionInfo) => void;
+		const pending = new Promise<SessionInfo>((resolve) => {
+			finish = resolve;
+		});
+		const h = makeSessionActionPanel({ data: { loadSessionInfo: () => pending } });
+		await h.panel.load();
+		h.panel.handleInput("i");
+		h.panel.handleInput(",");
+		ctx.mock.timers.tick(120);
+		if (closing) h.panel.handleInput("q");
+		finish({ id: "pending-info", path: "session.jsonl", messages: 1, tokens: 0, cost: 0, createdAt: 0, updatedAt: 0 });
+		await flush();
+		assert.equal(h.panel.state.mode, "info");
+		ctx.mock.timers.tick(120);
+		assert.equal(h.panel.state.mode, "info", "closing settings must not reset the top dialog's mode");
+		assert.match(h.panel.render(120).join("\n"), /pending-info/);
+		h.panel.handleInput("q");
+		assert.equal(h.panel.state.mode, closing ? "normal" : "settings");
+		h.panel.dispose();
+	}
+});
+
+test("settings reports startup defaults, not temporary scope/sort, and closing leaves no animation callbacks", (ctx) => {
+	ctx.mock.timers.enable({ apis: ["setInterval"] });
+	let renders = 0;
+	const panel = new LazyPanel({
+		theme: fakeTheme,
+		data: { listSessions: async () => [], loadTree: async () => [], loadContent: async () => [] },
+		getHeight: () => 28,
+		requestRender: () => { renders++; },
+		onClose: () => {},
+		configDefaults: { defaultScope: "current-folder", defaultSort: "created", locale: "en", openShortcut: "alt+l" },
+	});
+	panel.state.scope = "all";
+	panel.state.sort = "title";
+	panel.openSettings();
+	ctx.mock.timers.tick(120);
+	const text = panel.render(120).join("\n");
+	assert.match(text, /Current folder/);
+	assert.match(text, /Creation time/);
+	panel.handleInput("q");
+	panel.dispose();
+	const count = renders;
+	ctx.mock.timers.tick(1000);
+	assert.equal(renders, count);
+	const h = makePanel();
+	h.panel.openSettings();
+	h.panel.dispatch("quit");
+	ctx.mock.timers.tick(1000);
+	assert.equal(h.closed(), true);
+	assert.equal(h.panel.state.settings.phase, "closed");
+});
+
+test("h / l cycle focus, 1 / 2 / 3 jump, and pane titles carry the jump key", () => {
+	const h = makePanel();
+	const { panel } = h;
+	assert.equal(panel.state.focus, "sessions");
+	panel.handleInput("l");
+	assert.equal(panel.state.focus, "tree");
+	panel.handleInput("\t"); // tab still works as a secondary "next"
+	assert.equal(panel.state.focus, "content");
+	panel.handleInput("l");
+	assert.equal(panel.state.focus, "sessions");
+	panel.handleInput("h");
+	assert.equal(panel.state.focus, "content");
+	// shift+tab is no longer bound
+	panel.handleInput("\x1b[Z");
+	assert.equal(panel.state.focus, "content");
+	// number keys jump straight to a pane
+	panel.handleInput("1");
+	assert.equal(panel.state.focus, "sessions");
+	panel.handleInput("3");
+	assert.equal(panel.state.focus, "content");
+	panel.handleInput("2");
+	assert.equal(panel.state.focus, "tree");
+	// "l" is not shadowed in the tree pane any more (label is "L")
+	panel.handleInput("l");
+	assert.equal(panel.state.focus, "content");
+	panel.handleInput("2");
+	const text = h.text(100).join("\n");
+	assert.ok(text.includes("[1] SESSIONS"), text);
+	assert.ok(text.includes("[2] TREE"), text);
+	assert.ok(text.includes("[3] CONTENT"), text);
+});
+
+test("C switches to Current folder only and A to All only (no toggling)", async () => {
+	const h = makePanel();
+	await h.panel.load();
+	assert.equal(h.panel.state.scope, "current-folder");
+	h.panel.handleInput("C"); // already current: no reload
+	await flush();
+	assert.equal(h.panel.state.scope, "current-folder");
+	h.panel.handleInput("A");
+	await flush();
+	assert.equal(h.panel.state.scope, "all");
+	h.panel.handleInput("A"); // pressing A again stays on All
+	await flush();
+	assert.equal(h.panel.state.scope, "all");
+	h.panel.handleInput("C");
+	await flush();
+	assert.equal(h.panel.state.scope, "current-folder");
+	assert.deepEqual(
+		h.calls().map((c) => c.scope),
+		["current-folder", "all", "current-folder"],
+	);
+	// with a wide terminal the pane header shows the scope label
+	h.panel.handleInput("A");
+	await flush();
+	assert.ok(h.text(160)[0]!.includes("All"), `header should mention All: ${h.text(160)[0]}`);
+});
+
+test("sessions header shows position · scope · sort in BOTH scopes, and the footer hints the other scope", async () => {
+	const h = makePanel();
+	await h.panel.load();
+	const header = (w: number) => h.text(w)[0]!;
+	const footer = (w: number) => h.text(w).at(-1)!;
+
+	// Current: 回归点——"[1] " 前缀让 "Current" 在 160 列（左栏 40 列）下放不下，之前整段 meta 消失
+	assert.equal(h.panel.state.scope, "current-folder");
+	assert.ok(header(200).includes("1/1 · Current · recent"), `Current header: ${header(200)}`);
+	assert.ok(header(160).includes("1/1 · Current"), `Current header @160: ${header(160)}`);
+	assert.ok(footer(160).includes("A All"), `footer should offer All: ${footer(160)}`);
+	assert.equal(footer(160).includes("C Current"), false, `footer must not hint the active scope: ${footer(160)}`);
+
+	// All
+	h.panel.handleInput("A");
+	await flush();
+	assert.ok(header(200).includes("1/2 · All · recent"), `All header: ${header(200)}`);
+	assert.ok(header(160).includes("1/2 · All · recent"), `All header @160: ${header(160)}`);
+	assert.ok(footer(160).includes("C Current"), `footer should offer Current: ${footer(160)}`);
+	assert.equal(footer(160).includes("A All"), false, `footer must not hint the active scope: ${footer(160)}`);
+
+	// narrow terminals degrade the meta step by step but never drop position + scope entirely
+	h.panel.handleInput("C");
+	await flush();
+	assert.ok(header(120).includes("1/1 · Cur"), `120 cols: ${header(120)}`);
+	assert.ok(header(100).includes("1/1"), `100 cols: ${header(100)}`);
+	for (const w of [100, 120, 160, 200]) assert.equal(visibleWidth(h.panel.render(w)[0]!), w);
+});
+
+test("? opens the help overlay for the focused pane and ? / Esc close it", () => {
+	const h = makePanel({ height: 40 });
+	h.panel.handleInput("?");
+	assert.equal(h.panel.state.helpOpen, true);
+	let lines = h.text(100);
+	assert.ok(lines.some((l) => l.includes("HELP · Sessions pane")));
+	assert.ok(lines.some((l) => l.includes("Resume session")));
+	// 不同动作独立成项，别名仍共用一项；长列表中的全局项由纯数据断言验证。
+	const entries = buildHelpLines(DEFAULT_KEYMAP, "sessions").filter((line) => line.kind === "binding");
+	assert.ok(entries.some((line) => line.action === "focus-next" && line.keys === "l/Tab"));
+	assert.ok(entries.some((line) => line.action === "focus-prev" && line.keys === "h"));
+	assert.equal(entries.filter((line) => line.action.startsWith("focus-")).length, 5);
+	assert.ok(lines.some((l) => l.includes("› Enter") && l.includes("Resume session")));
+	// keys other than close/move/execute are swallowed while help is open
+	h.panel.handleInput("l");
+	assert.equal(h.panel.state.focus, "sessions");
+	h.panel.handleInput("?");
+	assert.equal(h.panel.state.helpOpen, false);
+
+	// Tree pane help lists the filter menu, while direct filter bindings stay in the large dialog.
+	h.panel.handleInput("l");
+	h.panel.handleInput("?");
+	lines = h.text(100);
+	assert.ok(lines.some((l) => l.includes("HELP · Tree pane")));
+	assert.ok(lines.some((l) => l.includes("Restore conversation")));
+	assert.ok(lines.some((l) => l.includes("Open the full tree dialog")));
+	assert.equal(lines.some((l) => /Filter:/.test(l)), false, "tree filters are no longer pane bindings");
+	assert.ok(lines.some((l) => l.includes("Search in the focused pane")), "search is available in the tree pane");
+	h.panel.handleInput("\x1b");
+	assert.equal(h.panel.state.helpOpen, false);
+
+	// content pane help only lists scrolling plus the global keys
+	h.panel.handleInput("3");
+	h.panel.handleInput("?");
+	lines = h.text(100);
+	assert.ok(lines.some((l) => l.includes("HELP · Content pane")));
+	assert.ok(lines.some((l) => l.includes("Go to top")));
+	assert.equal(lines.some((l) => /Yank|Preview|Word/.test(l)), false, "content help must not list vim editing keys");
+	h.panel.handleInput("\x1b");
+	// every rendered line keeps the exact width while the overlay is drawn
+	h.panel.handleInput("?");
+	for (const l of h.panel.render(100)) assert.equal(visibleWidth(l), 100);
+});
+
+test("help separates the current pane and outer scopes with padded headings", () => {
+	for (const focus of ["sessions", "tree", "content", "tree-dialog"] as const) {
+		const logical = buildHelpLines(DEFAULT_KEYMAP, focus);
+		const first = logical.find((line) => line.kind === "binding");
+		assert.ok(first);
+		assert.deepEqual(logical.slice(0, 2), [{ kind: "blank" }, { kind: "header", text: "Current pane" }]);
+		for (const termW of [40, 100]) {
+			const { width } = helpBoxSize(termW, 200);
+			const height = helpLineCount(DEFAULT_KEYMAP, focus, termW) + 2;
+			const lines = renderHelpBox({ keymap: DEFAULT_KEYMAP, focus, cursor: 0, scroll: 0, theme: fakeTheme }, width, height);
+			assert.ok(lines[3]?.startsWith(`│ › ${first.keys}`), `${focus}: ${lines[3]}`);
+			for (const heading of ["-- Current pane --", "-- Global --"]) {
+				const index = lines.findIndex((line) => line.includes(heading));
+				assert.ok(index > 0, `${focus}: ${heading}`);
+				assert.equal(lines[index - 1]?.slice(1, -1).trim(), "", "blank above heading");
+				assert.ok(lines[index + 1]?.slice(1, -1).trim(), "command directly below heading");
+			}
+			assert.equal(height, helpLineCount(DEFAULT_KEYMAP, focus, termW) + 2);
+			for (const line of lines) assert.equal(visibleWidth(line), width);
+		}
+	}
+});
+
+test("help wraps long descriptions onto continuation rows instead of truncating them", () => {
+	const h = makePanel({ height: 40 });
+	h.panel.handleInput("l"); // focus the tree pane
+	h.panel.handleInput("?");
+	const lines = h.text(100);
+	const body = lines.join("\n");
+	// tree-fold 的描述很长（"Fold / unfold the branch under the cursor (inside a branch: fold it and jump to its head)"）：
+	// 之前会被 … 截断，现在按描述列折到续行，首尾都应完整出现。
+	assert.ok(body.includes("Fold / unfold the branch under the cursor"), `head of the long description shows: ${body}`);
+	assert.ok(body.includes("jump to its head"), `tail of the long description is not truncated: ${body}`);
+	// 续行不应再出现省略号截断的那一句（整句都在，就不会有 "…head)" 之类）。
+	assert.equal(
+		lines.some((l) => l.includes("cursor") && l.includes("…")),
+		false,
+		"the long description line is not truncated with …",
+	);
+	// 折行后每一行仍然是精确宽度。
+	for (const l of h.panel.render(100)) assert.equal(visibleWidth(l), 100);
+});
+
+/** Select through real help keystrokes rather than assigning its cursor directly. */
+function selectHelpAction(panel: LazyPanel, action: ActionId): void {
+	if (!panel.state.helpOpen) panel.dispatch("help");
+	const entries = buildHelpLines(panel.keymap, panel.state.focus).filter((line) => line.kind === "binding");
+	const target = entries.findIndex((entry) => entry.action === action);
+	assert.ok(target >= 0, `help contains ${action}`);
+	const delta = target - panel.state.helpCursor;
+	for (let i = 0; i < Math.abs(delta); i++) panel.handleInput(delta > 0 ? "j" : "k");
+	assert.equal(panel.state.helpCursor, target);
+}
+
+test("help j/k and arrows select commands without moving the pane, skip headings, clamp and reset", () => {
+	const h = makePanel({ height: 12 });
+	h.panel.handleInput("?");
+	h.text(100);
+	for (const [key, cursor] of [["k", 0], ["\x1b[A", 0], ["j", 1], ["\x1b[B", 2], ["k", 1], ["\x1b[A", 0]] as const) {
+		h.panel.handleInput(key);
+		assert.equal(h.panel.state.helpCursor, cursor);
+		assert.equal(h.panel.state.cursor.sessions, 0);
+	}
+	selectHelpAction(h.panel, "session-share");
+	assert.ok(h.panel.state.helpScroll > 0);
+	h.panel.handleInput("j"); // skips blank + Global header straight to move-down
+	const lines = h.text(100);
+	assert.ok(lines.some((line) => line.includes("› j/↓")));
+	selectHelpAction(h.panel, "quit");
+	const last = h.panel.state.helpCursor;
+	h.panel.handleInput("\x1b[B");
+	assert.equal(h.panel.state.helpCursor, last);
+	for (const width of [40, 100, 34, 160]) {
+		assert.ok(h.text(width).some((line) => line.includes("› q/Ctrl+c")));
+		assert.equal(h.panel.state.helpCursor, last, "resizing keeps the selected command");
+	}
+	assert.equal(h.panel.handleMouse(mouseEvent("wheel", 2, 3, { height: 12, wheelDelta: 1 }))?.handled, true);
+	assert.equal(h.panel.state.cursor.sessions, 0);
+	for (const key of ["q", "\x1b", "?"]) {
+		h.panel.handleInput(key);
+		assert.equal(h.panel.state.helpOpen, false);
+		assert.equal(h.closed(), false);
+		h.panel.handleInput("?");
+		assert.equal(h.panel.state.helpCursor, 0);
+		assert.equal(h.panel.state.helpScroll, 0);
+	}
+	h.panel.dispose();
+});
+
+test("help Enter dispatches the selected pane/global action and does not leak to the next dialog", async () => {
+	const h = makeSessionActionPanel();
+	await h.panel.load();
+	selectHelpAction(h.panel, "session-delete");
+	h.panel.handleInput("\r");
+	assert.equal(h.panel.state.helpOpen, false);
+	assert.ok(h.text().some((line) => line.includes(DELETE_SESSION_TITLE)));
+	assert.deepEqual(h.deletes, [], "the help Enter only opens confirmation");
+	h.panel.handleInput("\r"); // No is selected by default
+	assert.deepEqual(h.deletes, []);
+	assert.equal(h.panel.state.mode, "normal");
+
+	selectHelpAction(h.panel, "session-rename");
+	h.panel.handleInput("\r");
+	assert.equal(h.panel.state.mode, "rename");
+	assert.equal(h.panel.state.helpOpen, false);
+	assert.deepEqual(h.renames, []);
+	h.panel.handleInput("\x1b");
+	selectHelpAction(h.panel, "focus-tree");
+	h.panel.handleInput("\r");
+	assert.equal(h.panel.state.focus, "tree");
+	selectHelpAction(h.panel, "tree-label");
+	h.panel.handleInput("\r");
+	assert.equal(h.panel.state.mode, "label");
+	assert.equal(h.panel.state.helpOpen, false);
+	h.panel.handleInput("\x1b");
+	selectHelpAction(h.panel, "focus-content");
+	h.panel.handleInput("\r");
+	assert.equal(h.panel.state.focus, "content");
+	selectHelpAction(h.panel, "go-bottom");
+	h.panel.handleInput("\r");
+	assert.equal(h.panel.state.helpOpen, false);
+	selectHelpAction(h.panel, "search");
+	h.panel.handleInput("\r");
+	assert.equal(h.panel.state.mode, "search");
+	assert.equal(h.panel.state.helpOpen, false);
+	h.panel.handleInput("\x1b");
+	h.panel.dispose();
+});
+
+test("help execution respects the chosen action with multi-key bindings and an active search", async () => {
+	const keymap = mergeKeymap(DEFAULT_KEYMAP, { global: { help: "!", "focus-tree": "zz" }, sessions: { "go-bottom": "gg", "session-delete": null } });
+	const h = makePanel({ keymap });
+	h.panel.handleInput("!");
+	assert.equal(h.panel.state.helpOpen, true);
+	selectHelpAction(h.panel, "focus-tree");
+	h.panel.handleInput("\r");
+	assert.equal(h.panel.state.focus, "tree");
+	h.panel.handleInput("!");
+	h.panel.handleInput("!");
+	assert.equal(h.panel.state.helpOpen, false, "custom help key still closes");
+	h.panel.dispose();
+
+	const s = makeSessionActionPanel();
+	await s.panel.load();
+	s.panel.handleInput("/");
+	s.panel.handleInput("a");
+	s.panel.handleInput("\r");
+	const original = s.panel.state.cursor.sessions;
+	selectHelpAction(s.panel, "session-new");
+	s.panel.handleInput("\r");
+	assert.equal(s.panel.state.mode, "new", "selected new-session is not reinterpreted as search-next (n)");
+	assert.equal(s.panel.state.cursor.sessions, original);
+	s.panel.handleInput("\x1b");
+	selectHelpAction(s.panel, "search-next");
+	s.panel.handleInput("\r");
+	assert.notEqual(s.panel.state.cursor.sessions, original);
+	assert.equal(s.panel.state.helpOpen, false);
+	await settle();
+	s.panel.dispose();
+});
+
+test("help navigation skips its own hint, still executes the next command and closes with the configured key", () => {
+	for (const help of ["?", "!"]) {
+		const keymap = mergeKeymap(DEFAULT_KEYMAP, { global: { help } });
+		const h = makePanel({ keymap });
+		selectHelpAction(h.panel, "scope-all");
+		const entries = buildHelpLines(keymap, "sessions").filter((line) => line.kind === "binding");
+		h.panel.handleInput("j");
+		assert.equal(entries[h.panel.state.helpCursor]?.action, "changelog");
+		h.panel.handleInput("k");
+		assert.equal(entries[h.panel.state.helpCursor]?.action, "scope-all");
+		h.panel.handleInput(help);
+		assert.equal(h.panel.state.helpOpen, false, "the configured help key still closes");
+		selectHelpAction(h.panel, "scope-all");
+		h.panel.handleInput("j");
+		h.panel.handleInput("\r");
+		assert.equal(h.panel.state.helpOpen, false, "Enter executes changelog, not help");
+		assert.ok(h.text().at(-1)!.includes(t("status.changelogUnavailable")));
+		h.panel.dispose();
+	}
+});
+
+test("Enter does nothing when help is the only listed shortcut", () => {
+	const keymap = { global: { help: "!" }, sessions: {}, tree: {}, content: {}, "tree-dialog": {} };
+	const h = makePanel({ keymap });
+	h.panel.handleInput("!");
+	for (const key of ["j", "k", "\r"]) h.panel.handleInput(key);
+	assert.equal(h.panel.state.helpOpen, true);
+	assert.equal(h.panel.state.helpCursor, 0);
+	assert.equal(h.closed(), false);
+	assert.ok(!h.text().some((line) => line.includes("›")));
+	h.panel.handleInput("!");
+	assert.equal(h.panel.state.helpOpen, false);
+	h.panel.dispose();
+});
+
+test("help Enter handles empty lists, action failures and quit actions", async () => {
+	const h = makePanel({ keymap: { global: {}, sessions: {}, tree: {}, content: {}, "tree-dialog": {} } });
+	h.panel.dispatch("help");
+	h.panel.handleInput("j");
+	h.panel.handleInput("\r");
+	assert.equal(h.panel.state.helpOpen, true);
+	assert.equal(h.panel.state.helpCursor, 0);
+	assert.equal(h.closed(), false);
+	h.panel.dispose();
+
+	const missing = makePanel();
+	selectHelpAction(missing.panel, "session-new");
+	missing.panel.handleInput("\r");
+	assert.equal(missing.panel.state.helpOpen, false);
+	assert.ok(missing.text(120).at(-1)!.includes("new: actions unavailable"));
+	selectHelpAction(missing.panel, "quit");
+	missing.panel.handleInput("\r");
+	assert.equal(missing.closed(), true);
+
+	const failure = makeSessionActionPanel({ actions: { copyLastReply: async () => {
+		throw new Error("copy failed");
+	} } });
+	await failure.panel.load();
+	selectHelpAction(failure.panel, "session-copy-last-reply");
+	failure.panel.handleInput("\r");
+	await flush();
+	assert.equal(failure.panel.state.helpOpen, false);
+	assert.ok(failure.text(160).at(-1)!.includes("copy failed"));
+	failure.panel.dispose();
+});
+
+test("/ shows the 搜索 bar, typing searches live, Enter keeps the query, Esc in the bar cancels", () => {
+	const h = makePanel();
+	h.panel.handleInput("/");
+	assert.equal(h.panel.state.mode, "search");
+	let bottom = h.text().at(-1)!;
+	assert.ok(bottom.startsWith(SEARCH_LABEL.trimEnd()), `footer should start with 搜索, got: ${bottom}`);
+
+	for (const ch of "foo") h.panel.handleInput(ch);
+	bottom = h.text().at(-1)!;
+	assert.ok(bottom.includes("foo"));
+	// global keys are NOT dispatched while typing
+	h.panel.handleInput("q");
+	assert.equal(h.closed(), false);
+	h.panel.handleInput("\x7f"); // backspace removes the q
+	h.panel.handleInput("\r");
+	assert.equal(h.panel.state.mode, "normal");
+	assert.equal(h.panel.state.search.sessions?.query, "foo");
+	// nothing is loaded: the footer keeps the query and says there is nothing to jump to
+	bottom = h.text().at(-1)!;
+	assert.ok(bottom.includes("foo") && bottom.includes("Search:") && bottom.includes("no matches"), bottom);
+	h.panel.handleInput("n");
+	assert.ok(h.text().at(-1)!.includes("no matches"), h.text().at(-1));
+
+	// Esc in normal mode clears the active search first, only then quits
+	h.panel.handleInput("\x1b");
+	assert.equal(h.panel.state.search.sessions, undefined);
+	assert.equal(h.closed(), false);
+	h.panel.handleInput("n");
+	assert.ok(h.text().at(-1)!.includes("new: actions unavailable"), "n is new session again without a search");
+
+	// Esc in the bar drops what was typed
+	h.panel.handleInput("/");
+	h.panel.handleInput("x");
+	h.panel.handleInput("\x1b");
+	assert.equal(h.panel.state.mode, "normal");
+	assert.equal(h.panel.state.search.sessions, undefined);
+	assert.equal(h.text().at(-1)!.includes("Search:"), false);
+});
+
+test("q quits, custom keymap overrides defaults and combos work", () => {
+	const plain = makePanel();
+	plain.panel.handleInput("q");
+	assert.equal(plain.closed(), true);
+
+	const custom = mergeKeymap(DEFAULT_KEYMAP, {
+		global: { quit: "ctrl+q", "focus-next": "ctrl+n", help: "F1", "scope-all": null, "focus-sessions": "F5" },
+	});
+	const h = makePanel({ keymap: custom });
+	h.panel.handleInput("q"); // no longer bound
+	assert.equal(h.closed(), false);
+	h.panel.handleInput("\x0e"); // ctrl+n
+	assert.equal(h.panel.state.focus, "tree");
+	h.panel.handleInput("A"); // unbound
+	assert.equal(h.panel.state.scope, "current-folder");
+	// the pane title follows the rebound jump key
+	assert.ok(h.text(100).some((l) => l.includes("[F5] SESSIONS")));
+	h.panel.handleInput("\x1bOP"); // F1
+	assert.equal(h.panel.state.helpOpen, true);
+	assert.ok(h.text(100).some((l) => l.includes("F1")));
+	h.panel.handleInput("\x1b");
+	h.panel.handleInput("\x11"); // ctrl+q
+	assert.equal(h.closed(), true);
+});
+
+test("multi-key sequence gg is buffered and Esc discards the pending prefix", () => {
+	const h = makePanel();
+	h.panel.handleInput("g");
+	assert.ok(h.text().at(-1)!.includes("pending: g"));
+	h.panel.handleInput("\x1b");
+	assert.equal(h.text().at(-1)!.includes("pending"), false);
+	assert.equal(h.closed(), false);
+	h.panel.handleInput("g");
+	h.panel.handleInput("g");
+	// go-top is dispatched and the buffer is cleared
+	assert.equal(h.text().at(-1)!.includes("pending"), false);
+	assert.equal(h.panel.state.cursor.sessions, 0);
+	h.panel.dispose();
+});
+
+function flush(): Promise<void> {
+	return new Promise((r) => setTimeout(r, 0));
+}
+
+/** Wait past the sessions-pane load debounce. */
+function settle(): Promise<void> {
+	return new Promise((r) => setTimeout(r, 80));
+}
+
+function treeRow(i: number, onActiveBranch = true, over: Partial<TreeRow> = {}): TreeRow {
+	return { entryId: `e${i}`, role: i % 2 ? "assistant" : "user", kind: "message", text: `msg ${i}`, timestamp: 0, onActiveBranch, ...over };
+}
+
+function block(i: number): ContentBlock {
+	return { entryId: `e${i}`, role: i % 2 ? "assistant" : "user", timestamp: 0, markdown: `message ${i}\n\nline\nline\nline` };
+}
+
+/** Panel with 5 sessions; each session has 4 tree nodes / 4 content blocks named after the session. */
+function makeLoadedPanel(height = 20) {
+	const treeCalls: string[] = [];
+	const contentCalls: Array<{ file: string; leaf: string | undefined }> = [];
+	const data: DataSource = {
+		listSessions: async () => [1, 2, 3, 4, 5].map((i) => row(i, "/a")),
+		loadTree: async (file) => {
+			treeCalls.push(file);
+			return [treeRow(0), treeRow(1), treeRow(2), treeRow(3, false)];
+		},
+		loadContent: async (file, leaf) => {
+			contentCalls.push({ file, leaf });
+			// e3 is a side branch: only reachable by asking for it explicitly.
+			return leaf === "e3" ? [block(0), block(3)] : [block(0), block(1), block(2)];
+		},
+	};
+	const panel = new LazyPanel({ theme: fakeTheme, data, getHeight: () => height, requestRender: () => {}, onClose: () => {} });
+	return { panel, treeCalls, contentCalls, text: (width = 100) => panel.render(width).map((l) => stripTerminalSequences(l)) };
+}
+
+test("j/k/gg/G move the sessions cursor and reload the tree for the new session", async () => {
+	const h = makeLoadedPanel();
+	await h.panel.load();
+	assert.deepEqual(h.treeCalls, ["/tmp/s1.jsonl"]);
+	h.panel.handleInput("j");
+	h.panel.handleInput("j");
+	assert.equal(h.panel.state.cursor.sessions, 2);
+	await settle();
+	// debounced: only the session the cursor rests on is loaded
+	assert.deepEqual(h.treeCalls, ["/tmp/s1.jsonl", "/tmp/s3.jsonl"]);
+	h.panel.handleInput("k");
+	assert.equal(h.panel.state.cursor.sessions, 1);
+	h.panel.handleInput("G");
+	assert.equal(h.panel.state.cursor.sessions, 4);
+	h.panel.handleInput("j");
+	assert.equal(h.panel.state.cursor.sessions, 4, "clamped at the bottom");
+	h.panel.handleInput("g");
+	h.panel.handleInput("g");
+	assert.equal(h.panel.state.cursor.sessions, 0);
+	h.panel.handleInput("k");
+	assert.equal(h.panel.state.cursor.sessions, 0, "clamped at the top");
+	await settle();
+	assert.equal(h.treeCalls.at(-1), "/tmp/s1.jsonl");
+	h.panel.dispose();
+});
+
+test("tree cursor drives the content highlight and scrolls the block into view", async () => {
+	const h = makeLoadedPanel();
+	await h.panel.load();
+	h.text();
+	// initial: tree cursor on the active leaf (e2), content highlights it
+	assert.equal(h.panel.state.cursor.tree, 2);
+	assert.equal(h.panel.state.contentHighlight, "e2");
+	assert.ok(h.text().some((l) => l.includes("›┌─ YOU")), "highlighted block header carries the › marker");
+
+	h.panel.handleInput("2");
+	h.panel.handleInput("g");
+	h.panel.handleInput("g");
+	assert.equal(h.panel.state.cursor.tree, 0);
+	await flush();
+	assert.equal(h.panel.state.contentHighlight, "e0");
+	assert.equal(h.panel.state.cursor.content, 0);
+
+	h.panel.handleInput("j");
+	await flush();
+	assert.equal(h.panel.state.contentHighlight, "e1");
+	assert.ok(h.panel.state.cursor.content > 0, "scrolled so the block starts at the top");
+
+	// moving onto a node from another branch reloads content for that leaf
+	h.panel.handleInput("G");
+	await flush();
+	assert.equal(h.panel.state.cursor.tree, 3);
+	assert.deepEqual(h.contentCalls.at(-1), { file: "/tmp/s1.jsonl", leaf: "e3" });
+	assert.equal(h.panel.state.contentHighlight, "e3");
+	h.panel.dispose();
+});
+
+test("active-branch nodes without a message block keep the full branch and highlight the previous message", async () => {
+	const contentCalls: Array<string | undefined> = [];
+	const data: DataSource = {
+		listSessions: async () => [row(1, "/a")],
+		// e1 is a tool result on the active branch: no content block for it
+		loadTree: async () => [treeRow(0), { ...treeRow(1), role: "tool", kind: "tool" }, treeRow(2)],
+		loadContent: async (_file, leaf) => {
+			contentCalls.push(leaf);
+			return [block(0), block(2)];
+		},
+	};
+	const panel = new LazyPanel({ theme: fakeTheme, data, getHeight: () => 20, requestRender: () => {}, onClose: () => {} });
+	await panel.load();
+	panel.render(100);
+	panel.handleInput("2");
+	panel.handleInput("k");
+	await flush();
+	assert.equal(panel.state.cursor.tree, 1);
+	assert.deepEqual(contentCalls, [undefined], "no reload for a node on the active branch");
+	assert.equal(panel.state.contentHighlight, "e0", "highlights the nearest previous message");
+	panel.dispose();
+});
+
+test("content pane scrolls by line with j/k, gg/G, and J/K from the sessions pane", async () => {
+	const h = makeLoadedPanel(12);
+	await h.panel.load();
+	h.text();
+	h.panel.handleInput("3");
+	h.panel.handleInput("g");
+	h.panel.handleInput("g");
+	assert.equal(h.panel.state.cursor.content, 0);
+	h.panel.handleInput("j");
+	h.panel.handleInput("j");
+	assert.equal(h.panel.state.cursor.content, 2);
+	h.panel.handleInput("k");
+	assert.equal(h.panel.state.cursor.content, 1);
+	h.panel.handleInput("G");
+	const bottom = h.panel.state.cursor.content;
+	assert.ok(bottom > 2);
+	h.panel.handleInput("j");
+	assert.equal(h.panel.state.cursor.content, bottom, "clamped at the last page");
+	const lastPage = h.text();
+	assert.ok(lastPage.some((l) => l.includes("└")), "last page shows the end of the conversation");
+
+	// J / K only scroll the content pane; the sessions cursor stays put
+	h.panel.handleInput("1");
+	h.panel.handleInput("g");
+	h.panel.handleInput("g");
+	h.panel.handleInput("3");
+	h.panel.handleInput("g");
+	h.panel.handleInput("g");
+	h.panel.handleInput("1");
+	h.panel.handleInput("J");
+	assert.equal(h.panel.state.cursor.sessions, 0);
+	assert.ok(h.panel.state.cursor.content > 0);
+	h.panel.handleInput("K");
+	assert.equal(h.panel.state.cursor.content, 0);
+	h.panel.dispose();
+});
+
+/**
+ * Panel whose tree rows come from a mutable map of labels, plus a recording ActionSource.
+ * e2 is the active leaf (Enter on it restores without asking); e0 / e1 go through the summary menu.
+ */
+function makeTreeActionPanel(actions?: Partial<ActionSource>, opts: { skipSummaryPrompt?: boolean; theme?: Theme } = {}) {
+	const labels = new Map<string, string>();
+	const copies: Array<{ file: string; entryId: string }> = [];
+	const labelCalls: Array<{ file: string; entryId: string; label: string | undefined }> = [];
+	const enters: Array<{ kind: "resume" | "restore"; file: string; entryId?: string; options?: RestoreOptions }> = [];
+	const hidden: boolean[] = [];
+	const treeFilters: TreeFilter[] = [];
+	let closed = false;
+	const data: DataSource = {
+		listSessions: async () => [row(1, "/a")],
+		loadTree: async (_file, filter) => {
+			treeFilters.push(filter);
+			const rows = [treeRow(0), treeRow(1), treeRow(2, true, { isLeaf: true })].map((r) =>
+				labels.has(r.entryId) ? { ...r, label: labels.get(r.entryId)! } : r,
+			);
+			return filter === "labeled" ? rows.filter((r) => r.label !== undefined) : rows;
+		},
+		loadContent: async () => [block(0), block(1), block(2)],
+	};
+	const source: ActionSource = {
+		copyNodeText: async (file, entryId) => {
+			copies.push({ file, entryId });
+			return entryId !== "e0"; // e0 pretends to have no text
+		},
+		setNodeLabel: async (file, entryId, label) => {
+			labelCalls.push({ file, entryId, label });
+			if (label) labels.set(entryId, label);
+			else labels.delete(entryId);
+		},
+		resumeSession: async (file) => {
+			enters.push({ kind: "resume", file });
+			return "switched";
+		},
+		restoreNode: async (file, entryId, options) => {
+			enters.push({ kind: "restore", file, entryId, options });
+			return "restored";
+		},
+		...actions,
+	};
+	const panel = new LazyPanel({
+		theme: opts.theme ?? fakeTheme,
+		data,
+		actions: source,
+		getHeight: () => 20,
+		requestRender: () => {},
+		onClose: () => {
+			closed = true;
+		},
+		setHidden: (h) => hidden.push(h),
+		...(opts.skipSummaryPrompt !== undefined ? { skipSummaryPrompt: opts.skipSummaryPrompt } : {}),
+	});
+	return {
+		panel,
+		copies,
+		labelCalls,
+		labels,
+		enters,
+		hidden,
+		treeFilters,
+		closed: () => closed,
+		text: (width = 100) => panel.render(width).map((l) => stripTerminalSequences(l)),
+	};
+}
+
+test("nested tree prompts demote the parent and restore each visual layer without changing selection", async () => {
+	const border = "\x1b[96m";
+	const dim = "\x1b[90m";
+	const selected = "\x1b[44m";
+	const theme = {
+		...fakeTheme,
+		fg: (color: string, text: string) => `${color === "borderAccent" ? border : color === "dim" ? dim : "\x1b[37m"}${text}\x1b[39m`,
+		bg: (_color: string, text: string) => `${selected}${text}\x1b[49m`,
+	} as unknown as Theme;
+	const h = makeTreeActionPanel(undefined, { theme });
+	try {
+		await h.panel.load();
+		h.panel.focused = true;
+		h.panel.handleInput("2");
+		const body = () => h.panel.render(100).slice(0, -1);
+		const base = body();
+		const cursor = h.panel.state.cursor.tree;
+		assert.ok(base[0]!.includes("[1] SESSIONS"));
+		assert.ok(base.join("\n").includes(selected));
+		h.panel.handleInput("a");
+		const parent = body();
+		const top = parent.findIndex((line) => line.includes(`${border}┌`));
+		assert.ok(top >= 0);
+		assert.ok(parent[0]!.includes(dim));
+		assert.ok(!parent[0]!.includes(border));
+		h.panel.handleInput("L");
+		await flush();
+		assert.equal(h.panel.state.mode, "label");
+		const nested = body();
+		assert.ok(nested[top]!.includes(dim));
+		assert.ok(!nested[top]!.includes(border), "parent border is no longer accented");
+		assert.ok(!nested.join("\n").includes(selected), "the parent's selected row is not highlighted behind the input");
+		assert.equal(nested.join("\n").split(CURSOR_MARKER).length - 1, 1);
+		assert.ok(h.text(100).at(-1)!.includes("Enter save"));
+		assert.ok(!h.text(100).at(-1)!.includes("j/k"), "footer belongs to the input, not the tree behind it");
+		h.panel.handleInput("\x1b");
+		assert.deepEqual(body(), parent, "closing the child fully restores its parent");
+		h.panel.handleInput("\x1b");
+		assert.deepEqual(body(), base, "closing the tree fully restores the panes");
+		assert.equal(h.panel.state.cursor.tree, cursor);
+		assert.equal(h.panel.state.focus, "tree");
+	} finally {
+		h.panel.dispose();
+	}
+});
+
+test("y in the tree pane copies the node under the cursor and reports the result in the footer", async () => {
+	const h = makeTreeActionPanel();
+	await h.panel.load();
+	h.panel.handleInput("2");
+	assert.equal(h.panel.state.cursor.tree, 2);
+	h.panel.handleInput("y");
+	await flush();
+	assert.deepEqual(h.copies, [{ file: "/tmp/s1.jsonl", entryId: "e2" }]);
+	assert.ok(h.text().at(-1)!.includes("copied node text"), h.text().at(-1));
+
+	// an entry without text is reported, like /tree does
+	h.panel.handleInput("g");
+	h.panel.handleInput("g");
+	h.panel.handleInput("y");
+	await flush();
+	assert.equal(h.copies.at(-1)!.entryId, "e0");
+	assert.ok(h.text().at(-1)!.includes("no text to copy"), h.text().at(-1));
+
+	// y in the sessions pane is clone, not tree copy
+	h.panel.handleInput("1");
+	h.panel.handleInput("y");
+	await flush();
+	assert.equal(h.copies.length, 2);
+	h.panel.dispose();
+});
+
+test("y in the content pane copies the highlighted message and follows the highlight", async () => {
+	const h = makeTreeActionPanel();
+	await h.panel.load();
+	h.text();
+	// initial highlight is the active leaf e2
+	assert.equal(h.panel.state.contentHighlight, "e2");
+	h.panel.handleInput("3");
+	h.panel.handleInput("y");
+	await flush();
+	assert.deepEqual(h.copies, [{ file: "/tmp/s1.jsonl", entryId: "e2" }]);
+	assert.ok(h.text().at(-1)!.includes("copied node text"), h.text().at(-1));
+
+	// move the tree cursor onto e0 (no text): the content copy follows the new highlight
+	h.panel.handleInput("2");
+	h.panel.handleInput("g");
+	h.panel.handleInput("g");
+	await flush();
+	assert.equal(h.panel.state.contentHighlight, "e0");
+	h.panel.handleInput("3");
+	h.panel.handleInput("y");
+	await flush();
+	assert.equal(h.copies.at(-1)!.entryId, "e0");
+	assert.ok(h.text().at(-1)!.includes("no text to copy"), h.text().at(-1));
+	h.panel.dispose();
+});
+
+test("zz in the content pane centers the highlighted message", async () => {
+	const h = makeLoadedPanel(12);
+	await h.panel.load();
+	h.text();
+	// put the highlight on a middle message so there is room to center it
+	h.panel.handleInput("2");
+	h.panel.handleInput("g");
+	h.panel.handleInput("g");
+	h.panel.handleInput("j");
+	await flush();
+	assert.equal(h.panel.state.contentHighlight, "e1");
+	// the tree sync scrolls the block to the top of the pane
+	const topScroll = h.panel.state.cursor.content;
+	assert.ok(topScroll > 0, "the middle block starts below the top of the pane");
+
+	// zz (two-key sequence) scrolls it down into the middle of the viewport
+	h.panel.handleInput("3");
+	h.panel.handleInput("z");
+	h.panel.handleInput("z");
+	assert.ok(h.panel.state.cursor.content < topScroll, "zz moved the block away from the top toward the center");
+	assert.ok(h.panel.state.cursor.content >= 0);
+	assert.ok(h.text().some((l) => l.includes("›┌─")), "the highlighted block is still on screen after centering");
+	h.panel.dispose();
+});
+
+test("zz is a no-op when the content fits without scrolling", async () => {
+	const h = makeLoadedPanel(60);
+	await h.panel.load();
+	h.text();
+	h.panel.handleInput("3");
+	assert.equal(h.panel.state.cursor.content, 0);
+	h.panel.handleInput("z");
+	h.panel.handleInput("z");
+	assert.equal(h.panel.state.cursor.content, 0, "nothing to scroll, so the view stays put");
+	h.panel.dispose();
+});
+
+/** Panel with `n` short (one-line) messages on the active branch, so the content pane scrolls. */
+function makeShortContentPanel(n: number, height: number) {
+	const data: DataSource = {
+		listSessions: async () => [row(1, "/a")],
+		loadTree: async () => Array.from({ length: n }, (_, i) => treeRow(i)),
+		loadContent: async () => Array.from({ length: n }, (_, i) => ({ entryId: `e${i}`, role: i % 2 ? "assistant" : "user", timestamp: 0, markdown: `message ${i}` }) as ContentBlock),
+	};
+	const panel = new LazyPanel({ theme: fakeTheme, data, getHeight: () => height, requestRender: () => {}, onClose: () => {} });
+	return { panel, text: (width = 100) => panel.render(width).map((l) => stripTerminalSequences(l)) };
+}
+
+/** Output line where the content pane vertically centers a body row, derived from the rendered frame. */
+function contentMiddleRow(lines: string[]): number {
+	const bodyH = lines.length - 1; // the last line is the footer
+	const visible = bodyH - 2; // minus the content pane's top / bottom border
+	return 1 + Math.floor((visible - 1) / 2);
+}
+
+test("zz puts the highlighted message on the middle row, even for the last message (overscrolls)", async () => {
+	const h = makeShortContentPanel(12, 20);
+	await h.panel.load();
+	h.text();
+
+	// a middle message: navigate the tree to e5, then center it from the content pane
+	h.panel.handleInput("2");
+	h.panel.handleInput("g");
+	h.panel.handleInput("g");
+	for (let i = 0; i < 5; i++) {
+		h.panel.handleInput("j");
+		await flush();
+	}
+	assert.equal(h.panel.state.contentHighlight, "e5");
+	h.panel.handleInput("3");
+	h.panel.handleInput("z");
+	h.panel.handleInput("z");
+	let lines = h.text();
+	let marker = lines.findIndex((l) => l.includes("›┌─"));
+	assert.ok(Math.abs(marker - contentMiddleRow(lines)) <= 1, `middle message header at ${marker}, expected ~${contentMiddleRow(lines)}`);
+
+	// the last message (the active leaf): the tree sync clamps it to the last full page…
+	h.panel.handleInput("2");
+	h.panel.handleInput("G");
+	await flush();
+	assert.equal(h.panel.state.contentHighlight, "e11");
+	h.panel.handleInput("3");
+	const clamped = h.panel.state.cursor.content;
+	// …and zz scrolls past that so the last message reaches the middle too
+	h.panel.handleInput("z");
+	h.panel.handleInput("z");
+	assert.ok(h.panel.state.cursor.content > clamped, "zz scrolled past the last full page to center the final message");
+	lines = h.text();
+	marker = lines.findIndex((l) => l.includes("›┌─"));
+	assert.ok(Math.abs(marker - contentMiddleRow(lines)) <= 1, `last message header at ${marker}, expected ~${contentMiddleRow(lines)}`);
+
+	// a normal scroll leaves the overscrolled centering and snaps back into range
+	h.panel.handleInput("j");
+	assert.ok(h.panel.state.cursor.content < clamped + 2, "scrolling clears the centering and clamps back to the last full page");
+	h.panel.dispose();
+});
+
+/** The centered Label dialog in rendered `lines`: its top row, title line and input line (row + 1), or undefined when closed. */
+function labelDialog(lines: string[]): { top: number; title: string; input: string } | undefined {
+	const top = lines.findIndex((l) => l.includes(`┌─ ${LABEL_DIALOG_TITLE} `));
+	if (top < 0) return undefined;
+	return { top, title: lines[top]!, input: lines[top + 1] ?? "" };
+}
+
+test("/ opens the search bar in the tree pane (footer lists it), and a opens the full tree dialog", async () => {
+	const h = makeTreeActionPanel();
+	await h.panel.load();
+	h.panel.handleInput("2");
+	h.panel.handleInput("k"); // the cursor starts on the leaf e2; move up to e1
+	assert.equal(h.panel.state.cursor.tree, 1);
+	// footer hints of the tree pane start with / Search and list a Tree
+	const footer = h.text().at(-1)!;
+	assert.ok(footer.includes("a Tree"), footer);
+	assert.ok(footer.includes("/ Search"), footer);
+
+	// / opens the search bar like in the other panes (the search itself is covered below); Esc closes it
+	h.panel.handleInput("/");
+	assert.equal(h.panel.state.mode, "search");
+	assert.ok(h.text().at(-1)!.includes("Search:"), h.text().at(-1));
+	h.panel.handleInput("\x1b");
+	assert.equal(h.panel.state.mode, "normal");
+	h.panel.handleInput("n");
+	assert.equal(h.panel.state.mode, "normal");
+	// the old filter keys are unbound: they neither change the filter nor dispatch anything
+	h.panel.handleInput("u");
+	assert.equal(h.panel.state.treeFilter, "default");
+	assert.equal(h.text().at(-1)!.includes("not implemented"), false, h.text().at(-1));
+
+	// a: big box with a search row, a divider and the rows (cursor on the pane's node); the hints stay in the footer
+	h.panel.handleInput("a");
+	assert.equal(h.panel.state.mode, "tree");
+	const lines = h.text(100);
+	const top = lines.findIndex((l) => l.includes("┌─ TREE "));
+	assert.ok(top >= 0, lines.join("\n"));
+	assert.ok(lines[top]!.includes("2/3 · default"), lines[top]);
+	// the idle search row names the key that focuses it
+	assert.ok(lines[top + 1]!.includes(`${SEARCH_LABEL}/ to search`), lines[top + 1]);
+	assert.ok(lines[top + 2]!.includes("├──"), lines[top + 2]);
+	assert.ok(lines[top + 3]!.includes("user: msg 0") && !lines[top + 3]!.includes("›"), lines[top + 3]);
+	assert.ok(lines[top + 4]!.includes("› ") && lines[top + 4]!.includes("assistant: msg 1"), lines[top + 4]);
+	// the box starts at column 2, so its bottom border is the first "└" found there (the pane borders sit at column 0)
+	const bottom = lines.findIndex((l, i) => i > top && l.slice(2).startsWith("└"));
+	// the box does not repeat the footer hints
+	assert.ok(!lines.slice(top, bottom).some((l) => l.includes("Esc/q close")), lines.slice(top, bottom).join("\n"));
+	// the box spans the terminal minus a 2-column margin and the footer shows its hints
+	assert.equal(lines[top]!.indexOf("┌"), 2);
+	assert.ok(lines.at(-1)!.includes("TREE") && lines.at(-1)!.includes("Esc/q close"), lines.at(-1));
+	for (const l of h.panel.render(100)) assert.equal(visibleWidth(l), 100);
+
+	// j moves the dialog's own cursor (the pane's stays put until the dialog closes); y copies the dialog's row
+	h.panel.handleInput("j");
+	assert.ok(h.text().some((l) => l.includes("┌─ TREE ") && l.includes("3/3 · default")), h.text().join("\n"));
+	assert.equal(h.panel.state.cursor.tree, 1);
+	h.panel.handleInput("y");
+	await flush();
+	assert.deepEqual(h.copies, [{ file: "/tmp/s1.jsonl", entryId: "e2" }]);
+	assert.ok(h.text().at(-1)!.includes("copied node text"), `status shows under the dialog: ${h.text().at(-1)}`);
+	// pane switching, scope and quit keys are switched off inside the dialog
+	h.panel.handleInput("1");
+	h.panel.handleInput("\t");
+	h.panel.handleInput("A");
+	h.panel.handleInput("\x03"); // ctrl+c
+	assert.equal(h.panel.state.mode, "tree");
+	assert.equal(h.panel.state.focus, "tree");
+	assert.equal(h.panel.state.scope, "current-folder");
+	assert.equal(h.closed(), false);
+
+	// Esc closes it and the pane cursor follows the dialog's row (the content pane with it)
+	h.panel.handleInput("\x1b");
+	await flush();
+	assert.equal(h.panel.state.mode, "normal");
+	assert.equal(h.closed(), false);
+	assert.equal(h.panel.state.cursor.tree, 2);
+	assert.equal(h.panel.state.contentHighlight, "e2");
+	h.panel.handleInput("a");
+	h.panel.handleInput("q");
+	assert.equal(h.panel.state.mode, "normal");
+	assert.equal(h.closed(), false);
+});
+
+test("tree dialog: gg/G move its cursor, L labels its row over the dialog, Enter restores from it", async () => {
+	const h = makeTreeActionPanel();
+	await h.panel.load();
+	h.panel.handleInput("2");
+	h.panel.handleInput("k"); // pane cursor on e1
+	await flush();
+	h.panel.handleInput("a");
+	const title = () => h.text().find((l) => l.includes("┌─ TREE "))!;
+	assert.ok(title().includes("2/3"), title());
+	h.panel.handleInput("G");
+	assert.ok(title().includes("3/3"), title());
+	h.panel.handleInput("g");
+	h.panel.handleInput("g");
+	assert.ok(title().includes("1/3"), title());
+	// y on e0 (no text) reports it, still inside the dialog
+	h.panel.handleInput("y");
+	await flush();
+	assert.equal(h.copies.at(-1)!.entryId, "e0");
+	assert.ok(h.text().at(-1)!.includes("no text to copy"), h.text().at(-1));
+
+	// L: the Label dialog is drawn over the tree dialog and names the dialog's row; saving returns to the dialog
+	h.panel.handleInput("j");
+	h.panel.handleInput("L");
+	assert.equal(h.panel.state.mode, "label");
+	let lines = h.text();
+	const dlg = labelDialog(lines);
+	assert.ok(dlg, "the Label dialog should be drawn");
+	assert.ok(dlg.title.includes("assistant ·") && !dlg.title.includes("msg 1"), dlg.title);
+	assert.ok(lines.some((l) => l.includes("┌─ TREE ")), "the tree dialog stays underneath");
+	assert.ok(lines.at(-1)!.includes("LABEL"), lines.at(-1));
+	for (const ch of "ckpt") h.panel.handleInput(ch);
+	h.panel.handleInput("\r");
+	await flush();
+	assert.equal(h.panel.state.mode, "tree");
+	assert.deepEqual(h.labelCalls, [{ file: "/tmp/s1.jsonl", entryId: "e1", label: "ckpt" }]);
+	lines = h.text();
+	assert.ok(lines.some((l) => l.includes("› ") && l.includes("[ckpt]") && l.includes("assistant: msg 1")), lines.join("\n"));
+	assert.ok(title().includes("2/3"), title());
+	// Esc in the label prompt also lands back in the dialog
+	h.panel.handleInput("L");
+	h.panel.handleInput("\x1b");
+	assert.equal(h.panel.state.mode, "tree");
+	assert.equal(h.labelCalls.length, 1);
+
+	// Enter on the leaf restores without asking and closes the panel (the pane cursor was on e1)
+	h.panel.handleInput("j");
+	h.panel.handleInput("\r");
+	await flush();
+	assert.deepEqual(h.enters, [{ kind: "restore", file: "/tmp/s1.jsonl", entryId: "e2", options: { summarize: false } }]);
+	assert.equal(h.closed(), true);
+});
+
+test("tree dialog: Enter on another node asks Summarize branch? over the dialog; Esc returns to it, a failure keeps it open", async () => {
+	const h = makeTreeActionPanel({
+		restoreNode: async (_file, entryId, options) => {
+			if (entryId === "e0") throw new Error("entry e0 not found in session");
+			h.enters.push({ kind: "restore", file: _file, entryId, options });
+			return "restored";
+		},
+	});
+	await h.panel.load();
+	h.panel.handleInput("2");
+	h.panel.handleInput("a");
+	h.panel.handleInput("g");
+	h.panel.handleInput("g"); // dialog cursor on e0
+	h.panel.handleInput("\r");
+	assert.equal(h.panel.state.mode, "restore");
+	const menu = summaryMenu(h.text());
+	assert.ok(menu, "the menu should be drawn");
+	assert.ok(menu.title.includes("user · ") && !menu.title.includes("msg 0"), menu.title);
+	assert.ok(h.text().some((l) => l.includes("┌─ TREE ")), "the tree dialog stays underneath");
+	h.panel.handleInput("\x1b");
+	assert.equal(h.panel.state.mode, "tree");
+	assert.deepEqual(h.enters, []);
+
+	// No summary on e0 fails: the panel comes back with the dialog still open and the error in the footer
+	h.panel.handleInput("\r");
+	h.panel.handleInput("\r");
+	await flush();
+	assert.equal(h.closed(), false);
+	assert.deepEqual(h.hidden, [true, false]);
+	assert.equal(h.panel.state.mode, "tree");
+	assert.ok(h.text().at(-1)!.includes("restore failed: entry e0 not found"), h.text().at(-1));
+	// then e1 succeeds
+	h.panel.handleInput("j");
+	h.panel.handleInput("\r");
+	h.panel.handleInput("\r");
+	await flush();
+	assert.deepEqual(h.enters, [{ kind: "restore", file: "/tmp/s1.jsonl", entryId: "e1", options: { summarize: false } }]);
+	assert.equal(h.closed(), true);
+});
+
+test("tree dialog search filters live; Esc leaves the search row keeping the query, Esc on the list closes; folds open meanwhile and come back", async () => {
+	const h = makeForkedPanel();
+	await h.panel.load();
+	const title = () => h.text().find((l) => l.includes("┌─ TREE "))!;
+	const searchRow = () => {
+		const lines = h.text();
+		return lines[lines.findIndex((l) => l.includes("┌─ TREE ")) + 1]!;
+	};
+	const folded = () => [...h.panel.state.treeFolded].sort();
+	h.panel.handleInput("2");
+	h.panel.handleInput("a");
+	assert.ok(title().includes("4/4 · default"), title());
+	assert.deepEqual(folded(), ["e1"]);
+
+	// / focuses the search row: the footer switches to its hints and typing filters at once
+	h.panel.handleInput("/");
+	assert.ok(h.text().at(-1)!.includes("Esc back to the list"), h.text().at(-1));
+	h.panel.handleInput("2");
+	const lines = h.text();
+	assert.ok(title().includes("1/1 · default"), title());
+	assert.ok(lines.some((l) => l.includes("› ") && l.includes("user: msg 2")), lines.join("\n"));
+	assert.equal(lines.some((l) => l.includes("assistant: msg 1")), false, "non-matching rows are gone");
+	// the match sat inside the folded side branch: folds are cleared while searching
+	assert.deepEqual(folded(), []);
+	// keys are text while the search row is focused; Enter means nothing there
+	h.panel.handleInput("q");
+	assert.equal(h.panel.state.mode, "tree");
+	assert.ok(title().includes("0/0"), title());
+	assert.ok(h.text().some((l) => l.includes("No matches.")), h.text().join("\n"));
+	h.panel.handleInput("\x7f"); // backspace: back to "2"
+	assert.ok(title().includes("1/1"), title());
+	h.panel.handleInput("\r");
+	assert.ok(h.text().at(-1)!.includes("Esc back to the list"), `Enter is not a search key: ${h.text().at(-1)}`);
+	assert.ok(title().includes("1/1"), title());
+
+	// Esc leaves the search row: the query and the narrowed rows stay, the keys go to the list
+	h.panel.handleInput("\x1b");
+	assert.ok(h.text().at(-1)!.includes("q close"), h.text().at(-1));
+	assert.ok(title().includes("1/1"), title());
+	assert.ok(searchRow().includes(`${SEARCH_LABEL}2`) && !searchRow().includes("to search"), searchRow());
+	assert.deepEqual(folded(), [], "still searching: the folds stay open");
+	// / again continues the same query; deleting it all restores the folds and the cursor lands on the nearest listed ancestor
+	h.panel.handleInput("/");
+	h.panel.handleInput("\x7f");
+	assert.deepEqual(folded(), ["e1"]);
+	assert.ok(title().includes("2/4"), title());
+	h.panel.handleInput("\x1b");
+	assert.ok(searchRow().includes("/ to search"), searchRow());
+	assert.equal(h.panel.state.mode, "tree");
+
+	// Esc on the list closes the dialog
+	h.panel.handleInput("\x1b");
+	assert.equal(h.panel.state.mode, "normal");
+
+	// closing while a query is active: the search ends, the pre-search folds come back, and the chosen row is revealed and selected in the pane
+	h.panel.handleInput("a");
+	h.panel.handleInput("/");
+	h.panel.handleInput("2");
+	h.panel.handleInput("\x1b");
+	assert.deepEqual(folded(), []);
+	h.panel.handleInput("q");
+	await flush();
+	assert.equal(h.panel.state.mode, "normal");
+	assert.deepEqual(folded(), [], "e1 came back folded, then was opened to reveal e2");
+	assert.equal(h.panel.state.cursor.tree, 2);
+	assert.equal(h.panel.state.contentHighlight, "e2");
+	assert.ok(h.text().some((l) => l.includes("›") && l.includes("user: msg 2")), h.text().join("\n"));
+	// reopening starts without a query
+	h.panel.handleInput("a");
+	assert.ok(title().includes("3/5"), title());
+	assert.ok(searchRow().includes("/ to search"), searchRow());
+	h.panel.handleInput("q");
+	h.panel.dispose();
+});
+
+test("tree dialog search matches labels and qualifiers", async () => {
+	const h = makeTreeActionPanel();
+	await h.panel.load();
+	h.panel.handleInput("2");
+	h.panel.handleInput("k");
+	await flush();
+	h.panel.handleInput("L");
+	for (const ch of "ckpt") h.panel.handleInput(ch);
+	h.panel.handleInput("\r");
+	await flush();
+	h.panel.handleInput("a");
+	const title = () => h.text().find((l) => l.includes("┌─ TREE "))!;
+	h.panel.handleInput("/");
+	for (const ch of "CKPT") h.panel.handleInput(ch);
+	assert.ok(title().includes("1/1"), `the title counts the matches: ${title()}`);
+	assert.ok(h.text().some((l) => l.includes("[ckpt]") && l.includes("assistant: msg 1")));
+	for (const ch of " tag:ck") h.panel.handleInput(ch);
+	assert.ok(title().includes("1/1"), title());
+	for (const ch of "x") h.panel.handleInput(ch); // tag:ckx matches nothing
+	assert.ok(title().includes("0/0"), title());
+	h.panel.dispose();
+});
+
+test("tree dialog filters d/t/u/l/a reload the tree (toggling back to default), clear the folds and show in both titles", async () => {
+	const h = makeTreeActionPanel();
+	await h.panel.load();
+	h.panel.handleInput("2");
+	h.panel.handleInput("a");
+	const title = () => h.text().find((l) => l.includes("┌─ TREE "))!;
+	h.panel.handleInput("u");
+	await flush();
+	assert.equal(h.panel.state.treeFilter, "user-only");
+	assert.equal(h.treeFilters.at(-1), "user-only");
+	assert.ok(title().includes("3/3 · user-only"), title());
+	h.panel.handleInput("u"); // toggle back
+	await flush();
+	assert.equal(h.panel.state.treeFilter, "default");
+	h.panel.handleInput("l");
+	await flush();
+	assert.equal(h.panel.state.treeFilter, "labeled");
+	assert.ok(title().includes("0/0 · labeled"), title());
+	assert.ok(h.text().some((l) => l.includes(t("pane.treeEmpty"))), h.text().join("\n"));
+	h.panel.handleInput("a");
+	await flush();
+	assert.equal(h.panel.state.treeFilter, "all");
+	assert.ok(title().includes("3/3 · all"), title());
+	h.panel.handleInput("t");
+	await flush();
+	assert.equal(h.panel.state.treeFilter, "no-tools");
+	h.panel.handleInput("d");
+	await flush();
+	assert.equal(h.panel.state.treeFilter, "default");
+	assert.ok(title().includes("3/3 · default"), title());
+	// the pane names a non-default filter in its header once the dialog closes
+	h.panel.handleInput("u");
+	await flush();
+	h.panel.handleInput("q");
+	const paneHeader = h.text(160).find((l) => l.includes("[2] TREE"))!;
+	assert.ok(paneHeader.includes("· user-only"), paneHeader);
+	h.panel.dispose();
+
+	// a filter change clears the folds like pi (a folded side branch would hide the rows the filter asks for)
+	const forked = makeForkedPanel();
+	await forked.panel.load();
+	forked.panel.handleInput("2");
+	forked.panel.handleInput("a");
+	assert.deepEqual([...forked.panel.state.treeFolded], ["e1"]);
+	forked.panel.handleInput("a"); // filter: all
+	await flush();
+	assert.deepEqual([...forked.panel.state.treeFolded], []);
+	assert.ok(forked.text().some((l) => l.includes("┌─ TREE ") && l.includes("5/5 · all")), forked.text().join("\n"));
+	forked.panel.dispose();
+});
+
+test("tree dialog z folds / unfolds on the shared fold state; h switches nothing and l is the labeled filter", async () => {
+	const h = makeForkedPanel();
+	await h.panel.load();
+	const title = () => h.text().find((l) => l.includes("┌─ TREE "))!;
+	const folded = () => [...h.panel.state.treeFolded].sort();
+	const cursorRow = () => h.text().find((l) => /›\s/.test(l.slice(2)))!;
+	h.panel.handleInput("2");
+	h.panel.handleInput("a");
+	// cursor starts on the active leaf e4: z folds its segment and jumps to the head e3 (⊞, e4 gone)
+	assert.ok(title().includes("4/4"), title());
+	h.panel.handleInput("z");
+	assert.deepEqual(folded(), ["e1", "e3"]);
+	assert.ok(title().includes("3/3"), title());
+	assert.ok(cursorRow().includes("└⊞ ") && cursorRow().includes("assistant: msg 3"), cursorRow());
+	// z on the folded head opens it again
+	h.panel.handleInput("z");
+	assert.deepEqual(folded(), ["e1"]);
+	assert.ok(title().includes("3/4"), title());
+	// k onto the folded side branch e1: z opens it, j into it, z folds it again and jumps back to the head
+	h.panel.handleInput("k");
+	assert.ok(cursorRow().includes("├⊞ ") && cursorRow().includes("assistant: msg 1"), cursorRow());
+	h.panel.handleInput("z");
+	assert.deepEqual(folded(), []);
+	assert.ok(title().includes("2/5"), title());
+	h.panel.handleInput("j");
+	assert.ok(cursorRow().includes("user: msg 2"), cursorRow());
+	h.panel.handleInput("z");
+	assert.deepEqual(folded(), ["e1"]);
+	assert.ok(title().includes("2/4"), title());
+	// the trunk has nothing to fold
+	h.panel.handleInput("g");
+	h.panel.handleInput("g");
+	h.panel.handleInput("z");
+	assert.ok(h.text().at(-1)!.includes("nothing to fold"), h.text().at(-1));
+	assert.deepEqual(folded(), ["e1"]);
+	// the pane sees the same fold state after closing
+	h.panel.handleInput("q");
+	assert.deepEqual(folded(), ["e1"]);
+	assert.equal(h.panel.state.cursor.tree, 0);
+	assert.ok(h.text().some((l) => l.includes("▸ ") && l.includes("assistant: msg 1")), h.text().join("\n"));
+
+	// h is pane switching outside and does nothing here; l is the labeled filter, not "next pane"
+	h.panel.handleInput("a");
+	h.panel.handleInput("h");
+	assert.equal(h.panel.state.mode, "tree");
+	assert.equal(h.panel.state.focus, "tree");
+	h.panel.handleInput("l");
+	await flush();
+	assert.equal(h.panel.state.focus, "tree");
+	assert.equal(h.panel.state.treeFilter, "labeled");
+	h.panel.handleInput("l");
+	await flush();
+	assert.equal(h.panel.state.treeFilter, "default");
+	h.panel.handleInput("q");
+	h.panel.dispose();
+});
+
+test("? does nothing inside the tree dialog: its keys live in the footer, not in the box", async () => {
+	const h = makeTreeActionPanel();
+	await h.panel.load();
+	h.panel.handleInput("2");
+	h.panel.handleInput("a");
+	h.panel.handleInput("?");
+	assert.equal(h.panel.state.helpOpen, false);
+	assert.equal(h.panel.state.mode, "tree");
+	const lines = h.text(160);
+	const footer = lines.at(-1)!;
+	for (const hint of ["/ search", "j/k move", "Enter restore", "q close", "z fold", "d/t/u/l/a filter", "y copy", "T label"]) {
+		assert.ok(footer.includes(hint), `${hint} missing from: ${footer}`);
+	}
+	assert.equal(footer.includes("? help"), false, footer);
+	assert.equal(footer.includes("h/l"), false, footer);
+	const top = lines.findIndex((l) => l.includes("┌─ TREE "));
+	const bottom = lines.findIndex((l, i) => i > top && l.slice(2).startsWith("└"));
+	assert.ok(!lines.slice(top, bottom).some((l) => l.includes("d/t/u/l/a filter")), "the box should not repeat the footer hints");
+	h.panel.handleInput("q");
+	assert.equal(h.panel.state.mode, "normal");
+	h.panel.dispose();
+});
+
+/** Panel with one session whose tree forks: e0 ─┬─ e1 (side) → e2, └─ e3 (active) → e4 (active leaf). */
+function makeForkedPanel() {
+	const contentCalls: Array<string | undefined> = [];
+	const data: DataSource = {
+		listSessions: async () => [row(1, "/a")],
+		loadTree: async () => [
+			treeRow(0),
+			treeRow(1, false, { parentId: "e0" }),
+			treeRow(2, false, { parentId: "e1" }),
+			treeRow(3, true, { parentId: "e0" }),
+			treeRow(4, true, { parentId: "e3", isLeaf: true }),
+		],
+		loadContent: async (_file, leaf) => {
+			contentCalls.push(leaf);
+			return leaf === "e1" || leaf === "e2" ? [block(0), block(1), block(2)] : [block(0), block(3), block(4)];
+		},
+	};
+	const panel = new LazyPanel({ theme: fakeTheme, data, getHeight: () => 20, requestRender: () => {}, onClose: () => {} });
+	// 160 columns: the left column is 40 wide, so "assistant: msg N" survives the truncation of the narrow pane
+	return { panel, contentCalls, text: (width = 160) => panel.render(width).map((l) => stripTerminalSequences(l)) };
+}
+
+test("side branches start folded; z folds / unfolds the segment under the cursor and the dialog shows ⊞", async () => {
+	const h = makeForkedPanel();
+	await h.panel.load();
+	const folded = () => [...h.panel.state.treeFolded].sort();
+	// tree rows carry "role: msg N"; content blocks say "message N", session rows "session N"
+	const treeLine = (lines: string[], role: string, i: number) => lines.find((l) => l.includes(`${role}: msg ${i}`));
+
+	// the side branch e1 starts folded (e2 hidden), the active one open; the cursor sits on the active leaf e4
+	assert.deepEqual(folded(), ["e1"]);
+	assert.equal(h.panel.state.cursor.tree, 3);
+	let lines = h.text();
+	assert.ok(lines.some((l) => l.includes("TREE") && l.includes("4/4")), lines.join("\n"));
+	assert.ok(treeLine(lines, "assistant", 1)!.includes("▸ "), treeLine(lines, "assistant", 1));
+	assert.ok(treeLine(lines, "assistant", 3)!.includes("▾ • "), treeLine(lines, "assistant", 3));
+	assert.equal(treeLine(lines, "user", 2), undefined);
+	// the root is not foldable: nothing in front of the trunk
+	assert.ok(treeLine(lines, "user", 0)!.startsWith("│  • "), treeLine(lines, "user", 0));
+	// rows inside the open branch are indented one level, right under the branch's text
+	assert.ok(treeLine(lines, "user", 4)!.startsWith("│›   • "), treeLine(lines, "user", 4));
+
+	// z on the folded head unfolds it; the cursor stays on the head
+	h.panel.handleInput("2");
+	h.panel.handleInput("k");
+	h.panel.handleInput("k");
+	assert.equal(h.panel.state.cursor.tree, 1);
+	h.panel.handleInput("z");
+	assert.deepEqual(folded(), []);
+	assert.equal(h.panel.state.cursor.tree, 1);
+	lines = h.text();
+	assert.equal(lines.indexOf(treeLine(lines, "user", 2)!), lines.indexOf(treeLine(lines, "assistant", 1)!) + 1);
+	assert.ok(treeLine(lines, "assistant", 1)!.includes("▸ ") === false && treeLine(lines, "assistant", 1)!.includes("▾ "));
+
+	// z inside the segment folds it and jumps to its head; the content pane follows the cursor
+	h.panel.handleInput("j");
+	assert.equal(h.panel.state.cursor.tree, 2);
+	await flush();
+	assert.ok(h.contentCalls.includes("e2"), h.contentCalls.join(","));
+	h.panel.handleInput("z");
+	await flush();
+	assert.deepEqual(folded(), ["e1"]);
+	assert.equal(h.panel.state.cursor.tree, 1);
+	assert.equal(treeLine(h.text(), "user", 2), undefined);
+	assert.equal(h.panel.state.contentHighlight, "e1");
+
+	// the trunk of a single-root tree has nothing to fold
+	h.panel.handleInput("g");
+	h.panel.handleInput("g");
+	h.panel.handleInput("z");
+	assert.deepEqual(folded(), ["e1"]);
+	assert.ok(h.text().at(-1)!.includes("nothing to fold"), h.text().at(-1));
+
+	// the active branch folds too (z on its leaf jumps to e3), and z on the folded head opens it again
+	h.panel.handleInput("G");
+	assert.equal(h.panel.state.cursor.tree, 3);
+	h.panel.handleInput("z");
+	await flush();
+	assert.deepEqual(folded(), ["e1", "e3"]);
+	assert.equal(h.panel.state.cursor.tree, 2);
+	assert.equal(treeLine(h.text(), "user", 4), undefined);
+	h.panel.handleInput("z");
+	assert.deepEqual(folded(), ["e1"]);
+	assert.equal(h.panel.state.cursor.tree, 2);
+	assert.ok(treeLine(h.text(), "user", 4));
+
+	// the dialog lists the same rows with ⊞ on the folded head
+	h.panel.handleInput("a");
+	lines = h.text();
+	assert.ok(lines.some((l) => l.includes("├⊞ ") && l.includes("assistant: msg 1")), lines.join("\n"));
+	assert.equal(treeLine(lines, "user", 2), undefined);
+	assert.ok(lines.some((l) => l.includes("┌─ TREE ") && l.includes("3/4 · default")), lines.join("\n"));
+	h.panel.handleInput("q");
+	h.panel.dispose();
+});
+
+test("T opens a centered Label dialog; Enter saves and refreshes the row, empty removes, Esc cancels", async () => {
+	const h = makeTreeActionPanel();
+	await h.panel.load();
+	h.panel.handleInput("2");
+	h.panel.handleInput("k"); // cursor on e1
+	await flush();
+	h.panel.handleInput("L");
+	assert.equal(h.panel.state.mode, "label");
+	const lines = h.text();
+	const dlg = labelDialog(lines);
+	assert.ok(dlg, "the Label dialog should be drawn");
+	// drawn over the middle of the panel (not in the footer row), naming the node; the footer carries the dialog's keys
+	assert.ok(dlg.top > 2 && dlg.top < lines.length - 6, `dialog row ${dlg.top} of ${lines.length}`);
+	assert.ok(dlg.title.includes("assistant ·") && !dlg.title.includes("msg 1"), dlg.title);
+	// 3 rows: border, input, border — the bottom border sits right under the input line
+	assert.ok(lines[dlg.top + 2]!.includes("└"), lines[dlg.top + 2]);
+	const footer = lines.at(-1)!;
+	assert.ok(footer.includes("LABEL") && footer.includes("Enter save") && footer.includes("empty field clears it"), footer);
+	for (const l of h.panel.render(100)) assert.equal(visibleWidth(l), 100);
+
+	// keys go to the input, not to the keymap
+	for (const ch of "ckpt") h.panel.handleInput(ch);
+	assert.equal(h.panel.state.focus, "tree");
+	assert.equal(h.panel.state.cursor.tree, 1);
+	assert.ok(labelDialog(h.text())!.input.includes("ckpt"));
+	h.panel.handleInput("\r");
+	await flush();
+	assert.equal(h.panel.state.mode, "normal");
+	assert.equal(labelDialog(h.text()), undefined, "dialog closes on Enter");
+	assert.deepEqual(h.labelCalls, [{ file: "/tmp/s1.jsonl", entryId: "e1", label: "ckpt" }]);
+	// tree reloaded: the row now shows the label, cursor stays on the same node
+	assert.equal(h.panel.state.cursor.tree, 1);
+	assert.ok(h.text().some((l) => l.includes("[ckpt]")), "tree row should show the new label");
+	assert.ok(h.text().at(-1)!.includes("label set: ckpt"));
+
+	// reopening pre-fills the current label; Esc leaves it untouched
+	h.panel.handleInput("L");
+	assert.ok(labelDialog(h.text())!.input.includes("ckpt"));
+	h.panel.handleInput("\x1b");
+	assert.equal(h.panel.state.mode, "normal");
+	assert.equal(labelDialog(h.text()), undefined, "dialog closes on Esc");
+	assert.equal(h.labelCalls.length, 1);
+	assert.equal(h.labels.get("e1"), "ckpt");
+
+	// the cursor starts at the end of the pre-filled text, so backspace clears it; an empty value removes the label
+	h.panel.handleInput("L");
+	for (let i = 0; i < 4; i++) h.panel.handleInput("\x7f");
+	assert.equal(labelDialog(h.text())!.input.includes("ckpt"), false);
+	h.panel.handleInput("\r");
+	await flush();
+	assert.deepEqual(h.labelCalls.at(-1), { file: "/tmp/s1.jsonl", entryId: "e1", label: undefined });
+	assert.equal(h.labels.has("e1"), false);
+	assert.ok(h.text().at(-1)!.includes("label removed"));
+	h.panel.dispose();
+});
+
+test("label errors land in the footer and a panel without actions says so", async () => {
+	const failing = makeTreeActionPanel({
+		setNodeLabel: async () => {
+			throw new Error("disk full");
+		},
+	});
+	await failing.panel.load();
+	failing.panel.handleInput("2");
+	failing.panel.handleInput("L");
+	failing.panel.handleInput("x");
+	failing.panel.handleInput("\r");
+	await flush();
+	assert.ok(failing.text().at(-1)!.includes("label failed: disk full"), failing.text().at(-1));
+	failing.panel.dispose();
+
+	const bare = makeLoadedPanel();
+	await bare.panel.load();
+	bare.panel.handleInput("2");
+	bare.panel.handleInput("L");
+	assert.equal(bare.panel.state.mode, "normal");
+	assert.ok(bare.text().at(-1)!.includes("actions unavailable"));
+	bare.panel.handleInput("y");
+	await flush();
+	assert.ok(bare.text().at(-1)!.includes("actions unavailable"));
+	// Enter in either pane says so too and keeps the panel open
+	bare.panel.handleInput("\r");
+	await flush();
+	assert.ok(bare.text().at(-1)!.includes("restore: actions unavailable"), bare.text().at(-1));
+	bare.panel.handleInput("1");
+	bare.panel.handleInput("\r");
+	await flush();
+	assert.ok(bare.text().at(-1)!.includes("resume: actions unavailable"), bare.text().at(-1));
+	bare.panel.dispose();
+});
+
+test("Enter in the sessions pane resumes the session under the cursor and closes the panel", async () => {
+	const h = makeTreeActionPanel();
+	await h.panel.load();
+	assert.equal(h.panel.state.focus, "sessions");
+	h.panel.handleInput("\r");
+	await flush();
+	assert.deepEqual(h.enters, [{ kind: "resume", file: "/tmp/s1.jsonl" }]);
+	assert.equal(h.closed(), true);
+	// hidden while pi switched; a successful switch closes the panel instead of showing it again
+	assert.deepEqual(h.hidden, [true]);
+});
+
+test("Enter in the tree pane on the active leaf restores without asking (switching session first is the action's job)", async () => {
+	const h = makeTreeActionPanel();
+	await h.panel.load();
+	h.panel.handleInput("2");
+	assert.equal(h.panel.state.cursor.tree, 2, "the cursor starts on the leaf");
+	h.panel.handleInput("\r");
+	await flush();
+	assert.equal(summaryMenu(h.text()), undefined, "no menu for the leaf");
+	assert.deepEqual(h.enters, [{ kind: "restore", file: "/tmp/s1.jsonl", entryId: "e2", options: { summarize: false } }]);
+	assert.equal(h.closed(), true);
+});
+
+/** The centered "Summarize branch?" menu in rendered `lines`: its title line and the entry lines, or undefined when closed. */
+function summaryMenu(lines: string[]): { top: number; title: string; items: string[]; selected: string | undefined } | undefined {
+	const top = lines.findIndex((l) => l.includes(`┌─ ${SUMMARY_MENU_TITLE} `));
+	if (top < 0) return undefined;
+	const items = lines.slice(top + 1, top + 1 + SUMMARY_MENU.length);
+	const selected = items.find((l) => l.includes("›"));
+	return { top, title: lines[top]!, items, selected: selected?.replace(/.*›\s*/, "").trim() };
+}
+
+test("Enter on another node opens the Summarize branch? menu: j/k move, Esc goes back to the tree, No summary restores", async () => {
+	const h = makeTreeActionPanel();
+	await h.panel.load();
+	h.panel.handleInput("2");
+	h.panel.handleInput("k"); // cursor on e1
+	await flush();
+	h.panel.handleInput("\r");
+	assert.equal(h.panel.state.mode, "restore");
+	let lines = h.text();
+	const menu = summaryMenu(lines);
+	assert.ok(menu, "the menu should be drawn");
+	// drawn over the middle of the panel, naming the node; three entries in pi's order, cursor on the first
+	assert.ok(menu.top > 2 && menu.top < lines.length - 6, `menu row ${menu.top} of ${lines.length}`);
+	assert.ok(menu.title.includes("assistant · ") && !menu.title.includes("msg 1"), menu.title);
+	for (const [i, m] of SUMMARY_MENU.entries()) assert.ok(menu.items[i]!.includes(m.label), `${i}: ${menu.items[i]}`);
+	assert.ok(menu.items[0]!.startsWith("No summary") || menu.selected?.startsWith("No summary"), menu.items[0]);
+	assert.ok(lines[menu.top + SUMMARY_MENU.length + 1]!.includes("└"), "bottom border right under the last entry");
+	const footer = lines.at(-1)!;
+	assert.ok(footer.includes("RESTORE") && footer.includes("Enter select") && footer.includes("Esc cancel"), footer);
+	for (const l of h.panel.render(100)) assert.equal(visibleWidth(l), 100);
+
+	// j / k move the menu cursor, not the tree cursor; other keys are swallowed
+	h.panel.handleInput("j");
+	assert.ok(summaryMenu(h.text())!.selected?.startsWith("Summarize"), "j moves down");
+	h.panel.handleInput("j");
+	h.panel.handleInput("j");
+	assert.ok(summaryMenu(h.text())!.selected?.startsWith("Summarize with custom prompt"), "clamped at the bottom");
+	h.panel.handleInput("k");
+	h.panel.handleInput("\x1b[A"); // up arrow
+	assert.ok(summaryMenu(h.text())!.selected?.startsWith("No summary"), "k / ↑ move up");
+	h.panel.handleInput("q");
+	h.panel.handleInput("l");
+	assert.equal(h.closed(), false);
+	assert.equal(h.panel.state.focus, "tree");
+	assert.equal(h.panel.state.cursor.tree, 1);
+
+	// Esc: back to the tree, nothing restored
+	h.panel.handleInput("\x1b");
+	assert.equal(h.panel.state.mode, "normal");
+	assert.equal(summaryMenu(h.text()), undefined, "menu closes on Esc");
+	assert.deepEqual(h.enters, []);
+	assert.deepEqual(h.hidden, []);
+	assert.equal(h.closed(), false);
+
+	// Enter again, pick "No summary"
+	h.panel.handleInput("\r");
+	h.panel.handleInput("\r");
+	await flush();
+	assert.deepEqual(h.enters, [{ kind: "restore", file: "/tmp/s1.jsonl", entryId: "e1", options: { summarize: false } }]);
+	assert.equal(h.closed(), true);
+	lines = h.text();
+	assert.equal(summaryMenu(lines), undefined);
+});
+
+test("Summarize: the footer says summarizing branch… while pi writes the summary, then the panel closes", async () => {
+	let finish: (() => void) | undefined;
+	const h = makeTreeActionPanel({
+		restoreNode: (file, entryId, options) =>
+			new Promise((resolve) => {
+				h.enters.push({ kind: "restore", file, entryId, options });
+				finish = () => resolve("restored");
+			}),
+	});
+	await h.panel.load();
+	h.panel.handleInput("2");
+	h.panel.handleInput("k");
+	await flush();
+	h.panel.handleInput("\r");
+	h.panel.handleInput("j"); // Summarize
+	h.panel.handleInput("\r");
+	assert.deepEqual(h.enters, [{ kind: "restore", file: "/tmp/s1.jsonl", entryId: "e1", options: { summarize: true } }]);
+	assert.equal(h.panel.state.mode, "normal");
+	assert.ok(h.text().at(-1)!.includes(SUMMARIZING_STATUS), h.text().at(-1));
+	assert.deepEqual(h.hidden, [true]);
+	// keys are ignored meanwhile, like any other Enter
+	h.panel.handleInput("q");
+	h.panel.handleInput("\r");
+	assert.equal(h.closed(), false);
+	assert.equal(h.enters.length, 1);
+	finish!();
+	await flush();
+	assert.equal(h.closed(), true);
+});
+
+test("Summarize with custom prompt opens a one-line input; Esc returns to the menu, Enter summarizes with the text", async () => {
+	const h = makeTreeActionPanel();
+	await h.panel.load();
+	h.panel.handleInput("2");
+	h.panel.handleInput("k");
+	await flush();
+	h.panel.handleInput("\r");
+	h.panel.handleInput("G"); // swallowed by the menu (only j/k/arrows move)
+	assert.ok(summaryMenu(h.text())!.selected?.startsWith("No summary"));
+	h.panel.handleInput("j");
+	h.panel.handleInput("j");
+	h.panel.handleInput("\r");
+	// the menu is replaced by the custom prompt, still in restore mode
+	assert.equal(h.panel.state.mode, "restore");
+	let lines = h.text();
+	assert.equal(summaryMenu(lines), undefined);
+	const promptTop = lines.findIndex((l) => l.includes(`┌─ ${CUSTOM_PROMPT_TITLE} `));
+	assert.ok(promptTop > 0, "the custom prompt should be drawn");
+	assert.ok(lines[promptTop]!.includes("assistant · ") && !lines[promptTop]!.includes("msg 1"), lines[promptTop]);
+	assert.ok(lines.at(-1)!.includes("Enter summarize") && lines.at(-1)!.includes("Esc back"), lines.at(-1));
+	for (const l of h.panel.render(100)) assert.equal(visibleWidth(l), 100);
+
+	// Esc: back to the menu with the cursor still on the custom entry (pi loops back to the selector too)
+	h.panel.handleInput("\x1b");
+	assert.equal(h.panel.state.mode, "restore");
+	const menu = summaryMenu(h.text());
+	assert.ok(menu, "menu reopens after Esc in the prompt");
+	assert.ok(menu.selected?.startsWith("Summarize with custom prompt"), menu.selected);
+	assert.deepEqual(h.enters, []);
+
+	// Enter with instructions
+	h.panel.handleInput("\r");
+	for (const ch of "focus on x") h.panel.handleInput(ch);
+	assert.equal(h.panel.state.cursor.tree, 1, "typing goes to the prompt, not the keymap");
+	lines = h.text();
+	assert.ok(lines[lines.findIndex((l) => l.includes(`┌─ ${CUSTOM_PROMPT_TITLE} `)) + 1]!.includes("focus on x"));
+	h.panel.handleInput("\r");
+	await flush();
+	assert.equal(h.panel.state.mode, "normal");
+	assert.deepEqual(h.enters, [
+		{ kind: "restore", file: "/tmp/s1.jsonl", entryId: "e1", options: { summarize: true, customInstructions: "focus on x" } },
+	]);
+	assert.equal(h.closed(), true);
+
+	// a blank prompt means pi's default instructions
+	const blank = makeTreeActionPanel();
+	await blank.panel.load();
+	blank.panel.handleInput("2");
+	blank.panel.handleInput("k");
+	await flush();
+	blank.panel.handleInput("\r");
+	blank.panel.handleInput("j");
+	blank.panel.handleInput("j");
+	blank.panel.handleInput("\r");
+	blank.panel.handleInput(" ");
+	blank.panel.handleInput("\r");
+	await flush();
+	assert.deepEqual(blank.enters.at(-1)?.options, { summarize: true });
+	assert.equal(blank.closed(), true);
+});
+
+test("pi's branchSummary.skipPrompt skips the menu and restores without a summary", async () => {
+	const h = makeTreeActionPanel(undefined, { skipSummaryPrompt: true });
+	await h.panel.load();
+	h.panel.handleInput("2");
+	h.panel.handleInput("g");
+	h.panel.handleInput("g");
+	await flush();
+	h.panel.handleInput("\r");
+	await flush();
+	assert.equal(summaryMenu(h.text()), undefined);
+	assert.deepEqual(h.enters, [{ kind: "restore", file: "/tmp/s1.jsonl", entryId: "e0", options: { summarize: false } }]);
+	assert.equal(h.closed(), true);
+});
+
+test("a failed Enter stays in the footer, shows the panel again and keeps it usable", async () => {
+	const h = makeTreeActionPanel({
+		restoreNode: async (_file, _entryId, options) => {
+			throw new Error(options.summarize ? "No model available for summarization" : "entry e1 not found in session");
+		},
+		resumeSession: async () => {
+			throw new Error("session file not found: /tmp/s1.jsonl");
+		},
+	});
+	await h.panel.load();
+	h.panel.handleInput("2");
+	h.panel.handleInput("k");
+	await flush();
+	h.panel.handleInput("\r");
+	h.panel.handleInput("\r"); // No summary
+	await flush();
+	assert.equal(h.closed(), false);
+	assert.deepEqual(h.hidden, [true, false]);
+	assert.ok(h.text().at(-1)!.includes("restore failed: entry e1 not found"), h.text().at(-1));
+	// keys work again afterwards
+	h.panel.handleInput("k");
+	assert.equal(h.panel.state.cursor.tree, 0);
+
+	// a summary that pi refuses (no model) is reported the same way
+	h.panel.handleInput("\r");
+	h.panel.handleInput("j");
+	h.panel.handleInput("\r");
+	await flush();
+	assert.equal(h.closed(), false);
+	assert.ok(h.text().at(-1)!.includes("restore failed: No model available"), h.text().at(-1));
+
+	h.panel.handleInput("1");
+	h.panel.handleInput("\r");
+	await flush();
+	assert.equal(h.closed(), false);
+	assert.ok(h.text().at(-1)!.includes("resume failed: session file not found"), h.text().at(-1));
+	h.panel.dispose();
+});
+
+test("keys are ignored while an Enter action is waiting for pi", async () => {
+	let finish: (() => void) | undefined;
+	const h = makeTreeActionPanel({
+		resumeSession: () =>
+			new Promise((resolve) => {
+				finish = () => resolve("switched");
+			}),
+	});
+	await h.panel.load();
+	h.panel.handleInput("\r");
+	assert.ok(h.text().at(-1)!.includes("resume…"), h.text().at(-1));
+	assert.deepEqual(h.hidden, [true]);
+	// q would normally quit; a second Enter would start another resume
+	h.panel.handleInput("q");
+	h.panel.handleInput("\r");
+	h.panel.handleInput("l");
+	assert.equal(h.closed(), false);
+	assert.equal(h.panel.state.focus, "sessions");
+	assert.ok(finish, "the action should have been started once");
+	finish!();
+	await flush();
+	assert.equal(h.closed(), true);
+});
+
+test("InputDialog is a reusable 3-row prompt: title / value / subject / hints come from open()", () => {
+	const submitted: string[] = [];
+	let cancelled = 0;
+	const dlg = new InputDialog({ theme: fakeTheme, onChange: () => {} });
+	assert.equal(dlg.isOpen, false);
+	assert.deepEqual(dlg.hints, []);
+
+	dlg.open({ title: "Rename", value: "old", subject: "session A", hints: [["Enter", "rename"]], onSubmit: (v) => submitted.push(v), onCancel: () => cancelled++ });
+	assert.equal(dlg.isOpen, true);
+	assert.deepEqual(dlg.hints, [["Enter", "rename"]]);
+	const lines = dlg.render(40);
+	assert.equal(lines.length, 3);
+	for (const l of lines) assert.equal(visibleWidth(l), 40);
+	assert.ok(lines[0]!.includes("┌─ Rename ") && lines[0]!.includes("session A"), lines[0]);
+	assert.ok(lines[1]!.includes("old"), lines[1]);
+	assert.ok(lines[2]!.startsWith("└"), lines[2]);
+
+	// the cursor starts at the end, so typing appends
+	dlg.handleInput("!");
+	assert.equal(dlg.getValue(), "old!");
+	dlg.handleInput("\r");
+	assert.deepEqual(submitted, ["old!"]);
+
+	// a second open swaps every part of the spec, including the callbacks
+	dlg.open({ title: "Label", hints: [], onSubmit: (v) => submitted.push(`label:${v}`), onCancel: () => cancelled++ });
+	assert.equal(dlg.getValue(), "");
+	assert.ok(dlg.render(40)[0]!.includes("┌─ Label "));
+	dlg.handleInput("\x1b");
+	assert.equal(cancelled, 1);
+	dlg.close();
+	assert.equal(dlg.isOpen, false);
+});
+
+test("InputDialog capture mode records key presses instead of text", () => {
+	const submitted: string[] = [];
+	let cancelled = 0;
+	const dlg = new InputDialog({ theme: fakeTheme, onChange: () => {} });
+	const open = (): void => dlg.open({
+		title: "Add key", capture: true, placeholder: "Press a key…", hints: [["Enter", "add"]],
+		onSubmit: (v) => submitted.push(v), onCancel: () => cancelled++,
+	});
+
+	// 空的字段显示占位提示，还没有任何按键。
+	open();
+	const field = (): string => stripTerminalSequences(dlg.render(40)[1]!);
+	assert.ok(field().includes("Press a key…"), field());
+	// 释放事件和粘贴都不是单个按键，忽略掉。
+	dlg.handleInput("\x1b[103;1:3u");
+	dlg.handleInput("hello");
+	assert.ok(field().includes("Press a key…"), field());
+	// ctrl+d 录进来，字段显示成可读的 Ctrl+d；有按键时 Enter 保存原始 chord 文本。
+	dlg.handleInput("\x04");
+	assert.ok(field().includes("Ctrl+d"), field());
+	dlg.handleInput("\r");
+	assert.deepEqual(submitted, ["ctrl+d"]);
+	assert.equal(cancelled, 0);
+
+	// 多键序列按顺序累积（gg），Backspace 退回一步。
+	open();
+	dlg.handleInput("g");
+	dlg.handleInput("g");
+	assert.ok(field().includes("gg"), field());
+	dlg.handleInput("\x7f");
+	assert.ok(!field().includes("gg"), field());
+	dlg.handleInput("g");
+	dlg.handleInput("\r");
+	assert.deepEqual(submitted, ["ctrl+d", "g g"]);
+
+	// 序列为空时 Enter 当普通键录入（所以 enter 自己也能绑）；Backspace 是保留键，
+	// 只用来退回：没有可退的步骤时按它什么都不发生，永远录不进去。
+	open();
+	dlg.handleInput("\r");
+	dlg.handleInput("\r");
+	assert.deepEqual(submitted, ["ctrl+d", "g g", "enter"]);
+	open();
+	dlg.handleInput("\x7f");
+	dlg.handleInput("\x7f");
+	assert.ok(field().includes("Press a key…"), field());
+	dlg.handleInput("g");
+	dlg.handleInput("g");
+	dlg.handleInput("\x7f");
+	assert.ok(field().includes("g") && !field().includes("gg"), field());
+	dlg.handleInput("\x7f");
+	dlg.handleInput("\x7f");
+	assert.ok(field().includes("Press a key…"), field());
+	assert.deepEqual(submitted, ["ctrl+d", "g g", "enter"]);
+
+	// Esc 取消，不提交。
+	open();
+	dlg.handleInput("\x1b");
+	assert.equal(cancelled, 1);
+	assert.equal(submitted.length, 3);
+});
+
+test("InputDialog single capture submits the first valid key and keeps invalid ones with the reason", () => {
+	const submitted: string[] = [];
+	let cancelled = 0;
+	const dlg = new InputDialog({ theme: fakeTheme, onChange: () => {} });
+	dlg.open({
+		title: "Open shortcut", capture: "single", placeholder: "Press a key…", hints: [["Esc", "cancel"]],
+		validate: (value) => /^(?:ctrl|alt|shift|super)\+/.test(value) ? undefined : "Use a modifier",
+		onSubmit: (v) => submitted.push(v), onCancel: () => cancelled++,
+	});
+	const field = (): string => stripTerminalSequences(dlg.render(40)[1] ?? "");
+	// 裸字母被挡下：留在弹窗里，显示原因和刚按的键，继续等下一个键。
+	dlg.handleInput("x");
+	assert.equal(submitted.length, 0);
+	assert.equal(dlg.isOpen, true);
+	assert.ok(field().includes("x"), field());
+	assert.ok(stripTerminalSequences(dlg.render(40).join("\n")).includes("Use a modifier"));
+	// 合格的键位立刻提交，不需要 Enter。
+	dlg.handleInput("\x01");
+	assert.deepEqual(submitted, ["ctrl+a"]);
+	// Esc 仍然先当取消。
+	dlg.handleInput("\x1b");
+	assert.equal(cancelled, 1);
+});
+
+test("SelectDialog is a reusable centered menu: items / cursor / subject / hints come from open()", () => {
+	const picked: number[] = [];
+	let cancelled = 0;
+	const dlg = new SelectDialog({ theme: fakeTheme, onChange: () => {} });
+	assert.equal(dlg.isOpen, false);
+	assert.deepEqual(dlg.hints, []);
+
+	dlg.open({
+		title: "Delete?",
+		items: ["Yes", "No"],
+		initialIndex: 1,
+		subject: "session A",
+		hints: [["Enter", "pick"]],
+		onSelect: (i) => picked.push(i),
+		onCancel: () => cancelled++,
+	});
+	assert.equal(dlg.isOpen, true);
+	assert.equal(dlg.selectedIndex, 1);
+	assert.deepEqual(dlg.hints, [["Enter", "pick"]]);
+	const lines = dlg.render(40).map((l) => stripTerminalSequences(l));
+	assert.equal(lines.length, 4, "border + one row per entry + border");
+	for (const l of dlg.render(40)) assert.equal(visibleWidth(l), 40);
+	assert.ok(lines[0]!.includes("┌─ Delete? ") && lines[0]!.includes("session A"), lines[0]);
+	assert.ok(lines[1]!.includes("  Yes") && !lines[1]!.includes("›"), lines[1]);
+	assert.ok(lines[2]!.includes("› No"), lines[2]);
+	assert.ok(lines[3]!.startsWith("└"), lines[3]);
+
+	// j / k / arrows move and clamp; Enter reports the index; Esc cancels; other keys do nothing
+	dlg.handleInput("j");
+	assert.equal(dlg.selectedIndex, 1);
+	dlg.handleInput("k");
+	assert.equal(dlg.selectedIndex, 0);
+	dlg.handleInput("\x1b[B");
+	assert.equal(dlg.selectedIndex, 1);
+	dlg.handleInput("x");
+	assert.equal(dlg.selectedIndex, 1);
+	dlg.handleInput("\r");
+	assert.deepEqual(picked, [1]);
+	dlg.handleInput("\x1b");
+	assert.equal(cancelled, 1);
+
+	// a second open swaps the spec; an out-of-range initial index is clamped
+	dlg.open({ title: "Sort", items: ["a", "b", "c"], initialIndex: 9, hints: [], onSelect: (i) => picked.push(i), onCancel: () => cancelled++ });
+	assert.equal(dlg.selectedIndex, 2);
+	assert.ok(stripTerminalSequences(dlg.render(30)[0]!).includes("┌─ Sort "));
+	dlg.close();
+	assert.equal(dlg.isOpen, false);
+	dlg.handleInput("\r");
+	assert.deepEqual(picked, [1], "a closed dialog ignores input");
+});
+
+test("SelectDialog scrolls a long list within maxRows, keeping the cursor visible", () => {
+	const dlg = new SelectDialog({ theme: fakeTheme, onChange: () => {} });
+	const items = Array.from({ length: 8 }, (_, i) => `item${i}`);
+	const spec = { title: "Fork", items, hints: [], maxRows: 3, onSelect: () => {}, onCancel: () => {} };
+
+	// only maxRows entries are drawn (+ 2 borders), starting at the top
+	dlg.open({ ...spec, initialIndex: 0 });
+	let lines = dlg.render(30).map((l) => stripTerminalSequences(l));
+	assert.equal(lines.length, 5, "3 visible rows + 2 borders");
+	assert.ok(lines.some((l) => l.includes("› item0")), "cursor on the first item");
+	assert.ok(!lines.some((l) => l.includes("item3")), "items past the window are hidden");
+	for (const l of dlg.render(30)) assert.equal(visibleWidth(l), 30);
+
+	// moving past the bottom edge scrolls the window down, keeping the cursor row shown
+	dlg.handleInput("j");
+	dlg.handleInput("j");
+	dlg.handleInput("j");
+	assert.equal(dlg.selectedIndex, 3);
+	lines = dlg.render(30).map((l) => stripTerminalSequences(l));
+	assert.equal(lines.length, 5);
+	assert.ok(lines.some((l) => l.includes("› item3")), "cursor row stays visible after scrolling");
+	assert.ok(!lines.some((l) => l.includes("item0")), "the top item scrolled out of view");
+
+	// opening with the cursor at the end shows the bottom window
+	dlg.open({ ...spec, initialIndex: 7 });
+	lines = dlg.render(30).map((l) => stripTerminalSequences(l));
+	assert.equal(lines.length, 5);
+	assert.ok(lines.some((l) => l.includes("› item7")), "last item visible");
+	assert.ok(!lines.some((l) => l.includes("item4")), "earlier items scrolled off");
+});
+
+test("the sessions cursor starts on pi's current session and stays put when it is not listed", async () => {
+	const make = (currentSessionFile?: string) => {
+		const data: DataSource = {
+			listSessions: async (scope) => (scope === "all" ? [row(1, "/a"), row(2, "/b"), row(3, "/c")] : [row(1, "/a"), row(2, "/b")]),
+			loadTree: async () => [],
+			loadContent: async () => [],
+		};
+		return new LazyPanel({
+			theme: fakeTheme,
+			data,
+			getHeight: () => 20,
+			requestRender: () => {},
+			onClose: () => {},
+			...(currentSessionFile ? { currentSessionFile } : {}),
+		});
+	};
+
+	// 当前会话是第二行：打开时光标就在第二行
+	const panel = make("/tmp/s2.jsonl");
+	await panel.load();
+	assert.equal(panel.state.cursor.sessions, 1);
+	// 之后 A 切范围重新加载时不再定位，光标照旧回到顶部
+	panel.handleInput("A");
+	await flush();
+	await flush();
+	assert.equal(panel.state.scope, "all");
+	assert.equal(panel.state.cursor.sessions, 0);
+
+	// 新会话（还没有文件，或者文件没列出来）：光标留在第一行
+	assert.equal((await loaded(make())).state.cursor.sessions, 0);
+	assert.equal((await loaded(make("/tmp/new.jsonl"))).state.cursor.sessions, 0);
+});
+
+async function loaded(panel: LazyPanel): Promise<LazyPanel> {
+	await panel.load();
+	return panel;
+}
+
+/** Theme with real escape codes for the search colours and the cursor background, so highlight tests can see them. */
+const ansiTheme = {
+	...(fakeTheme as unknown as Record<string, unknown>),
+	bg: (c: string, s: string) => (c === "searchMatchBg" ? `\x1b[43m${s}\x1b[49m` : c === "selectedBg" ? `\x1b[44m${s}\x1b[49m` : s),
+	underline: (s: string) => `\x1b[4m${s}\x1b[24m`,
+	inverse: (s: string) => `\x1b[7m${s}\x1b[27m`,
+} as unknown as Theme;
+
+/**
+ * Panel for the search tests: 4 sessions with names / models / paths / dates,
+ * the forked tree e0 ─┬─ e1 "north" (side, folded) → e2 "hidden gem", └─ e3 "south" → e4 "gem stone" (leaf),
+ * and content blocks whose text lines contain "needle" twice.
+ */
+function makeSearchPanel(opts: { height?: number; theme?: Theme } = {}) {
+	const day = (d: number) => new Date(2026, 8, d, 12).getTime();
+	const sessions: SessionRow[] = [
+		{ ...row(1, "/home/u/code/FilmRecall"), name: "FilmRecall", preview: "scan film", model: "claude-opus-4", updatedAt: day(10) },
+		{ ...row(2, "/home/u/code/other"), preview: "hello world", model: "gpt-5", updatedAt: day(15) },
+		{ ...row(3, "/home/u/docs"), name: "Recall notes", preview: "notes", model: "claude-sonnet-4", updatedAt: day(20) },
+		{ ...row(4, "/tmp/x"), preview: "film review", model: "claude-opus-4", updatedAt: day(5) },
+	];
+	const contentCalls: Array<string | undefined> = [];
+	const b = (i: number, md: string): ContentBlock => ({ entryId: `e${i}`, role: i % 2 ? "assistant" : "user", timestamp: 0, markdown: md });
+	const data: DataSource = {
+		listSessions: async () => sessions,
+		loadTree: async () => [
+			treeRow(0, true, { text: "root" }),
+			treeRow(1, false, { parentId: "e0", text: "north" }),
+			treeRow(2, false, { parentId: "e1", text: "hidden gem" }),
+			treeRow(3, true, { parentId: "e0", text: "south" }),
+			treeRow(4, true, { parentId: "e3", isLeaf: true, text: "gem stone" }),
+		],
+		loadContent: async (_file, leaf) => {
+			contentCalls.push(leaf);
+			return leaf === "e1" || leaf === "e2"
+				? [b(0, "root"), b(1, "north"), b(2, "hidden gem")]
+				: [b(0, "first message\n\nneedle here"), b(3, "south text"), b(4, "delta needle end")];
+		},
+	};
+	const panel = new LazyPanel({ theme: opts.theme ?? fakeTheme, data, getHeight: () => opts.height ?? 30, requestRender: () => {}, onClose: () => {} });
+	// 160 columns: the left column is 40 wide, wide enough for "2/2 matches" next to "[1] SESSIONS"
+	return {
+		panel,
+		contentCalls,
+		text: (width = 160) => panel.render(width).map((l) => stripTerminalSequences(l)),
+		raw: (width = 160) => panel.render(width),
+	};
+}
+
+test("/ in SESSIONS jumps live to the first match from the cursor, Enter keeps it, n / N wrap, Esc in the bar restores the cursor", async () => {
+	const h = makeSearchPanel();
+	await h.panel.load();
+	const header = () => h.text().find((l) => l.includes("[1] SESSIONS"))!;
+	const footer = () => h.text().at(-1)!;
+	h.panel.handleInput("j");
+	await settle();
+	assert.equal(h.panel.state.cursor.sessions, 1);
+
+	// typing jumps at once: "film" is in FilmRecall (row 0) and "film review" (row 3); the first match at / after row 1 is row 3
+	h.panel.handleInput("/");
+	for (const ch of "film") h.panel.handleInput(ch);
+	assert.deepEqual(h.panel.state.search.sessions?.matches, [0, 3]);
+	assert.equal(h.panel.state.cursor.sessions, 3);
+	assert.ok(header().includes("2/2 matches"), header());
+	// no match: back to where / was pressed, the header says so
+	h.panel.handleInput("z");
+	assert.equal(h.panel.state.cursor.sessions, 1);
+	assert.ok(header().includes("no matches"), header());
+	h.panel.handleInput("\x7f");
+	assert.equal(h.panel.state.cursor.sessions, 3);
+
+	// Enter: the query stays, the footer shows it with the position and the n / N / Esc keys
+	h.panel.handleInput("\r");
+	assert.equal(h.panel.state.mode, "normal");
+	assert.equal(h.panel.state.search.sessions?.query, "film");
+	assert.ok(/Search: film\s+2\/2\s+n next\s+N prev\s+Esc clear/.test(footer()), footer());
+	// n wraps to the first match, N back to the last; n is "next match" here although the pane binds it to new session
+	h.panel.handleInput("n");
+	assert.equal(h.panel.state.cursor.sessions, 0);
+	assert.ok(header().includes("1/2 matches"), header());
+	h.panel.handleInput("N");
+	assert.equal(h.panel.state.cursor.sessions, 3);
+	h.panel.handleInput("N");
+	assert.equal(h.panel.state.cursor.sessions, 0);
+	// off the matches the header only counts them; n finds the next one after the cursor
+	h.panel.handleInput("j");
+	assert.equal(h.panel.state.cursor.sessions, 1);
+	assert.ok(header().includes("2 matches") && !header().includes("/2"), header());
+	assert.ok(/Search: film\s+2\s+n next/.test(footer()), footer());
+	h.panel.handleInput("n");
+	assert.equal(h.panel.state.cursor.sessions, 3);
+	await settle();
+
+	// Esc in normal mode ends the search: header and footer go back to normal, n is new session again
+	h.panel.handleInput("\x1b");
+	assert.equal(h.panel.state.search.sessions, undefined);
+	assert.ok(header().includes("4/4 · Current"), header());
+	assert.equal(footer().includes("Search:"), false, footer());
+	h.panel.handleInput("n");
+	assert.ok(footer().includes("new: actions unavailable"), footer());
+	assert.equal(h.panel.state.cursor.sessions, 3);
+
+	// Esc in the bar: the query is dropped and the cursor goes back to where / was pressed
+	h.panel.handleInput("/");
+	for (const ch of "hello") h.panel.handleInput(ch);
+	assert.equal(h.panel.state.cursor.sessions, 1);
+	h.panel.handleInput("\x1b");
+	assert.equal(h.panel.state.mode, "normal");
+	assert.equal(h.panel.state.search.sessions, undefined);
+	assert.equal(h.panel.state.cursor.sessions, 3);
+	// an empty query on Enter means no search
+	h.panel.handleInput("/");
+	h.panel.handleInput("\r");
+	assert.equal(h.panel.state.search.sessions, undefined);
+	await settle();
+	h.panel.dispose();
+});
+
+test("SESSIONS search honours name: / model: / path: / after: / before: and paints the hits (current match inverse, cursor background kept)", async () => {
+	const h = makeSearchPanel({ theme: ansiTheme });
+	await h.panel.load();
+	const matches = (q: string) => {
+		h.panel.handleInput("/");
+		for (const ch of q) h.panel.handleInput(ch);
+		const m = [...(h.panel.state.search.sessions?.matches ?? [])];
+		h.panel.handleInput("\x1b");
+		return m;
+	};
+	assert.deepEqual(matches("model:opus"), [0, 3]);
+	assert.deepEqual(matches("name:recall"), [0, 2]);
+	assert.deepEqual(matches("path:docs"), [2]);
+	assert.deepEqual(matches("after:2026-09-12"), [1, 2]);
+	assert.deepEqual(matches("before:2026-09-12 film"), [0, 3]);
+	assert.deepEqual(matches("model:opus recall"), [0]);
+	assert.deepEqual(matches("tag:x film"), [0, 3], "tag: means nothing for sessions");
+	await settle();
+
+	// hits are painted on the matching rows only: "Film" on the cursor row (inverse), "film" on row 3 (underline)
+	h.panel.handleInput("/");
+	for (const ch of "film") h.panel.handleInput(ch);
+	h.panel.handleInput("\r");
+	assert.equal(h.panel.state.cursor.sessions, 0);
+	const raw = h.raw();
+	const current = raw.find((l) => stripTerminalSequences(l).includes("FilmRecall"))!;
+	assert.ok(current.includes("\x1b[7m\x1b[43mFilm\x1b[49m\x1b[27m"), current);
+	assert.ok(current.slice(current.indexOf("Film\x1b[49m")).includes("\x1b[44m"), `the selected background continues after the hit: ${current}`);
+	const other = raw.find((l) => stripTerminalSequences(l).includes("film review"))!;
+	assert.ok(other.includes("\x1b[4m\x1b[43mfilm\x1b[49m\x1b[24m"), other);
+	const miss = raw.find((l) => stripTerminalSequences(l).includes("hello world"))!;
+	assert.equal(miss.includes("\x1b[43m"), false, miss);
+	for (const l of raw) assert.equal(visibleWidth(l), 160);
+	await settle();
+	h.panel.dispose();
+});
+
+test("/ in TREE finds rows inside folded branches, unfolds them on jump and the content pane follows; Esc in the bar restores the folds", async () => {
+	const h = makeSearchPanel();
+	await h.panel.load();
+	const header = () => h.text().find((l) => l.includes("[2] TREE"))!;
+	const folded = () => [...h.panel.state.treeFolded].sort();
+	h.panel.handleInput("2");
+	assert.equal(h.panel.state.cursor.tree, 3, "cursor on the active leaf e4");
+	assert.deepEqual(folded(), ["e1"]);
+
+	// "gem" is in e2 (hidden inside the folded e1) and e4; from e4 the first match is e4 itself
+	h.panel.handleInput("/");
+	for (const ch of "gem") h.panel.handleInput(ch);
+	assert.deepEqual(h.panel.state.search.tree?.matches, [2, 4]);
+	assert.equal(h.panel.state.cursor.tree, 3);
+	assert.deepEqual(folded(), ["e1"]);
+	assert.ok(header().includes("2/2 matches"), header());
+	// "gem hidden" only matches e2: the branch opens, the cursor lands on it and the content pane shows that branch
+	for (const ch of " hidden") h.panel.handleInput(ch);
+	await flush();
+	assert.deepEqual(folded(), []);
+	assert.equal(h.panel.state.cursor.tree, 2);
+	assert.equal(h.panel.state.contentHighlight, "e2");
+	assert.ok(header().includes("1/1 matches"), header());
+	assert.ok(h.text().some((l) => l.includes("› ") && l.includes("user: hidden gem")), h.text().join("\n"));
+	// Esc in the bar: folds and cursor as before /
+	h.panel.handleInput("\x1b");
+	await flush();
+	assert.deepEqual(folded(), ["e1"]);
+	assert.equal(h.panel.state.cursor.tree, 3);
+	assert.equal(h.panel.state.contentHighlight, "e4");
+	// (compared rather than asserted: an assert on the property would narrow it to undefined for the rest of the test)
+	assert.equal(h.panel.state.search.tree === undefined, true, "the search is gone");
+
+	// Enter keeps the search; n wraps from e4 to e2 (unfolding e1), N goes back to e4 (visible row 4 now)
+	h.panel.handleInput("/");
+	for (const ch of "gem") h.panel.handleInput(ch);
+	h.panel.handleInput("\r");
+	assert.equal(h.panel.state.mode, "normal");
+	h.panel.handleInput("n");
+	await flush();
+	assert.deepEqual(folded(), []);
+	assert.equal(h.panel.state.cursor.tree, 2);
+	assert.equal(h.panel.state.contentHighlight, "e2");
+	assert.ok(header().includes("1/2 matches"), header());
+	h.panel.handleInput("N");
+	await flush();
+	assert.equal(h.panel.state.cursor.tree, 4);
+	assert.equal(h.panel.state.contentHighlight, "e4");
+	assert.ok(header().includes("2/2 matches"), header());
+	// / again edits the same query; tag: only looks at labels and nothing here has one
+	h.panel.handleInput("/");
+	for (const ch of " tag:x") h.panel.handleInput(ch);
+	assert.equal(h.panel.state.search.tree?.query, "gem tag:x");
+	assert.ok(header().includes("no matches"), header());
+	assert.equal(h.panel.state.cursor.tree, 4);
+	h.panel.handleInput("\x1b");
+	h.panel.dispose();
+});
+
+test("/ in CONTENT matches the rendered text lines (not the box headers), scrolls the hit to the top, n / N step and wrap", async () => {
+	const h = makeSearchPanel({ height: 12, theme: ansiTheme });
+	await h.panel.load();
+	h.text();
+	const header = () => h.text().find((l) => l.includes("[3] CONTENT"))!;
+	h.panel.handleInput("3");
+	// the pane starts scrolled to the active leaf; search from the top
+	h.panel.handleInput("g");
+	h.panel.handleInput("g");
+	assert.equal(h.panel.state.cursor.content, 0);
+	h.panel.handleInput("/");
+	for (const ch of "needle") h.panel.handleInput(ch);
+	const matches = [...h.panel.state.search.content!.matches];
+	assert.equal(matches.length, 2, `two text lines contain needle: ${matches}`);
+	assert.equal(h.panel.state.cursor.content, matches[0], "the first hit is scrolled to the top");
+	assert.ok(header().includes("1/2 matches"), header());
+	const hit = h.raw().find((l) => stripTerminalSequences(l).includes("needle here"))!;
+	assert.ok(hit.includes("\x1b[7m\x1b[43mneedle\x1b[49m\x1b[27m"), `the current hit is painted: ${hit}`);
+	h.panel.handleInput("\r");
+	assert.equal(h.panel.state.mode, "normal");
+	h.panel.handleInput("n");
+	assert.ok(header().includes("2/2 matches"), header());
+	assert.ok(h.panel.state.cursor.content > matches[0]!, "scrolled towards the second hit (clamped to the last page)");
+	h.panel.handleInput("n");
+	assert.equal(h.panel.state.cursor.content, matches[0], "wrapped to the first hit");
+	h.panel.handleInput("N");
+	assert.ok(header().includes("2/2 matches"), header());
+	h.panel.handleInput("N");
+	assert.ok(header().includes("1/2 matches"), header());
+	// the YOU / ASSISTANT headers and the qualifiers are not searched here
+	h.panel.handleInput("\x1b");
+	assert.equal(h.panel.state.search.content, undefined);
+	h.panel.handleInput("/");
+	for (const ch of "you") h.panel.handleInput(ch);
+	assert.ok(header().includes("no matches"), header());
+	for (const ch of " model:opus") h.panel.handleInput(ch);
+	assert.ok(header().includes("no matches"), header());
+	h.panel.handleInput("\x1b");
+	assert.ok(header().includes("3 messages"), header());
+	for (const l of h.raw()) assert.equal(visibleWidth(l), 160);
+	h.panel.dispose();
+});
+
+test("each pane keeps its own query: switching panes shows the other pane's hints, coming back resumes n / N", async () => {
+	const h = makeSearchPanel();
+	await h.panel.load();
+	const footer = () => h.text().at(-1)!;
+	h.panel.handleInput("/");
+	for (const ch of "film") h.panel.handleInput(ch);
+	h.panel.handleInput("\r");
+	assert.equal(h.panel.state.cursor.sessions, 0);
+	h.panel.handleInput("2");
+	assert.ok(!footer().includes("Search:") && footer().includes("a Tree"), footer());
+	// the sessions header keeps counting while another pane is focused; n here says there is no tree search
+	assert.ok(h.text().find((l) => l.includes("[1] SESSIONS"))!.includes("1/2 matches"));
+	h.panel.handleInput("n");
+	assert.ok(footer().includes("no active search"), footer());
+	h.panel.handleInput("/");
+	for (const ch of "south") h.panel.handleInput(ch);
+	h.panel.handleInput("\r");
+	assert.equal(h.panel.state.search.tree?.query, "south");
+	h.panel.handleInput("1");
+	assert.equal(h.panel.state.search.sessions?.query, "film");
+	assert.ok(footer().includes("Search: film"), footer());
+	h.panel.handleInput("n");
+	assert.equal(h.panel.state.cursor.sessions, 3);
+	await settle();
+	// the tree of the new session was searched again with the tree pane's query
+	assert.deepEqual(h.panel.state.search.tree?.matches, [3]);
+	// Esc only ends the focused pane's search
+	h.panel.handleInput("\x1b");
+	assert.equal(h.panel.state.search.sessions, undefined);
+	assert.equal(h.panel.state.search.tree?.query, "south");
+	h.panel.dispose();
+});
+
+// ---------------------------------------------------------------------------
+// SESSIONS: d delete / r rename / s sort / i info
+// ---------------------------------------------------------------------------
+
+/**
+ * Panel over a mutable list of 3 named sessions with a recording ActionSource.
+ * `listSessions` honours the sort it is asked for (threaded lists the rows
+ * backwards) so the cursor-follows-its-session behaviour can be observed.
+ */
+function makeSessionActionPanel(
+	opts: { actions?: Partial<ActionSource> | null; data?: Partial<DataSource>; currentSessionFile?: string; info?: boolean; forkPoints?: ForkPoint[] } = {},
+) {
+	const sessions: SessionRow[] = [
+		{ ...row(1, "/a"), name: "alpha", preview: "first words" },
+		{ ...row(2, "/a"), name: "beta", preview: "second words" },
+		{ ...row(3, "/a"), preview: "third words" },
+	];
+	const lists: SessionSortMode[] = [];
+	const treeCalls: string[] = [];
+	const deletes: string[] = [];
+	const renames: Array<{ file: string; name: string }> = [];
+	const copies: string[] = [];
+	const infoCalls: string[] = [];
+	const usageCalls: string[] = [];
+	const news: string[] = [];
+	const compacts: Array<{ file: string; instructions: string | undefined }> = [];
+	const forks: Array<{ file: string; entryId: string }> = [];
+	const clones: string[] = [];
+	const lastReplies: string[] = [];
+	const forkPointCalls: string[] = [];
+	const exports: Array<{ file: string; format: ExportFormat; path: string }> = [];
+	const imports: string[] = [];
+	const shares: Array<{ file: string; destination: SessionShareDestination }> = [];
+	const pins: string[][] = [];
+	let closed = false;
+	const hidden: boolean[] = [];
+	const forkPoints = opts.forkPoints ?? [
+		{ entryId: "e1", text: "first question" },
+		{ entryId: "e2", text: "second question" },
+	];
+	const data: DataSource = {
+		listSessions: async (_scope, sort, pinned) => {
+			lists.push(sort);
+			const base = sort === "threaded" ? [...sessions].reverse() : [...sessions];
+			if (!pinned || pinned.length === 0) return base;
+			// 置顶的行按 pinned 里的位置提到最前，其余保持原顺序（复刻 sortSessions 的行为）。
+			const order = new Map(pinned.map((f, i) => [f, i]));
+			const top = base.filter((r) => order.has(r.file)).sort((a, b) => order.get(a.file)! - order.get(b.file)!);
+			const rest = base.filter((r) => !order.has(r.file));
+			return [...top, ...rest];
+		},
+		loadTree: async (file) => {
+			treeCalls.push(file);
+			return [treeRow(0), treeRow(1, true, { isLeaf: true })];
+		},
+		loadContent: async () => [block(0), block(1)],
+		loadForkPoints: async (file: string) => {
+			forkPointCalls.push(file);
+			return forkPoints;
+		},
+		...(opts.info === false
+			? {}
+			: {
+					loadContextUsage: async (file: string): Promise<ContextUsageInfo | undefined> => {
+						usageCalls.push(file);
+						const s = sessions.find((r) => r.file === file);
+						if (!s) return undefined;
+						return {
+							model: "claude-opus-4",
+							messages: 12,
+							used: 84_213,
+							contextWindow: 200_000,
+							percent: 84_213 / 200_000,
+							compactThreshold: 0.918,
+							compactRemaining: 100_000,
+							categories: [
+								{ key: "systemPrompt", tokens: 1700, color: "accent", prompt: "SYSTEM_PROMPT_SOURCE" },
+								{ key: "toolResults", tokens: 40_000, color: "mdLink", prompt: "TOOL_RESULT_SOURCE" },
+								{ key: "context", tokens: 42_513, color: "warning", prompt: "CONVERSATION_SOURCE" },
+								{ key: "other", tokens: 0, color: "customMessageLabel" },
+								{ key: "freeSpace", tokens: 115_787, color: "dim" },
+							],
+						};
+					},
+				}),
+		...(opts.info === false
+			? {}
+			: {
+					loadSessionInfo: async (file: string): Promise<SessionInfo | undefined> => {
+						infoCalls.push(file);
+						const s = sessions.find((r) => r.file === file);
+						if (!s) return undefined;
+						return {
+							...(s.name ? { name: s.name } : {}),
+							model: "claude-opus-4",
+							messages: 12,
+							tokens: 84_213,
+							cost: 1.4211,
+							createdAt: new Date(2026, 8, 20, 22, 18).getTime(),
+							updatedAt: new Date(2026, 8, 20, 22, 21).getTime(),
+							path: file,
+							id: s.id,
+						};
+					},
+				}),
+		...(opts.data ?? {}),
+	};
+	const source: ActionSource = {
+		copyNodeText: async () => true,
+		setNodeLabel: async () => {},
+		resumeSession: async () => "switched",
+		restoreNode: async () => "restored",
+		deleteSession: async (file) => {
+			deletes.push(file);
+			const i = sessions.findIndex((r) => r.file === file);
+			if (i >= 0) sessions.splice(i, 1);
+			return "trash";
+		},
+		renameSession: async (file, name) => {
+			renames.push({ file, name });
+			const s = sessions.find((r) => r.file === file);
+			if (!s) return;
+			if (name) s.name = name;
+			else delete s.name;
+		},
+		newSession: async (name) => {
+			news.push(name);
+			return "switched";
+		},
+		compactSession: async (file, instructions) => {
+			compacts.push({ file, instructions });
+			return file === opts.currentSessionFile ? "compacted" : "switched";
+		},
+		forkSession: async (file, entryId) => {
+			forks.push({ file, entryId });
+			return "switched";
+		},
+		cloneSession: async (file) => {
+			clones.push(file);
+			return "switched";
+		},
+		copyLastReply: async (file) => {
+			lastReplies.push(file);
+			return true;
+		},
+		copyText: async (text) => void copies.push(text),
+		// 空输入 = 默认路径 /work/pi-session-<n>.<format>；/work/taken.html 假装已经存在。
+		exportTarget: (file, format, input) => {
+			const path = input.trim() || `/work/pi-session-${file.replace(/^.*\/(.*)\.jsonl$/, "$1")}.${format}`;
+			return { path, exists: path === "/work/taken.html" };
+		},
+		exportSession: async (file, format, path) => {
+			exports.push({ file, format, path });
+			return path;
+		},
+		importSession: async (input) => {
+			imports.push(input);
+			return "switched";
+		},
+		shareSession: async (file, destination) => {
+			shares.push({ file, destination });
+			return { url: "https://pi.dev/session/#abc", gistUrl: "https://gist.github.com/me/abc", destination: "gist" };
+		},
+		updateSessionState: async ({ type, files }) => {
+			const prev = pins.at(-1) ?? [];
+			const next = type === "pin" ? [...files.filter((f) => !prev.includes(f)), ...prev] : prev.filter((f) => !files.includes(f));
+			pins.push(next);
+			return { pinned: next, archived: [] };
+		},
+		...(opts.actions ?? {}),
+	};
+	const panel = new LazyPanel({
+		theme: fakeTheme,
+		data,
+		...(opts.actions === null ? {} : { actions: source }),
+		getHeight: () => 24,
+		requestRender: () => {},
+		onClose: () => {
+			closed = true;
+		},
+		setHidden: (v) => void hidden.push(v),
+		...(opts.currentSessionFile ? { currentSessionFile: opts.currentSessionFile } : {}),
+	});
+	return {
+		panel,
+		sessions,
+		lists,
+		treeCalls,
+		deletes,
+		renames,
+		copies,
+		infoCalls,
+		usageCalls,
+		news,
+		compacts,
+		forks,
+		clones,
+		lastReplies,
+		forkPointCalls,
+		exports,
+		imports,
+		shares,
+		pins,
+		closed: () => closed,
+		hidden,
+		text: (width = 120) => panel.render(width).map((l) => stripTerminalSequences(l)),
+		footer: () => stripTerminalSequences(panel.render(120).at(-1)!),
+		// 200 列：左栏 50 列，标题右侧放得下 "2/3 · Current · created"
+		header: () => stripTerminalSequences(panel.render(200).find((l) => l.includes("[1] SESSIONS"))!),
+	};
+}
+
+/** The centered dialog whose top border carries `title`: its row plus the lines of the box (up to its own bottom-left corner). */
+function dialogAt(lines: string[], title: string): { top: number; title: string; body: string[] } | undefined {
+	const top = lines.findIndex((l) => l.includes(`┌─ ${title} `));
+	if (top < 0) return undefined;
+	// 弹窗画在面板上面，同一行的其他位置也可能有面板自己的 └：只看弹窗左边框那一列。
+	const col = lines[top]!.indexOf(`┌─ ${title} `);
+	const body: string[] = [];
+	for (let i = top + 1; i < lines.length && lines[i]!.charAt(col) !== "└"; i++) body.push(lines[i]!);
+	return { top, title: lines[top]!, body };
+}
+
+test("d asks Delete session? in a centered Yes / No box starting on No; n / Esc / Enter-on-No cancel without deleting", async () => {
+	const h = makeSessionActionPanel();
+	await h.panel.load();
+	h.panel.handleInput("j");
+	await settle();
+	assert.equal(h.panel.state.cursor.sessions, 1);
+
+	h.panel.handleInput("d");
+	assert.equal(h.panel.state.mode, "confirm");
+	const lines = h.text();
+	const dlg = dialogAt(lines, DELETE_SESSION_TITLE);
+	assert.ok(dlg, "the confirmation should be drawn");
+	assert.ok(dlg.top > 2 && dlg.top < lines.length - 6, `dialog row ${dlg.top} of ${lines.length}`);
+	assert.ok(dlg.title.includes("beta") && !dlg.title.includes("second words"), `subject = name · date, not the preview: ${dlg.title}`);
+	assert.equal(dlg.body.length, 2);
+	assert.ok(dlg.body[0]!.includes("  Yes") && !dlg.body[0]!.includes("›"), dlg.body[0]);
+	assert.ok(dlg.body[1]!.includes("› No"), dlg.body[1]);
+	assert.ok(h.footer().includes("CONFIRM") && h.footer().includes("y/n choose") && h.footer().includes("Esc cancel"), h.footer());
+	for (const l of h.panel.render(120)) assert.equal(visibleWidth(l), 120);
+
+	// n cancels; the row is still there and the keys go back to the pane
+	h.panel.handleInput("n");
+	await flush();
+	assert.equal(h.panel.state.mode, "normal");
+	assert.equal(dialogAt(h.text(), DELETE_SESSION_TITLE), undefined);
+	assert.deepEqual(h.deletes, []);
+	assert.equal(h.sessions.length, 3);
+
+	// Esc cancels too
+	h.panel.handleInput("d");
+	h.panel.handleInput("\x1b");
+	assert.equal(h.panel.state.mode, "normal");
+	assert.deepEqual(h.deletes, []);
+
+	// Enter on the default (No) is a cancel: a stray Enter never deletes
+	h.panel.handleInput("d");
+	h.panel.handleInput("\r");
+	await flush();
+	assert.equal(h.panel.state.mode, "normal");
+	assert.deepEqual(h.deletes, []);
+	// other keys inside the box neither move the pane cursor nor leak to the keymap
+	h.panel.handleInput("d");
+	h.panel.handleInput("q");
+	h.panel.handleInput("r");
+	assert.equal(h.panel.state.mode, "confirm");
+	assert.equal(h.panel.state.cursor.sessions, 1);
+	h.panel.handleInput("\x1b");
+	h.panel.dispose();
+});
+
+test("y (or k + Enter) confirms: the file is deleted, the list reloads, the cursor is clamped and TREE follows the new row", async () => {
+	const h = makeSessionActionPanel();
+	await h.panel.load();
+	h.panel.handleInput("G");
+	await settle();
+	assert.equal(h.panel.state.cursor.sessions, 2);
+	assert.deepEqual(h.treeCalls, ["/tmp/s1.jsonl", "/tmp/s3.jsonl"]);
+
+	// y on the last row: deleted, cursor moves up onto beta, TREE / CONTENT reload for it
+	h.panel.handleInput("d");
+	h.panel.handleInput("y");
+	await flush();
+	await flush();
+	assert.deepEqual(h.deletes, ["/tmp/s3.jsonl"]);
+	assert.equal(h.panel.state.mode, "normal");
+	assert.equal(h.panel.state.cursor.sessions, 1);
+	assert.equal(h.sessions.length, 2);
+	assert.ok(h.footer().includes("session moved to trash"), h.footer());
+	assert.ok(h.header().includes("2/2"), h.header());
+	assert.deepEqual(h.treeCalls.at(-1), "/tmp/s2.jsonl");
+	assert.ok(!h.text().some((l) => l.includes("third words")), "the deleted row is gone");
+
+	// k + Enter picks Yes as well; deleting the first row keeps the cursor index and reloads the row that slid under it
+	h.panel.handleInput("g");
+	h.panel.handleInput("g");
+	await settle();
+	const before = h.treeCalls.length;
+	h.panel.handleInput("d");
+	h.panel.handleInput("k");
+	h.panel.handleInput("\r");
+	await flush();
+	await flush();
+	assert.deepEqual(h.deletes, ["/tmp/s3.jsonl", "/tmp/s1.jsonl"]);
+	assert.equal(h.panel.state.cursor.sessions, 0);
+	assert.equal(h.treeCalls.length, before + 1);
+	assert.equal(h.treeCalls.at(-1), "/tmp/s2.jsonl");
+	assert.ok(h.header().includes("1/1"), h.header());
+
+	// an unlink fallback and a failure are worded differently, the failure keeps the row
+	const failing = makeSessionActionPanel({
+		actions: {
+			deleteSession: async (file) => {
+				if (file === "/tmp/s1.jsonl") throw new Error("EACCES: permission denied");
+				return "unlink";
+			},
+		},
+	});
+	await failing.panel.load();
+	failing.panel.handleInput("d");
+	failing.panel.handleInput("y");
+	await flush();
+	assert.ok(failing.footer().includes("delete failed: EACCES"), failing.footer());
+	assert.equal(failing.sessions.length, 3);
+	failing.panel.handleInput("j");
+	await settle();
+	failing.panel.handleInput("d");
+	failing.panel.handleInput("y");
+	await flush();
+	await flush();
+	assert.ok(failing.footer().includes("session deleted"), failing.footer());
+	h.panel.dispose();
+	failing.panel.dispose();
+});
+
+test("d on the session pi has open pops a warning box (not the delete confirmation); a panel without actions says so", async () => {
+	const h = makeSessionActionPanel({ currentSessionFile: "/tmp/s2.jsonl" });
+	await h.panel.load();
+	assert.equal(h.panel.state.cursor.sessions, 1, "opens on the current session");
+	h.panel.handleInput("d");
+	assert.equal(dialogAt(h.text(), DELETE_SESSION_TITLE), undefined, "not the delete confirmation");
+	const warn = dialogAt(h.text(), CANNOT_DELETE_ACTIVE_TITLE);
+	assert.ok(warn, "a warning box is drawn instead");
+	assert.ok(warn.title.includes("beta"), warn.title); // subject = the current session's title
+	assert.deepEqual(h.deletes, [], "nothing is deleted");
+	// Enter / Esc dismisses the warning, still nothing deleted
+	h.panel.handleInput("\x1b");
+	assert.equal(h.panel.state.mode, "normal");
+	assert.deepEqual(h.deletes, []);
+	// another row still asks the real confirmation
+	h.panel.handleInput("j");
+	await settle();
+	h.panel.handleInput("d");
+	assert.equal(h.panel.state.mode, "confirm");
+	assert.ok(dialogAt(h.text(), DELETE_SESSION_TITLE), "delete confirmation for a non-current row");
+	h.panel.handleInput("\x1b");
+	h.panel.dispose();
+
+	const bare = makeSessionActionPanel({ actions: null });
+	await bare.panel.load();
+	for (const [key, what] of [
+		["d", "delete"],
+		["r", "rename"],
+		["c", "compact"],
+	] as const) {
+		bare.panel.handleInput(key);
+		assert.equal(bare.panel.state.mode, "normal");
+		assert.ok(bare.footer().includes(`${what}: actions unavailable`), bare.footer());
+	}
+	bare.panel.dispose();
+});
+
+test("the session pi has open is tagged '(current)' after its title, and only that row", async () => {
+	const h = makeSessionActionPanel({ currentSessionFile: "/tmp/s2.jsonl" });
+	await h.panel.load();
+	const tagged = h.text().filter((l) => l.includes("(current)"));
+	assert.equal(tagged.length, 1, "exactly one row carries the current tag");
+	assert.ok(tagged[0]!.includes("beta"), tagged[0]); // the tag sits after that row's title
+	h.panel.dispose();
+
+	// No current session passed → no row is tagged.
+	const none = makeSessionActionPanel();
+	await none.panel.load();
+	assert.equal(none.text().filter((l) => l.includes("(current)")).length, 0);
+	none.panel.dispose();
+});
+
+test("r opens a centered Rename box pre-filled with the name; Enter saves and the row shows it, empty removes, Esc cancels", async () => {
+	const h = makeSessionActionPanel();
+	await h.panel.load();
+	h.panel.handleInput("j");
+	await settle();
+
+	h.panel.handleInput("r");
+	assert.equal(h.panel.state.mode, "rename");
+	const lines = h.text();
+	const dlg = dialogAt(lines, RENAME_DIALOG_TITLE);
+	assert.ok(dlg, "the Rename dialog should be drawn");
+	assert.ok(dlg.top > 2 && dlg.top < lines.length - 6, `dialog row ${dlg.top} of ${lines.length}`);
+	assert.ok(dlg.title.includes("beta") && !dlg.title.includes("second words"), `subject = the session's name: ${dlg.title}`);
+	assert.ok(dlg.body[0]!.includes("beta"), dlg.body[0]);
+	assert.ok(h.footer().includes("RENAME") && h.footer().includes("Enter save") && h.footer().includes("empty field clears it"), h.footer());
+
+	// keys go to the input (the cursor starts at the end); Enter persists and the list reloads with the cursor still on the row
+	for (const ch of " two") h.panel.handleInput(ch);
+	assert.equal(h.panel.state.cursor.sessions, 1);
+	h.panel.handleInput("\r");
+	await flush();
+	await flush();
+	assert.equal(h.panel.state.mode, "normal");
+	assert.equal(dialogAt(h.text(), RENAME_DIALOG_TITLE), undefined);
+	assert.deepEqual(h.renames, [{ file: "/tmp/s2.jsonl", name: "beta two" }]);
+	assert.equal(h.panel.state.cursor.sessions, 1);
+	assert.ok(h.text().some((l) => l.includes("› beta two")), "the row shows the new name");
+	assert.ok(h.footer().includes("renamed: beta two"), h.footer());
+	// the tree is re-read (a session_info entry was appended) but not reloaded from scratch
+	assert.deepEqual(h.treeCalls, ["/tmp/s1.jsonl", "/tmp/s2.jsonl", "/tmp/s2.jsonl"]);
+
+	// Esc leaves the name alone
+	h.panel.handleInput("r");
+	h.panel.handleInput("x");
+	h.panel.handleInput("\x1b");
+	assert.equal(h.panel.state.mode, "normal");
+	assert.equal(h.renames.length, 1);
+
+	// clearing the field removes the name: the row falls back to its preview
+	h.panel.handleInput("r");
+	for (let i = 0; i < "beta two".length; i++) h.panel.handleInput("\x7f");
+	h.panel.handleInput("\r");
+	await flush();
+	await flush();
+	assert.deepEqual(h.renames.at(-1), { file: "/tmp/s2.jsonl", name: "" });
+	assert.ok(h.text().some((l) => l.includes("› second words")), "the row shows the preview again");
+	assert.ok(h.footer().includes("name removed"), h.footer());
+
+	// a row without a name starts empty; a failure lands in the footer
+	const failing = makeSessionActionPanel({
+		actions: {
+			renameSession: async () => {
+				throw new Error("session file not found: /tmp/s3.jsonl");
+			},
+		},
+	});
+	await failing.panel.load();
+	failing.panel.handleInput("G");
+	await settle();
+	failing.panel.handleInput("r");
+	assert.ok(!dialogAt(failing.text(), RENAME_DIALOG_TITLE)!.body[0]!.includes("third"), "no name to pre-fill");
+	failing.panel.handleInput("z");
+	failing.panel.handleInput("\r");
+	await flush();
+	assert.ok(failing.footer().includes("rename failed: session file not found"), failing.footer());
+	h.panel.dispose();
+	failing.panel.dispose();
+});
+
+test("s cycles the sort recent → created → title → threaded → recent; the list is re-fetched and the cursor follows its session", async () => {
+	const h = makeSessionActionPanel();
+	await h.panel.load();
+	assert.equal(h.panel.state.sort, "recent");
+	h.panel.handleInput("j");
+	await settle();
+	assert.equal(h.panel.state.cursor.sessions, 1);
+	const treeCalls = h.treeCalls.length;
+
+	h.panel.handleInput("s");
+	await flush();
+	assert.equal(h.panel.state.sort, "created");
+	assert.ok(h.footer().includes("sort: created"), h.footer());
+	assert.ok(h.header().includes("created"), h.header());
+	assert.equal(h.panel.state.cursor.sessions, 1);
+	h.panel.handleInput("s");
+	await flush();
+	assert.equal(h.panel.state.sort, "title");
+
+	// threaded lists the rows backwards: beta is still the middle row, so the cursor stays on it
+	h.panel.handleInput("s");
+	await flush();
+	assert.equal(h.panel.state.sort, "threaded");
+	assert.deepEqual(h.lists, ["recent", "created", "title", "threaded"]);
+	assert.equal(h.panel.state.cursor.sessions, 1);
+	h.panel.handleInput("k");
+	await settle();
+	assert.ok(h.text().some((l) => l.includes("› third words")), "threaded order puts the third session first");
+	h.panel.handleInput("s");
+	await flush();
+	assert.equal(h.panel.state.sort, "recent");
+	// the cursor followed s3 to the bottom; the tree was not reloaded by the re-sorts themselves
+	assert.equal(h.panel.state.cursor.sessions, 2);
+	assert.equal(h.treeCalls.length, treeCalls + 1, "only the k move loaded a tree");
+	h.panel.dispose();
+});
+
+test("p groups pinned sessions under a PINNED rule (newest first) and unpins again; batch pins/unpins the selection", async () => {
+	const h = makeSessionActionPanel();
+	await h.panel.load();
+	const at = (sub: string) => h.text().findIndex((l) => l.includes(sub));
+	// pin s2 (beta): it moves under a PINNED rule, keeps the cursor, and is persisted
+	h.panel.handleInput("j");
+	await settle();
+	h.panel.handleInput("p");
+	await flush();
+	await flush();
+	assert.deepEqual(h.panel.state.pinnedFiles, ["/tmp/s2.jsonl"]);
+	assert.deepEqual(h.pins.at(-1), ["/tmp/s2.jsonl"], "the pin list was persisted");
+	assert.equal(h.panel.state.cursor.sessions, 0, "the cursor follows beta to the top group");
+	assert.ok(h.footer().includes("session pinned"), h.footer());
+	// PINNED rule, then beta, then OTHERS rule, then the rest
+	assert.ok(at("PINNED") >= 0 && at("OTHERS") >= 0, "both group rules are drawn");
+	assert.ok(at("PINNED") < at("beta") && at("beta") < at("OTHERS"), "beta sits in the PINNED group");
+	assert.ok(at("OTHERS") < at("alpha"), "unpinned rows are under OTHERS");
+
+	// pin s3 (third words) too: the most recent pin goes above the earlier one → [s3, s2]
+	h.panel.handleInput("G");
+	await settle();
+	h.panel.handleInput("p");
+	await flush();
+	await flush();
+	assert.deepEqual(h.panel.state.pinnedFiles, ["/tmp/s3.jsonl", "/tmp/s2.jsonl"]);
+	assert.ok(at("PINNED") < at("third words") && at("third words") < at("beta") && at("beta") < at("OTHERS"), h.text().join("\n"));
+
+	// unpin the row under the cursor (third words, now first in the PINNED group)
+	h.panel.handleInput("gg");
+	await settle();
+	h.panel.handleInput("p");
+	await flush();
+	await flush();
+	assert.deepEqual(h.panel.state.pinnedFiles, ["/tmp/s2.jsonl"]);
+	assert.ok(h.footer().includes("session unpinned"), h.footer());
+	h.panel.dispose();
+
+	// batch: select two, p pins both as a group (list order); p again unpins both
+	const b = makeSessionActionPanel();
+	await b.panel.load();
+	b.panel.handleInput(" ");
+	b.panel.handleInput("j");
+	await settle();
+	b.panel.handleInput(" ");
+	b.panel.handleInput("p");
+	await flush();
+	await flush();
+	assert.deepEqual(b.panel.state.pinnedFiles, ["/tmp/s1.jsonl", "/tmp/s2.jsonl"]);
+	b.panel.handleInput("p");
+	await flush();
+	await flush();
+	assert.deepEqual(b.panel.state.pinnedFiles, []);
+	// no pins → no group rules
+	assert.equal(b.text().findIndex((l) => l.includes("PINNED")), -1, "no rule when nothing is pinned");
+	b.panel.dispose();
+
+	// no actions wired: p reports it
+	const bare = makeSessionActionPanel({ actions: null });
+	await bare.panel.load();
+	bare.panel.handleInput("p");
+	assert.equal(bare.panel.state.mode, "normal");
+	assert.ok(bare.footer().includes("pin: actions unavailable"), bare.footer());
+	bare.panel.dispose();
+});
+
+test("i opens the Session Info box (what /session shows); y copies its text, Esc closes; a missing loader says so", async () => {
+	const h = makeSessionActionPanel();
+	await h.panel.load();
+	h.panel.handleInput("i");
+	await flush();
+	assert.equal(h.panel.state.mode, "info");
+	assert.deepEqual(h.infoCalls, ["/tmp/s1.jsonl"]);
+	const lines = h.text();
+	const dlg = dialogAt(lines, SESSION_INFO_TITLE);
+	assert.ok(dlg, "the info box should be drawn");
+	assert.ok(dlg.title.includes("alpha · Esc/q close"), dlg.title);
+	const body = dlg.body.join("\n");
+	const infoObj: SessionInfo = { name: "alpha", model: "claude-opus-4", messages: 12, tokens: 84_213, cost: 1.4211, createdAt: new Date(2026, 8, 20, 22, 18).getTime(), updatedAt: new Date(2026, 8, 20, 22, 21).getTime(), path: "/tmp/s1.jsonl", id: "id-1" };
+	// 每一行的标签 / 值排版和 sessionInfoText 一致（含 "Session path" 标签、12 列的标签列对齐）。
+	for (const expected of sessionInfoText(infoObj).split("\n")) {
+		assert.ok(body.includes(expected), `${expected}\n${body}`);
+	}
+	assert.ok(h.footer().includes("INFO") && h.footer().includes("y copy") && h.footer().includes("Esc/q close"), h.footer());
+	for (const l of h.panel.render(120)) assert.equal(visibleWidth(l), 120);
+
+	// y copies the whole text (full path) and keeps the box open; other keys are swallowed
+	h.panel.handleInput("y");
+	await flush();
+	assert.equal(h.copies.length, 1);
+	assert.equal(h.copies[0], sessionInfoText(infoObj));
+	assert.ok(h.copies[0]!.startsWith(sessionInfoText(infoObj).split("\n").slice(0, 2).join("\n")), h.copies[0]);
+	assert.ok(h.footer().includes("copied session info"), h.footer());
+	h.panel.handleInput("j");
+	h.panel.handleInput("d");
+	assert.equal(h.panel.state.mode, "info");
+	assert.equal(h.panel.state.cursor.sessions, 0);
+	h.panel.handleInput("\x1b");
+	assert.equal(h.panel.state.mode, "normal");
+	assert.equal(dialogAt(h.text(), SESSION_INFO_TITLE), undefined);
+
+	// a session without a name shows (none) and the title bar carries no subject; q closes too
+	h.panel.handleInput("G");
+	await settle();
+	h.panel.handleInput("i");
+	await flush();
+	const noName = dialogAt(h.text(), SESSION_INFO_TITLE)!;
+	assert.ok(noName.body[0]!.includes("(none)"), noName.body[0]);
+	assert.ok(noName.title.includes("Esc/q close"), noName.title);
+	h.panel.handleInput("q");
+	assert.equal(h.panel.state.mode, "normal");
+
+	// no loader injected / nothing readable: footer only
+	const bare = makeSessionActionPanel({ info: false });
+	await bare.panel.load();
+	bare.panel.handleInput("i");
+	await flush();
+	assert.equal(bare.panel.state.mode, "normal");
+	assert.ok(bare.footer().includes("session info: unavailable"), bare.footer());
+	h.panel.dispose();
+	bare.panel.dispose();
+});
+
+test("u opens the context-usage box for the cursor session; y copies its text, Esc / q close, other keys swallowed", async () => {
+	const h = makeSessionActionPanel();
+	await h.panel.load();
+	h.panel.handleInput("u");
+	await flush();
+	assert.equal(h.panel.state.mode, "usage");
+	assert.deepEqual(h.usageCalls, ["/tmp/s1.jsonl"]);
+	const dlg = dialogAt(h.text(), CONTEXT_USAGE_TITLE);
+	assert.ok(dlg, "the usage box should be drawn");
+	assert.ok(dlg.title.includes("claude-opus-4"), dlg.title);
+	const body = dlg.body.join("\n");
+	// the window line, the stacked bar and the category rows are all shown
+	assert.ok(body.includes("84.2k") && body.includes("200k"), body);
+	assert.ok(body.includes("System prompt") && body.includes("Tool results"), body);
+	assert.ok(body.includes("Context") && body.includes("Free space"), body);
+	for (const hint of ["j/k/↑↓ select", "Enter preview", "y copy", "Esc/q close"]) assert.ok(!body.includes(hint), `the box should not repeat the footer hint: ${hint}`);
+	assert.ok(h.footer().includes("USAGE") && h.footer().includes("y copy") && h.footer().includes("Esc/q close"), h.footer());
+	for (const l of h.panel.render(120)) assert.equal(visibleWidth(l), 120);
+
+	// y copies the whole text and keeps the box open; navigation never reaches the panel
+	h.panel.handleInput("y");
+	await flush();
+	assert.equal(h.copies.length, 1);
+	assert.ok(h.copies[0]!.includes("Tool results"), h.copies[0]);
+	assert.ok(h.footer().includes("copied context usage"), h.footer());
+	h.panel.handleInput("j");
+	h.panel.handleInput("d");
+	assert.equal(h.panel.state.mode, "usage");
+	assert.equal(h.panel.state.cursor.sessions, 0);
+	// Esc closes
+	h.panel.handleInput("\x1b");
+	assert.equal(h.panel.state.mode, "normal");
+	assert.equal(dialogAt(h.text(), CONTEXT_USAGE_TITLE), undefined);
+
+	// multi-selecting two sessions refuses u (single-session action)
+	h.panel.handleInput(" ");
+	h.panel.handleInput("j");
+	await settle();
+	h.panel.handleInput(" ");
+	h.panel.handleInput("u");
+	assert.equal(h.panel.state.mode, "normal");
+	assert.ok(h.footer().includes("cannot act on multiple sessions"), h.footer());
+	h.panel.dispose();
+
+	// no loader injected: footer only
+	const bare = makeSessionActionPanel({ info: false });
+	await bare.panel.load();
+	bare.panel.handleInput("u");
+	await flush();
+	assert.equal(bare.panel.state.mode, "normal");
+	assert.ok(bare.footer().includes("context usage: unavailable"), bare.footer());
+	bare.panel.dispose();
+});
+
+test("context prompt preview: Enter opens the selected category, Esc returns with selection intact", async () => {
+	const h = makeSessionActionPanel();
+	await h.panel.load();
+	h.panel.handleInput("u");
+	await flush();
+	assert.ok(h.text().some((line) => line.includes("›") && line.includes("System prompt")));
+	assert.ok(h.footer().includes("Enter preview"));
+	h.panel.handleInput("j");
+	h.panel.handleInput("\r");
+	assert.equal(h.panel.state.mode, "usage");
+	assert.ok(dialogAt(h.text(), "Prompt · Tool results"));
+	assert.ok(h.text().join("\n").includes("TOOL_RESULT_SOURCE"));
+	assert.ok(h.footer().includes("Esc/q back"));
+	h.panel.handleInput("y");
+	await flush();
+	assert.equal(h.copies.at(-1), "TOOL_RESULT_SOURCE");
+	const promptBody = dialogAt(h.text(), "Prompt · Tool results")!.body.join("\n");
+	for (const hint of ["j/k/↑↓ scroll", "y copy", "Esc/q back"]) assert.ok(!promptBody.includes(hint), `the box should not repeat the footer hint: ${hint}`);
+	// Esc closes only the child; the selection and panel cursor are untouched.
+	h.panel.handleInput("\x1b");
+	assert.equal(h.panel.state.mode, "usage");
+	assert.ok(dialogAt(h.text(), CONTEXT_USAGE_TITLE));
+	assert.ok(h.text().some((line) => line.includes("›") && line.includes("Tool results")));
+	assert.equal(h.panel.state.cursor.sessions, 0);
+	h.panel.handleInput("\x1b[A");
+	h.panel.handleInput("\r");
+	assert.ok(dialogAt(h.text(), "Prompt · System prompt"));
+	h.panel.handleInput("q");
+	h.panel.handleInput("\x1b[B");
+	h.panel.handleInput("j");
+	h.panel.handleInput("\r");
+	assert.ok(dialogAt(h.text(), "Prompt · Context"));
+	h.panel.handleInput("\x1b");
+	h.panel.handleInput("\x1b");
+	assert.equal(h.panel.state.mode, "normal");
+	h.panel.handleInput("u");
+	await flush();
+	h.panel.handleInput("\r");
+	assert.ok(dialogAt(h.text(), "Prompt · System prompt"), "reopening resets the selection");
+	h.panel.dispose();
+});
+
+test("Session Info wraps a value too wide for the box (the path) onto continuation lines instead of cutting it", async () => {
+	const longPath = "/tmp/sessions/--home-cheng-code-myself-PiLazyPanel--/2026-09-20T14-18-00-000Z_0199abcd-ef01-2345-6789-abcdefabcdef.jsonl";
+	const h = makeSessionActionPanel({
+		actions: {},
+	});
+	// swap the loader for one whose path is far wider than the 60-column dialog
+	h.sessions[0]!.file = longPath;
+	await h.panel.load();
+	h.panel.handleInput("i");
+	await flush();
+	const dlg = dialogAt(h.text(160), SESSION_INFO_TITLE)!;
+	// 只取弹窗自己那一段（左边的面板边框也是 │）：按标题行的 ┌ … ┐ 定位列
+	const col = dlg.title.indexOf("┌");
+	const end = dlg.title.indexOf("┐", col);
+	const body = dlg.body.map((l) => l.slice(col + 1, end));
+	// the whole path appears once the pieces are joined, and no piece carries an ellipsis
+	const joined = body.map((l) => l.trim()).join("");
+	assert.ok(joined.includes(longPath.replace(/\s/g, "")), joined);
+	assert.ok(!body.some((l) => l.includes("…")), body.join("\n"));
+	// continuation lines are indented under the value column (no label)
+	const pathRow = body.findIndex((l) => l.includes("Session path"));
+	assert.ok(pathRow >= 0);
+	assert.ok(body[pathRow + 1]!.startsWith(" ".repeat(14)), JSON.stringify(body[pathRow + 1]));
+	assert.ok(body[pathRow + 1]!.includes("ID") === false, "the continuation comes before the ID row");
+	for (const l of h.panel.render(160)) assert.equal(visibleWidth(l), 160);
+	h.panel.dispose();
+});
+
+// ---------------------------------------------------------------------------
+// SESSIONS: n new / o fork / y clone / Y copy last reply
+// ---------------------------------------------------------------------------
+
+test("n prompts for an optional name, creates the session and closes; empty name creates it unnamed", async () => {
+	const h = makeSessionActionPanel();
+	await h.panel.load();
+
+	h.panel.handleInput("n");
+	assert.equal(h.panel.state.mode, "new");
+	assert.ok(dialogAt(h.text(), NEW_SESSION_DIALOG_TITLE), "the New session prompt is drawn");
+	assert.ok(h.footer().includes("NEW") && h.footer().includes("Enter create"), h.footer());
+
+	for (const ch of "My chat") h.panel.handleInput(ch);
+	h.panel.handleInput("\r");
+	await flush();
+	assert.deepEqual(h.news, ["My chat"]);
+	assert.deepEqual(h.hidden, [true], "the panel is hidden while pi creates the session");
+	assert.equal(h.closed(), true);
+
+	// empty name creates an unnamed session (the name is left unset)
+	const bare = makeSessionActionPanel();
+	await bare.panel.load();
+	bare.panel.handleInput("n");
+	bare.panel.handleInput("\r");
+	await flush();
+	assert.deepEqual(bare.news, [""]);
+	assert.equal(bare.closed(), true);
+
+	// Esc cancels the prompt without creating anything
+	const cancel = makeSessionActionPanel();
+	await cancel.panel.load();
+	cancel.panel.handleInput("n");
+	cancel.panel.handleInput("\x1b");
+	assert.equal(cancel.panel.state.mode, "normal");
+	assert.deepEqual(cancel.news, []);
+	assert.equal(cancel.closed(), false);
+});
+
+test("c prompts for optional focus instructions, then compacts the cursor session and closes; Enter empty uses the default; Esc cancels", async () => {
+	const h = makeSessionActionPanel();
+	await h.panel.load();
+	h.panel.handleInput("j");
+	await settle();
+	assert.equal(h.panel.state.cursor.sessions, 1);
+
+	h.panel.handleInput("c");
+	assert.equal(h.panel.state.mode, "compact");
+	const dlg = dialogAt(h.text(), COMPACT_DIALOG_TITLE);
+	assert.ok(dlg, "the Compact prompt is drawn");
+	assert.ok(dlg.title.includes("beta") && !dlg.title.includes("second words"), `subject = the session's name: ${dlg.title}`);
+	assert.ok(h.footer().includes("COMPACT") && h.footer().includes("Enter compact"), h.footer());
+
+	// typed instructions travel through to the action; the panel is hidden while pi works, then closes
+	for (const ch of "focus on API") h.panel.handleInput(ch);
+	h.panel.handleInput("\r");
+	await flush();
+	assert.deepEqual(h.compacts, [{ file: "/tmp/s2.jsonl", instructions: "focus on API" }]);
+	assert.deepEqual(h.hidden, [true], "the panel is hidden while pi compacts");
+	assert.equal(h.closed(), true);
+
+	// empty instructions compact with pi's default (undefined, not "")
+	const bare = makeSessionActionPanel();
+	await bare.panel.load();
+	bare.panel.handleInput("c");
+	bare.panel.handleInput("\r");
+	await flush();
+	assert.deepEqual(bare.compacts, [{ file: "/tmp/s1.jsonl", instructions: undefined }]);
+	assert.equal(bare.closed(), true);
+
+	// Esc cancels the prompt without compacting
+	const cancel = makeSessionActionPanel();
+	await cancel.panel.load();
+	cancel.panel.handleInput("c");
+	cancel.panel.handleInput("x");
+	cancel.panel.handleInput("\x1b");
+	assert.equal(cancel.panel.state.mode, "normal");
+	assert.deepEqual(cancel.compacts, []);
+	assert.equal(cancel.closed(), false);
+
+	// a failure stays in the footer and the panel comes back
+	const failing = makeSessionActionPanel({
+		actions: {
+			compactSession: async () => {
+				throw new Error("Nothing to compact (session too small)");
+			},
+		},
+	});
+	await failing.panel.load();
+	failing.panel.handleInput("c");
+	failing.panel.handleInput("\r");
+	await flush();
+	assert.equal(failing.panel.state.mode, "normal");
+	assert.ok(failing.footer().includes("compact failed: Nothing to compact"), failing.footer());
+	assert.equal(failing.closed(), false);
+	h.panel.dispose();
+});
+
+test("o lists the user messages to fork before (last selected), confirms, then forks with the picked prompt", async () => {
+	const h = makeSessionActionPanel();
+	await h.panel.load();
+
+	h.panel.handleInput("o");
+	await flush();
+	assert.deepEqual(h.forkPointCalls, ["/tmp/s1.jsonl"]);
+	assert.equal(h.panel.state.mode, "fork");
+	const sel = dialogAt(h.text(), FORK_DIALOG_TITLE);
+	assert.ok(sel, "the fork selector is drawn");
+	// cursor defaults to the last user message (pi's default)
+	assert.ok(sel.body.some((l) => l.includes("› second question")), sel.body.join("|"));
+
+	// Enter on a message opens the Yes / No confirmation on that message
+	h.panel.handleInput("\r");
+	const confirm = dialogAt(h.text(), FORK_SESSION_TITLE);
+	assert.ok(confirm, "the confirmation is drawn");
+	assert.ok(confirm.title.includes("#2/2") && !confirm.title.includes("second question"), `the subject is the picked position, not the text: ${confirm.title}`);
+	assert.ok(confirm.body[1]!.includes("› No"), "the cursor starts on No");
+	assert.deepEqual(h.forks, [], "nothing is forked until confirmed");
+
+	// y confirms → fork before that entry (pi fills the fork's editor with it), panel closes
+	h.panel.handleInput("y");
+	await flush();
+	assert.deepEqual(h.forks, [{ file: "/tmp/s1.jsonl", entryId: "e2" }]);
+	assert.deepEqual(h.hidden, [true]);
+	assert.equal(h.closed(), true);
+});
+
+test("o: Esc on the confirmation returns to the selector; Esc on the selector cancels the fork", async () => {
+	const h = makeSessionActionPanel();
+	await h.panel.load();
+
+	// pick the first message, then back out of the confirmation
+	h.panel.handleInput("o");
+	await flush();
+	h.panel.handleInput("k"); // move up to the first message
+	h.panel.handleInput("\r");
+	assert.ok(dialogAt(h.text(), FORK_SESSION_TITLE), "confirmation open");
+	h.panel.handleInput("\x1b");
+	const sel = dialogAt(h.text(), FORK_DIALOG_TITLE);
+	assert.ok(sel, "back on the selector");
+	assert.ok(sel.body.some((l) => l.includes("› first question")), "cursor kept on the message that was being confirmed");
+	assert.ok(sel.title.includes("alpha"), `the re-opened selector keeps its subject: ${sel.title}`);
+	assert.deepEqual(h.forks, []);
+
+	// Esc on the selector cancels everything
+	h.panel.handleInput("\x1b");
+	assert.equal(h.panel.state.mode, "normal");
+	assert.deepEqual(h.forks, []);
+	assert.equal(h.closed(), false);
+});
+
+test("o on a session with no user messages reports it and opens nothing", async () => {
+	const h = makeSessionActionPanel({ forkPoints: [] });
+	await h.panel.load();
+	h.panel.handleInput("o");
+	await flush();
+	assert.equal(h.panel.state.mode, "normal");
+	assert.equal(dialogAt(h.text(), FORK_DIALOG_TITLE), undefined);
+	assert.ok(h.footer().includes("No messages to fork from"), h.footer());
+	assert.deepEqual(h.forks, []);
+});
+
+test("y asks Clone session? and only clones once confirmed; n / Esc cancel", async () => {
+	const h = makeSessionActionPanel();
+	await h.panel.load();
+
+	// n cancels
+	h.panel.handleInput("y");
+	assert.equal(h.panel.state.mode, "clone");
+	const dlg = dialogAt(h.text(), CLONE_SESSION_TITLE);
+	assert.ok(dlg && dlg.title.includes("alpha") && !dlg.title.includes("first words"), `subject = name · date: ${dlg?.title}`);
+	assert.ok(dlg!.body[1]!.includes("› No"), "cursor starts on No");
+	assert.ok(h.footer().includes("CLONE"), h.footer());
+	h.panel.handleInput("n");
+	assert.equal(h.panel.state.mode, "normal");
+	assert.deepEqual(h.clones, []);
+
+	// y confirms → clone the active branch, panel closes
+	h.panel.handleInput("y");
+	h.panel.handleInput("y");
+	await flush();
+	assert.deepEqual(h.clones, ["/tmp/s1.jsonl"]);
+	assert.deepEqual(h.hidden, [true]);
+	assert.equal(h.closed(), true);
+});
+
+test("Y copies the last assistant reply to the clipboard and stays open, reporting when there is none", async () => {
+	const h = makeSessionActionPanel();
+	await h.panel.load();
+	h.panel.handleInput("Y");
+	await flush();
+	assert.deepEqual(h.lastReplies, ["/tmp/s1.jsonl"]);
+	assert.equal(h.closed(), false);
+	assert.ok(h.footer().includes("copied last reply"), h.footer());
+
+	// no reply yet: the footer says so, nothing is copied to the clipboard as a reply
+	const empty = makeSessionActionPanel({ actions: { copyLastReply: async () => false } });
+	await empty.panel.load();
+	empty.panel.handleInput("Y");
+	await flush();
+	assert.ok(empty.footer().includes("no assistant reply to copy"), empty.footer());
+});
+
+test("n / o / y / Y report when no actions are wired", async () => {
+	const h = makeSessionActionPanel({ actions: null });
+	await h.panel.load();
+	h.panel.handleInput("n");
+	assert.ok(h.footer().includes("new: actions unavailable"), h.footer());
+	h.panel.handleInput("o");
+	await flush();
+	assert.ok(h.footer().includes("fork: actions unavailable"), h.footer());
+	h.panel.handleInput("y");
+	assert.ok(h.footer().includes("clone: actions unavailable"), h.footer());
+	h.panel.handleInput("Y");
+	await flush();
+	assert.ok(h.footer().includes("copy: actions unavailable"), h.footer());
+	assert.equal(h.panel.state.mode, "normal");
+});
+
+// ---------------------------------------------------------------------------
+// SESSIONS: e export / I import / S share
+// ---------------------------------------------------------------------------
+
+/** Clear a prompt pre-filled with `text` (one backspace per character). */
+function clearInput(panel: LazyPanel, text: string): void {
+	for (let i = 0; i < text.length; i++) panel.handleInput("\x7f");
+}
+
+test("e: pick HTML / JSONL, the path prompt is pre-filled with the default, Enter exports and the panel stays open", async () => {
+	const h = makeSessionActionPanel();
+	await h.panel.load();
+
+	h.panel.handleInput("e");
+	assert.equal(h.panel.state.mode, "export");
+	const menu = dialogAt(h.text(), EXPORT_FORMAT_TITLE);
+	assert.ok(menu && menu.title.includes("alpha"), menu?.title);
+	assert.ok(menu.body[0]!.includes("› HTML"), "HTML first, selected");
+	assert.ok(menu.body[1]!.includes("JSONL"), menu.body.join("|"));
+	assert.ok(h.footer().includes("EXPORT"), h.footer());
+
+	// Enter on HTML → the path prompt, pre-filled with pi's default
+	h.panel.handleInput("\r");
+	const prompt = dialogAt(h.text(), EXPORT_PATH_TITLE);
+	assert.ok(prompt, "the path prompt is drawn");
+	assert.ok(prompt.title.includes(EXPORT_PATH_SUBJECT), `subject = what to type: ${prompt.title}`);
+	assert.ok(prompt.body[0]!.includes("/work/pi-session-s1.html"), prompt.body.join("|"));
+	assert.ok(h.footer().includes("Enter export"), h.footer());
+
+	h.panel.handleInput("\r");
+	await flush();
+	assert.deepEqual(h.exports, [{ file: "/tmp/s1.jsonl", format: "html", path: "/work/pi-session-s1.html" }]);
+	assert.equal(h.panel.state.mode, "normal");
+	assert.equal(h.closed(), false);
+	assert.deepEqual(h.hidden, [], "exporting does not hide the panel");
+	assert.ok(h.footer().includes("exported to /work/pi-session-s1.html"), h.footer());
+});
+
+test("e: JSONL with a typed path; Esc on the prompt returns to the format menu, Esc there cancels", async () => {
+	const h = makeSessionActionPanel();
+	await h.panel.load();
+
+	h.panel.handleInput("e");
+	h.panel.handleInput("j");
+	h.panel.handleInput("\r");
+	const prompt = dialogAt(h.text(), EXPORT_PATH_TITLE);
+	assert.ok(prompt?.body[0]!.includes("/work/pi-session-s1.jsonl"), prompt?.body.join("|"));
+
+	// Esc → back on the menu, cursor on JSONL
+	h.panel.handleInput("\x1b");
+	const menu = dialogAt(h.text(), EXPORT_FORMAT_TITLE);
+	assert.ok(menu && menu.body[1]!.includes("› JSONL"), menu?.body.join("|"));
+	assert.equal(dialogAt(h.text(), EXPORT_PATH_TITLE), undefined);
+
+	// Enter again, replace the path, export
+	h.panel.handleInput("\r");
+	clearInput(h.panel, "/work/pi-session-s1.jsonl");
+	for (const ch of "/out/a.jsonl") h.panel.handleInput(ch);
+	h.panel.handleInput("\r");
+	await flush();
+	assert.deepEqual(h.exports, [{ file: "/tmp/s1.jsonl", format: "jsonl", path: "/out/a.jsonl" }]);
+
+	// Esc on the menu cancels without exporting
+	h.panel.handleInput("e");
+	h.panel.handleInput("\x1b");
+	assert.equal(h.panel.state.mode, "normal");
+	assert.equal(dialogAt(h.text(), EXPORT_FORMAT_TITLE), undefined);
+	assert.equal(h.exports.length, 1);
+});
+
+test("e: an existing file asks Overwrite file? first; No returns to the prompt with the typed path, y overwrites", async () => {
+	const h = makeSessionActionPanel();
+	await h.panel.load();
+
+	h.panel.handleInput("e");
+	h.panel.handleInput("\r");
+	clearInput(h.panel, "/work/pi-session-s1.html");
+	for (const ch of "/work/taken.html") h.panel.handleInput(ch);
+	h.panel.handleInput("\r");
+	const confirm = dialogAt(h.text(), OVERWRITE_FILE_TITLE);
+	assert.ok(confirm && confirm.title.includes("/work/taken.html"), confirm?.title);
+	assert.ok(confirm.body[1]!.includes("› No"), "cursor starts on No");
+	assert.deepEqual(h.exports, []);
+
+	// n → back on the prompt, the typed path kept
+	h.panel.handleInput("n");
+	const prompt = dialogAt(h.text(), EXPORT_PATH_TITLE);
+	assert.ok(prompt?.body[0]!.includes("/work/taken.html"), prompt?.body.join("|"));
+	assert.deepEqual(h.exports, []);
+
+	// Enter → confirmation again, y → overwrite
+	h.panel.handleInput("\r");
+	h.panel.handleInput("y");
+	await flush();
+	assert.deepEqual(h.exports, [{ file: "/tmp/s1.jsonl", format: "html", path: "/work/taken.html" }]);
+	assert.equal(h.panel.state.mode, "normal");
+});
+
+test("e: a failed export is reported in the footer", async () => {
+	const h = makeSessionActionPanel({
+		actions: {
+			exportSession: async () => {
+				throw new Error("File not found: /tmp/s1.jsonl");
+			},
+		},
+	});
+	await h.panel.load();
+	h.panel.handleInput("e");
+	h.panel.handleInput("\r");
+	h.panel.handleInput("\r");
+	await flush();
+	assert.ok(h.footer().includes("export failed: File not found"), h.footer());
+	assert.equal(h.closed(), false);
+});
+
+test("I: type a path, confirm, then import and close; Esc on the confirmation keeps the typed path", async () => {
+	const h = makeSessionActionPanel();
+	await h.panel.load();
+
+	h.panel.handleInput("I");
+	assert.equal(h.panel.state.mode, "import");
+	const prompt = dialogAt(h.text(), IMPORT_DIALOG_TITLE);
+	assert.ok(prompt, "the import prompt is drawn");
+	assert.ok(prompt.title.includes(IMPORT_DIALOG_SUBJECT), `subject = what to type: ${prompt.title}`);
+	assert.ok(h.footer().includes("IMPORT") && h.footer().includes("Enter import"), h.footer());
+	for (const ch of "~/backup.jsonl") h.panel.handleInput(ch);
+	h.panel.handleInput("\r");
+	const confirm = dialogAt(h.text(), IMPORT_SESSION_TITLE);
+	assert.ok(confirm && confirm.title.includes("~/backup.jsonl"), confirm?.title);
+	assert.ok(confirm.body[1]!.includes("› No"), "cursor starts on No");
+
+	// Esc → back on the prompt with the path kept
+	h.panel.handleInput("\x1b");
+	const reopened = dialogAt(h.text(), IMPORT_DIALOG_TITLE);
+	assert.ok(reopened?.body[0]!.includes("~/backup.jsonl"), reopened?.body.join("|"));
+	assert.deepEqual(h.imports, []);
+
+	// Enter, y → import, the panel is hidden while pi switches and then closes
+	h.panel.handleInput("\r");
+	h.panel.handleInput("y");
+	await flush();
+	assert.deepEqual(h.imports, ["~/backup.jsonl"]);
+	assert.deepEqual(h.hidden, [true]);
+	assert.equal(h.closed(), true);
+});
+
+test("I: an empty path is reported; a failed import shows the panel again with the reason", async () => {
+	const h = makeSessionActionPanel({
+		actions: {
+			importSession: async (input) => {
+				throw new Error(`file not found: /work/${input}`);
+			},
+		},
+	});
+	await h.panel.load();
+
+	h.panel.handleInput("I");
+	h.panel.handleInput("\r");
+	assert.equal(h.panel.state.mode, "normal");
+	assert.ok(h.footer().includes("import: no file given"), h.footer());
+	assert.equal(dialogAt(h.text(), IMPORT_SESSION_TITLE), undefined);
+
+	h.panel.handleInput("I");
+	for (const ch of "gone.jsonl") h.panel.handleInput(ch);
+	h.panel.handleInput("\r");
+	h.panel.handleInput("y");
+	await flush();
+	assert.deepEqual(h.hidden, [true, false]);
+	assert.equal(h.closed(), false);
+	assert.ok(h.footer().includes("import failed: file not found: /work/gone.jsonl"), h.footer());
+});
+
+test("S: pick Auto / Gist / Radius in a menu (Esc cancels), then upload, copy the link and show it; the panel stays open", async () => {
+	const h = makeSessionActionPanel();
+	await h.panel.load();
+
+	h.panel.handleInput("S");
+	assert.equal(h.panel.state.mode, "share");
+	const menu = dialogAt(h.text(), SHARE_SESSION_TITLE);
+	assert.ok(menu && menu.title.includes("Esc/q close"), menu?.title);
+	assert.ok(!menu.title.includes("alpha"), "no session title in the header");
+	assert.equal(menu.body.length, 3);
+	assert.ok(menu.body[0]!.includes("› Auto"), menu.body[0]);
+	assert.ok(menu.body[1]!.includes("GitHub Gist"), menu.body[1]);
+	assert.ok(menu.body[2]!.includes("Radius"), menu.body[2]);
+	assert.ok(h.footer().includes("SHARE"), h.footer());
+	assert.ok(h.footer().includes("Esc/q cancel"), h.footer());
+	// Esc cancels: nothing leaves the machine
+	h.panel.handleInput("\x1b");
+	assert.equal(h.panel.state.mode, "normal");
+	assert.deepEqual(h.shares, []);
+
+	// q cancels too (the header advertises Esc/q close)
+	h.panel.handleInput("S");
+	h.panel.handleInput("q");
+	assert.equal(h.panel.state.mode, "normal");
+	assert.deepEqual(h.shares, []);
+
+	h.panel.handleInput("S");
+	h.panel.handleInput("\r");
+	await flush();
+	assert.deepEqual(h.shares, [{ file: "/tmp/s1.jsonl", destination: "auto" }]);
+	assert.deepEqual(h.copies, ["https://pi.dev/session/#abc"]);
+	assert.ok(h.footer().includes("share URL copied: https://pi.dev/session/#abc"), h.footer());
+	assert.equal(h.closed(), false);
+	assert.deepEqual(h.hidden, []);
+
+	// j moves the cursor: the second / third entries pick Gist / Radius explicitly
+	h.panel.handleInput("S");
+	h.panel.handleInput("j");
+	h.panel.handleInput("\r");
+	await flush();
+	h.panel.handleInput("S");
+	h.panel.handleInput("j");
+	h.panel.handleInput("j");
+	h.panel.handleInput("\r");
+	await flush();
+	assert.deepEqual(h.shares, [
+		{ file: "/tmp/s1.jsonl", destination: "auto" },
+		{ file: "/tmp/s1.jsonl", destination: "gist" },
+		{ file: "/tmp/s1.jsonl", destination: "radius" },
+	]);
+});
+
+test("a long footer result (share link) does not hide the shortcut hints of a dialog opened afterwards", async () => {
+	const url = "https://radius.earendil.com/artifact/01m5cnysszemc9pwrt9qf2yj3m";
+	const h = makeSessionActionPanel({
+		actions: {
+			shareSession: async () => ({ url, destination: "radius" }),
+		},
+	});
+	await h.panel.load();
+
+	// S → upload succeeds, the (long) viewer link lands in the footer
+	h.panel.handleInput("S");
+	h.panel.handleInput("\r");
+	await flush();
+	assert.ok(h.footer().includes(`share URL copied: ${url}`), h.footer());
+
+	// u: the stale result is dropped so the usage box gets the whole footer row
+	h.panel.handleInput("u");
+	await flush();
+	assert.equal(h.panel.state.mode, "usage");
+	assert.ok(!h.footer().includes(url), h.footer());
+	assert.ok(h.footer().includes("USAGE") && h.footer().includes("y copy") && h.footer().includes("Esc/q close"), h.footer());
+	h.panel.handleInput("\x1b");
+
+	// i: same for the Session Info box
+	h.panel.handleInput("i");
+	await flush();
+	assert.equal(h.panel.state.mode, "info");
+	assert.ok(!h.footer().includes(url), h.footer());
+	assert.ok(h.footer().includes("INFO") && h.footer().includes("y copy") && h.footer().includes("Esc/q close"), h.footer());
+	h.panel.dispose();
+});
+
+test("S: an unauthenticated Radius share signs in through panel dialogs (browser link copied, Esc cancels)", async () => {
+	const copies: string[] = [];
+	const opened: string[] = [];
+	const h = makeSessionActionPanel({
+		actions: {
+			radiusAuthenticated: async () => false,
+			openUrl: (url) => void opened.push(url),
+			copyText: async (text) => void copies.push(text),
+			loginRadius: async (_method, interaction) => {
+				// pi's OAuth question: browser or device code.
+				await interaction.prompt({
+					type: "select",
+					message: "Sign in to Radius:",
+					options: [
+						{ id: "browser", label: "Sign in with browser (recommended)" },
+						{ id: "device-code", label: "Sign in with device code (when signing in from another device)" },
+					],
+				});
+				interaction.notify({ type: "auth_url", url: "https://radius.test/authorize?state=x", instructions: "Continue in your browser." });
+				await new Promise((_resolve, reject) => {
+					interaction.signal.addEventListener("abort", () => reject(new Error("Login cancelled")), { once: true });
+				});
+			},
+		},
+	});
+	await h.panel.load();
+
+	h.panel.handleInput("S");
+	h.panel.handleInput("j");
+	h.panel.handleInput("j");
+	h.panel.handleInput("\r");
+	await flush();
+	// account vs API key, the same choices as /login radius
+	assert.equal(h.panel.state.mode, "share");
+	const methods = dialogAt(h.text(), "Radius sign-in");
+	assert.ok(methods?.body[0]?.includes("› Sign in with an account"), methods?.body.join("\n"));
+	h.panel.handleInput("\r");
+	await flush();
+
+	// pi's OAuth question, translated by the panel and without pi's parentheticals.
+	const oauth = dialogAt(h.text(), radiusLoginMethodTitle());
+	assert.ok(oauth?.body[0]?.includes(`› ${radiusLoginMethodLabel("browser")}`), oauth?.body.join("\n"));
+	assert.ok(oauth?.body[1]?.includes(radiusLoginMethodLabel("device-code") ?? ""), oauth?.body.join("\n"));
+	h.panel.handleInput("\r");
+	await flush();
+
+	// The browser opens and the link goes to the clipboard; nothing covers the panel.
+	assert.deepEqual(opened, ["https://radius.test/authorize?state=x"]);
+	assert.equal(h.panel.state.mode, "normal");
+	assert.equal(dialogAt(h.text(), "Continue in your browser"), undefined);
+	assert.equal(copies.at(-1), "https://radius.test/authorize?state=x");
+	assert.ok(h.footer().includes("sign-in link copied"), h.footer());
+	assert.ok(h.footer().includes("Esc cancels"), h.footer());
+
+	// Esc cancels the sign-in (it does not close the panel): nothing is uploaded
+	h.panel.handleInput("\x1b");
+	await flush();
+	await flush();
+	assert.deepEqual(h.shares, []);
+	assert.equal(h.panel.state.mode, "normal");
+	assert.equal(h.closed(), false);
+	assert.ok(h.footer().includes("Radius sign-in cancelled"), h.footer());
+});
+
+test("S: the menu cursor starts on pi's sessionShareDestination (auto when unset)", async () => {
+	const cases = [
+		{ destination: "gist", marker: "› GitHub Gist", row: 1 },
+		{ destination: "radius", marker: "› Radius", row: 2 },
+		{ destination: "auto", marker: "› Auto", row: 0 },
+	] as const;
+	for (const { destination, marker, row } of cases) {
+		const h = makeSessionActionPanel({ actions: { shareDestination: destination } });
+		await h.panel.load();
+		h.panel.handleInput("S");
+		const menu = dialogAt(h.text(), SHARE_SESSION_TITLE);
+		assert.ok(menu?.body[row]?.includes(marker), `${destination}: ${menu?.body.join("\n")}`);
+		assert.equal(h.panel.state.mode, "share");
+	}
+});
+
+test("S: a signed-in Radius asks Share / Sign out; sign-out confirms first, then clears the credential", async () => {
+	let logouts = 0;
+	const h = makeSessionActionPanel({
+		actions: {
+			radiusAuthenticated: async () => true,
+			logoutRadius: async () => {
+				logouts++;
+			},
+		},
+	});
+	await h.panel.load();
+
+	// S → Radius while signed in: the account menu (not the sign-in menu).
+	h.panel.handleInput("S");
+	h.panel.handleInput("j");
+	h.panel.handleInput("j");
+	h.panel.handleInput("\r");
+	await flush();
+	assert.equal(h.panel.state.mode, "share");
+	const account = dialogAt(h.text(), radiusAccountTitle());
+	assert.ok(account, h.text().join("\n"));
+	assert.ok(account.body[0]!.includes("› Share to Radius"), account.body.join("\n"));
+	assert.ok(account.body[1]!.includes("Sign out of Radius"), account.body.join("\n"));
+
+	// Sign out asks Yes / No (default No); Enter on No comes back to the account menu.
+	h.panel.handleInput("j");
+	h.panel.handleInput("\r");
+	assert.ok(dialogAt(h.text(), RADIUS_SIGN_OUT_TITLE), h.text().join("\n"));
+	h.panel.handleInput("\r");
+	await flush();
+	assert.equal(logouts, 0, "Enter on the default No cancels");
+	assert.ok(dialogAt(h.text(), radiusAccountTitle()), h.text().join("\n"));
+
+	// y confirms: the credential is removed and the footer says so.
+	h.panel.handleInput("j");
+	h.panel.handleInput("\r");
+	h.panel.handleInput("y");
+	await flush();
+	assert.equal(logouts, 1);
+	assert.equal(h.panel.state.mode, "normal");
+	assert.ok(h.footer().includes("signed out of Radius"), h.footer());
+});
+
+test("S: failures are reported; the link is still shown when the clipboard fails", async () => {
+	const failing = makeSessionActionPanel({
+		actions: {
+			shareSession: async () => {
+				throw new Error("GitHub CLI is not logged in. Run 'gh auth login' first.");
+			},
+		},
+	});
+	await failing.panel.load();
+	failing.panel.handleInput("S");
+	failing.panel.handleInput("\r");
+	await flush();
+	assert.ok(failing.footer().includes("share failed: GitHub CLI is not logged in"), failing.footer());
+
+	const noClipboard = makeSessionActionPanel({
+		actions: {
+			copyText: async () => {
+				throw new Error("no clipboard tool");
+			},
+		},
+	});
+	await noClipboard.panel.load();
+	noClipboard.panel.handleInput("S");
+	noClipboard.panel.handleInput("\r");
+	await flush();
+	assert.ok(noClipboard.footer().includes("shared: https://pi.dev/session/#abc"), noClipboard.footer());
+});
+
+test("e / I / S report when no actions are wired", async () => {
+	const h = makeSessionActionPanel({ actions: null });
+	await h.panel.load();
+	h.panel.handleInput("e");
+	assert.ok(h.footer().includes("export: actions unavailable"), h.footer());
+	h.panel.handleInput("I");
+	assert.ok(h.footer().includes("import: actions unavailable"), h.footer());
+	h.panel.handleInput("S");
+	assert.ok(h.footer().includes("share: actions unavailable"), h.footer());
+	assert.equal(h.panel.state.mode, "normal");
+});
+
+test("space toggles the multi-selection: title highlight (no glyph), header count, Esc clears it before quitting", async () => {
+	const h = makeSessionActionPanel();
+	await h.panel.load();
+	h.panel.handleInput(" ");
+	h.panel.handleInput("j");
+	await settle();
+	h.panel.handleInput(" ");
+	assert.deepEqual([...h.panel.state.selectedSessionFiles].sort(), ["/tmp/s1.jsonl", "/tmp/s2.jsonl"]);
+	const lines = h.text();
+	// 选中只靠标题着色，不再画勾图标：行里出现标题、但没有 ✓（• 是 TREE 面板的活动路径标记，不算）。
+	assert.ok(lines.some((l) => l.includes("alpha")) && lines.some((l) => l.includes("beta")), lines.join("\n"));
+	assert.equal(lines.some((l) => l.includes("✓")), false, "no selection glyph is drawn");
+	assert.ok(h.header().includes("2 selected"), h.header());
+	assert.ok(h.header().includes("2 selected"), h.header());
+	// space again unselects
+	h.panel.handleInput(" ");
+	assert.deepEqual([...h.panel.state.selectedSessionFiles], ["/tmp/s1.jsonl"]);
+	for (const l of h.panel.render(120)) assert.equal(visibleWidth(l), 120);
+	// Esc clears the selection first, then quits
+	h.panel.handleInput("\x1b");
+	assert.equal(h.panel.state.selectedSessionFiles.size, 0);
+	assert.equal(h.closed(), false);
+	assert.ok(!h.header().includes("selected"), h.header());
+	h.panel.handleInput("\x1b");
+	assert.equal(h.closed(), true);
+});
+
+test("d with a selection deletes them all after one confirmation, skipping the open session; failures stay selected", async () => {
+	const h = makeSessionActionPanel({
+		currentSessionFile: "/tmp/s1.jsonl",
+		actions: {
+			deleteSession: async (file) => {
+				if (file === "/tmp/s3.jsonl") throw new Error("EACCES");
+				h.deletes.push(file);
+				h.sessions.splice(
+					h.sessions.findIndex((r) => r.file === file),
+					1,
+				);
+				return "trash";
+			},
+		},
+	});
+	await h.panel.load();
+	for (const k of [" ", "j", " ", "j", " "]) {
+		h.panel.handleInput(k);
+		await settle();
+	}
+	assert.equal(h.panel.state.selectedSessionFiles.size, 3);
+	h.panel.handleInput("d");
+	assert.equal(h.panel.state.mode, "confirm");
+	const dlg = dialogAt(h.text(), "Delete 2 sessions?");
+	assert.ok(dlg, "the batch confirmation carries the count");
+	h.panel.handleInput("y");
+	await flush();
+	await flush();
+	assert.deepEqual(h.deletes, ["/tmp/s2.jsonl"]);
+	assert.deepEqual([...h.panel.state.selectedSessionFiles], ["/tmp/s3.jsonl"], "only the failed one stays selected");
+	assert.ok(h.footer().includes("deleted 1, 1 failed") && h.footer().includes("EACCES"), h.footer());
+	h.panel.dispose();
+
+	// only the open session selected: warned in a box, nothing deleted
+	const cur = makeSessionActionPanel({ currentSessionFile: "/tmp/s1.jsonl" });
+	await cur.panel.load();
+	cur.panel.handleInput(" ");
+	cur.panel.handleInput("d");
+	assert.equal(dialogAt(cur.text(), "Delete 1 session?"), undefined, "no batch confirmation");
+	const warn = dialogAt(cur.text(), CANNOT_DELETE_ACTIVE_TITLE);
+	assert.ok(warn && warn.title.includes("alpha"), "a warning box naming the current session");
+	assert.deepEqual(cur.deletes, []);
+	cur.panel.handleInput("\x1b");
+	assert.equal(cur.panel.state.mode, "normal");
+	cur.panel.dispose();
+});
+
+test("r / o / y / c / e / S refuse while several sessions are selected", async () => {
+	const h = makeSessionActionPanel();
+	await h.panel.load();
+	h.panel.handleInput(" ");
+	h.panel.handleInput("j");
+	await settle();
+	h.panel.handleInput(" ");
+	for (const [key, what] of [
+		["r", "rename"],
+		["o", "fork"],
+		["y", "clone"],
+		["c", "compact"],
+		["e", "export"],
+		["S", "share"],
+	] as const) {
+		h.panel.handleInput(key);
+		await flush();
+		assert.equal(h.panel.state.mode, "normal", key);
+		assert.ok(h.footer().includes(`${what}: cannot act on multiple sessions`), h.footer());
+	}
+	h.panel.dispose();
+});
+
+test("@ opens pi's changelog in a big box: j/k/arrows scroll, G / g jump, Esc / q / @ close", async () => {
+	const md = Array.from({ length: 60 }, (_, i) => `line ${i + 1}`).join("\n\n");
+	let loads = 0;
+	const panel = new LazyPanel({
+		theme: fakeTheme,
+		data: {
+			listSessions: async () => [row(1, "/a")],
+			loadTree: async () => [],
+			loadContent: async () => [],
+			loadChangelog: async () => {
+				loads++;
+				return md;
+			},
+		},
+		getHeight: () => 20,
+		requestRender: () => {},
+		onClose: () => {},
+	});
+	await panel.load();
+	const text = () => panel.render(100).map((l) => stripTerminalSequences(l));
+	panel.handleInput("@");
+	await flush();
+	assert.equal(loads, 1);
+	assert.equal(panel.state.mode, "changelog");
+	// first the loading box shows (the whole changelog is slow to render): a spinner + hint, no content yet
+	let lines = text();
+	assert.ok(dialogAt(lines, "What's New")?.title.includes("Esc/q close"), "the loading box shows how to close it");
+	assert.ok(
+		lines.some((l) => l.includes("Loading changelog")),
+		`a loading hint shows: ${lines.join("\n")}`,
+	);
+	assert.equal(dialogAt(lines, "What's New")!.body.some((l) => l.includes("line 1 ")), false, "content is not rendered yet");
+	// past the yield: the content is rendered and the scroll hints appear
+	await flush();
+	lines = text();
+	const dlg = dialogAt(lines, "What's New");
+	assert.ok(dlg, "the dialog is drawn");
+	assert.ok(dlg.title.includes("Esc/q close"), dlg.title);
+	assert.ok(dlg.body.some((l) => l.includes("line 1 ")), dlg.body.join("\n"));
+	assert.ok(lines.at(-1)!.includes("j/k scroll"), lines.at(-1));
+	for (const l of panel.render(100)) assert.equal(visibleWidth(l), 100);
+
+	panel.handleInput("j");
+	panel.handleInput("\x1b[B");
+	lines = text();
+	assert.ok(dialogAt(lines, "What's New")!.title.includes("3-"), dialogAt(lines, "What's New")!.title);
+	panel.handleInput("k");
+	assert.ok(dialogAt(text(), "What's New")!.title.includes("2-"));
+	panel.handleInput("G");
+	assert.ok(dialogAt(text(), "What's New")!.body.some((l) => l.includes("line 60")));
+	panel.handleInput("g");
+	assert.ok(dialogAt(text(), "What's New")!.title.includes("1-"));
+	// pane keys do not leak through
+	panel.handleInput("l");
+	assert.equal(panel.state.focus, "sessions");
+
+	for (const close of ["\x1b", "q", "@"]) {
+		if (panel.state.mode !== "changelog") {
+			panel.handleInput("@");
+			await flush();
+		}
+		panel.handleInput(close);
+		assert.equal(panel.state.mode, "normal", close);
+		assert.equal(dialogAt(text(), "What's New"), undefined);
+	}
+	panel.dispose();
+});
+
+// -------------------------------------------------------------------------
+// Mouse: wheel scrolls, click focuses + selects, double-click enters / folds
+// -------------------------------------------------------------------------
+
+/**
+ * 弹窗里某个目标的单元格（用画面本身定位）：含 `needle` 的那一行 + 它自己那一列。
+ * 底图的面板也有边框，所以不能数行里第一个 │；用目标的文字所在列最稳。
+ */
+function dialogCell(h: { text: (width?: number) => string[] }, needle: string, width = 100): { x: number; y: number } {
+	const lines = h.text(width);
+	const y = lines.findIndex((line) => line.includes(needle));
+	assert.ok(y >= 0, `"${needle}" is on screen`);
+	return { x: lines[y]!.indexOf(needle), y };
+}
+
+/** Synthetic normalized mouse event. The overlay is top-left, so x/y equal the screen cell. */
+function mouseEvent(type: TuiMouseEventType, x: number, y: number, extra: Partial<TuiMouseEvent> = {}): TuiMouseEvent {
+	return {
+		type,
+		button: type === "wheel" ? "none" : "left",
+		x,
+		y,
+		screenX: x,
+		screenY: y,
+		width: 100,
+		height: 20,
+		shift: false,
+		alt: false,
+		ctrl: false,
+		...extra,
+	};
+}
+
+test("click focuses the pane under the pointer and selects the list row; press / move are ignored", async () => {
+	const h = makeLoadedPanel(); // height 20 → sessions rows at y=1,3,5; tree body from y=10
+	await h.panel.load();
+	await settle();
+	assert.equal(h.panel.state.focus, "sessions");
+
+	// clicking the right column focuses content (no row to select there)
+	h.panel.handleMouse(mouseEvent("click", 50, 5));
+	assert.equal(h.panel.state.focus, "content");
+
+	// clicking a sessions row focuses sessions and moves the cursor onto it
+	const r = h.panel.handleMouse(mouseEvent("click", 2, 5)); // y=5 → 3rd visible row
+	assert.deepEqual(r, { handled: true });
+	assert.equal(h.panel.state.focus, "sessions");
+	assert.equal(h.panel.state.cursor.sessions, 2);
+	await settle();
+
+	// clicking a tree row focuses tree and moves the tree cursor
+	h.panel.handleMouse(mouseEvent("click", 2, 10)); // first tree body row
+	assert.equal(h.panel.state.focus, "tree");
+	assert.equal(h.panel.state.cursor.tree, 0);
+
+	// non-click / non-wheel events are not consumed (terminal keeps text selection)
+	assert.equal(h.panel.handleMouse(mouseEvent("move", 2, 5)), undefined);
+	assert.equal(h.panel.handleMouse(mouseEvent("press", 2, 5)), undefined);
+	h.panel.dispose();
+});
+
+test("clicking a border / blank cell still focuses that pane but keeps the cursor", async () => {
+	const h = makeLoadedPanel();
+	await h.panel.load();
+	await settle();
+	h.panel.handleMouse(mouseEvent("click", 2, 5)); // move to row 2 first
+	assert.equal(h.panel.state.cursor.sessions, 2);
+	h.panel.handleMouse(mouseEvent("click", 50, 5)); // leave to content
+	// click the sessions top border (y=0): focus returns, cursor unchanged
+	h.panel.handleMouse(mouseEvent("click", 2, 0));
+	assert.equal(h.panel.state.focus, "sessions");
+	assert.equal(h.panel.state.cursor.sessions, 2);
+	h.panel.dispose();
+});
+
+test("wheel scrolls the list viewport without moving the selection or stealing focus", async () => {
+	const h = makeLoadedPanel(); // 5 sessions, height 20 → 7 visible lines (2 per row), so max first line = 3
+	await h.panel.load();
+	await settle();
+	assert.equal(h.panel.state.focus, "sessions");
+	assert.equal(h.panel.state.cursor.sessions, 0);
+	const treeCallsBefore = h.treeCalls.length;
+
+	// wheel down scrolls the viewport (first visible line) but leaves the selection and focus alone
+	h.panel.handleMouse(mouseEvent("wheel", 2, 3, { wheelDelta: 2 }));
+	assert.equal(h.panel.state.listScroll.sessions, 2, "viewport scrolled down two lines");
+	assert.equal(h.panel.state.cursor.sessions, 0, "selection did not move");
+	assert.equal(h.panel.state.focus, "sessions", "focus unchanged");
+	await settle();
+	assert.equal(h.treeCalls.length, treeCallsBefore, "no session reload — the cursor never moved");
+
+	// wheel down again clamps at the bottom of the list (10 lines, 7 visible → max first 3)
+	h.panel.handleMouse(mouseEvent("wheel", 2, 3, { wheelDelta: 5 }));
+	assert.equal(h.panel.state.listScroll.sessions, 3, "clamped at the last window");
+
+	// wheel back up
+	h.panel.handleMouse(mouseEvent("wheel", 2, 3, { wheelDelta: -1 }));
+	assert.equal(h.panel.state.listScroll.sessions, 2);
+
+	// a keyboard move re-centers on the cursor: the wheel override is cleared
+	h.panel.handleInput("j");
+	assert.equal(h.panel.state.cursor.sessions, 1);
+	assert.equal(h.panel.state.listScroll.sessions, null, "cursor move clears the wheel offset");
+	await settle();
+	h.panel.dispose();
+});
+
+test("wheel over the tree pane never moves the tree selection (content stays put)", async () => {
+	const h = makeLoadedPanel();
+	await h.panel.load();
+	await settle();
+	const cursor = h.panel.state.cursor.tree;
+	const highlight = h.panel.state.contentHighlight;
+	h.panel.handleMouse(mouseEvent("wheel", 2, 12, { wheelDelta: 1 })); // tree pane body
+	assert.equal(h.panel.state.focus, "sessions", "wheel never changes focus");
+	assert.equal(h.panel.state.cursor.tree, cursor, "tree selection unchanged");
+	assert.equal(h.panel.state.contentHighlight, highlight, "content highlight unchanged");
+	h.panel.dispose();
+});
+
+test("double-clicking a session resumes it (panel hidden, then closed)", async () => {
+	const h = makeSessionActionPanel(); // height 24 → sessions rows at y=1,3,5
+	await h.panel.load();
+	await settle();
+	h.panel.handleMouse(mouseEvent("click", 2, 3, { clickCount: 1, height: 24 }));
+	assert.equal(h.panel.state.cursor.sessions, 1);
+	h.panel.handleMouse(mouseEvent("click", 2, 3, { clickCount: 2, height: 24 }));
+	await settle();
+	assert.ok(h.hidden.includes(true), "panel hidden while pi switches session");
+	assert.ok(h.closed(), "a successful resume closes the panel");
+});
+
+test("double-clicking a tree node toggles its fold", async () => {
+	const h = makeForkedPanel(); // e1 side branch starts folded; visible rows: e0, e1, e3, e4
+	await h.panel.load();
+	await flush();
+	assert.deepEqual([...h.panel.state.treeFolded], ["e1"]);
+	// tree body starts at y=10 (height 20): row 1 (e1, the folded head) is y=11
+	h.panel.handleMouse(mouseEvent("click", 2, 11, { clickCount: 1, width: 160 }));
+	assert.equal(h.panel.state.focus, "tree");
+	assert.equal(h.panel.state.cursor.tree, 1);
+	h.panel.handleMouse(mouseEvent("click", 2, 11, { clickCount: 2, width: 160 }));
+	assert.deepEqual([...h.panel.state.treeFolded], [], "double-click unfolds the side branch");
+	h.panel.dispose();
+});
+
+test("a click outside a dialog is swallowed with no effect; inside the help box it selects a command", async () => {
+	const h = makeLoadedPanel(); // height 20 → 帮助框 64 宽居中，left = 18
+	await h.panel.load();
+	await settle();
+	h.panel.handleInput("?");
+	assert.equal(h.panel.state.helpOpen, true);
+
+	// 框外：（2, 5）落在左边的底图上，什么都不做，也不会关掉弹窗
+	assert.deepEqual(h.panel.handleMouse(mouseEvent("click", 2, 5)), { handled: true });
+	assert.equal(h.panel.state.helpOpen, true, "overlay stays open");
+	assert.equal(h.panel.state.helpCursor, 0, "cursor unchanged");
+	assert.equal(h.panel.state.cursor.sessions, 0, "the list behind it did not move");
+	// press 仍然交回终端做文本选择
+	assert.equal(h.panel.handleMouse(mouseEvent("press", 2, 5)), undefined);
+
+	// 框内某条命令行：单击只选中（不执行），双击才是 Enter
+	const entries = buildHelpLines(DEFAULT_KEYMAP, "sessions").filter((line) => line.kind === "binding");
+	const expected = entries.findIndex((line) => line.action === "session-sort");
+	assert.ok(expected > 0);
+	const cell = dialogCell(h, t("action.session-sort"));
+	const sort = h.panel.state.sort;
+
+	h.panel.handleMouse(mouseEvent("click", cell.x, cell.y, { clickCount: 1 }));
+	assert.equal(h.panel.state.helpCursor, expected, "single click selects the command");
+	assert.equal(h.panel.state.helpOpen, true, "and does not run it");
+	assert.equal(h.panel.state.sort, sort, "no action ran");
+	await settle();
+
+	h.panel.handleMouse(mouseEvent("click", cell.x, cell.y, { clickCount: 2 }));
+	assert.equal(h.panel.state.helpOpen, false, "double-click runs it (help closes)");
+	assert.notEqual(h.panel.state.sort, sort, "session-sort acted on the sessions pane");
+	await settle();
+	h.panel.dispose();
+});
+
+// -------------------------------------------------------------------------
+// Invariants the app.ts split relies on: IME focus, key timeouts, overlays, failure paths
+// -------------------------------------------------------------------------
+
+test("the IME cursor marker follows panel focus into each text prompt and leaves when it closes", async () => {
+	const h = makeSessionActionPanel();
+	await h.panel.load();
+	await settle();
+	const marked = () => h.panel.render(120).some((l) => l.includes(CURSOR_MARKER));
+	assert.equal(marked(), false, "no prompt, no marker");
+	h.panel.focused = true;
+	// r / n / c / I open a prompt that takes the cursor, / the search bar; Esc closes each again
+	for (const key of ["r", "n", "c", "I", "/"]) {
+		h.panel.handleInput(key);
+		assert.equal(marked(), true, `${key}: the prompt carries the IME cursor`);
+		h.panel.handleInput("\x1b");
+		assert.equal(h.panel.state.mode, "normal", key);
+		assert.equal(marked(), false, `${key}: closing the prompt drops the marker`);
+	}
+	// e: the format menu has no text cursor, the path prompt after it does; Esc steps back
+	h.panel.handleInput("e");
+	assert.equal(marked(), false, "a menu has no text cursor");
+	h.panel.handleInput("\r");
+	assert.equal(marked(), true, "the export path prompt carries the IME cursor");
+	h.panel.handleInput("\x1b");
+	assert.equal(h.panel.state.mode, "export", "Esc goes back to the format menu");
+	assert.equal(marked(), false);
+	h.panel.handleInput("\x1b");
+	// focus that arrives (or leaves) while a prompt is open reaches it
+	h.panel.focused = false;
+	h.panel.handleInput("r");
+	assert.equal(marked(), false, "an unfocused panel draws no marker");
+	h.panel.focused = true;
+	assert.equal(marked(), true, "focus set while the prompt is open reaches it");
+	h.panel.focused = false;
+	assert.equal(marked(), false, "and leaves with it");
+	h.panel.handleInput("\x1b");
+	h.panel.dispose();
+});
+
+test("the IME cursor marker reaches the tree prompts and the tree dialog's search row", async () => {
+	const h = makeTreeActionPanel();
+	await h.panel.load();
+	await flush();
+	const marked = () => h.panel.render(100).some((l) => l.includes(CURSOR_MARKER));
+	h.panel.focused = true;
+	h.panel.handleInput("2");
+	h.panel.handleInput("L");
+	assert.equal(marked(), true, "the label prompt carries the IME cursor");
+	h.panel.handleInput("\x1b");
+	assert.equal(marked(), false);
+	// Enter on e0: the summary menu (no text cursor) → custom prompt (cursor) → Esc back to the menu
+	h.panel.handleInput("g");
+	h.panel.handleInput("g");
+	h.panel.handleInput("\r");
+	assert.equal(h.panel.state.mode, "restore");
+	assert.equal(marked(), false, "the summary menu has no text cursor");
+	h.panel.handleInput("j");
+	h.panel.handleInput("j");
+	h.panel.handleInput("\r");
+	assert.equal(marked(), true, "the custom prompt carries the IME cursor");
+	h.panel.handleInput("\x1b");
+	assert.equal(h.panel.state.mode, "restore", "Esc goes back to the menu");
+	assert.equal(marked(), false);
+	h.panel.handleInput("\x1b");
+	assert.equal(h.panel.state.mode, "normal");
+	// the tree dialog: its list has no text cursor, the search row does while it has the keys
+	h.panel.handleInput("a");
+	assert.equal(marked(), false, "the dialog's list has no text cursor");
+	h.panel.handleInput("/");
+	assert.equal(marked(), true, "the dialog's search row carries the IME cursor");
+	h.panel.handleInput("\x1b");
+	assert.equal(marked(), false, "leaving the search row drops it");
+	// T over the dialog: the prompt gets the cursor, Esc hands the keys back to the dialog
+	h.panel.handleInput("L");
+	assert.equal(marked(), true);
+	h.panel.handleInput("\x1b");
+	assert.equal(h.panel.state.mode, "tree");
+	assert.equal(marked(), false);
+	h.panel.handleInput("\x1b");
+	assert.equal(h.panel.state.mode, "normal");
+	h.panel.dispose();
+});
+
+test("an unfinished key sequence (the g of gg) is dropped after a second", (ctx) => {
+	ctx.mock.timers.enable({ apis: ["setTimeout"] });
+	const h = makePanel();
+	const footer = () => h.text(200).at(-1)!;
+	h.panel.handleInput("g");
+	assert.ok(footer().includes(t("status.pending", { keys: "g" })), footer());
+	ctx.mock.timers.tick(999);
+	assert.ok(footer().includes(t("status.pending", { keys: "g" })), "still waiting just before the timeout");
+	ctx.mock.timers.tick(1);
+	assert.equal(footer().includes(t("status.pending", { keys: "g" })), false, "the half sequence is dropped");
+	// the next g starts a new sequence rather than completing the dropped one
+	h.panel.handleInput("g");
+	assert.ok(footer().includes(t("status.pending", { keys: "g" })), footer());
+	h.panel.dispose();
+});
+
+test("the help footer shows only its own controls and restores the pane hints on close", () => {
+	const h = makePanel();
+	const footer = () => h.text(120).at(-1)!;
+	const before = footer();
+	h.panel.handleInput("?");
+	assert.equal(h.panel.state.helpOpen, true);
+	assert.ok(footer().startsWith(" HELP "));
+	assert.ok(footer().includes("j/k/↑↓ move"));
+	assert.ok(footer().includes("Enter run"));
+	assert.ok(footer().includes("Esc/q/? close"));
+	assert.ok(!footer().includes("Enter Resume"));
+	assert.ok(!footer().includes("d Delete"));
+	h.panel.handleInput("\x1b");
+	assert.equal(footer(), before);
+	h.panel.dispose();
+});
+
+test("dialogs with no list keep swallowing the mouse; no dialog leaks a click to the panes behind it", async () => {
+	const h = makeSessionActionPanel({ data: { loadChangelog: async () => "hello changelog" } });
+	await h.panel.load();
+	await settle();
+	const click = (x = 2, y = 3) => h.panel.handleMouse(mouseEvent("click", x, y, { height: 24 }));
+	const wheel = (x = 2, y = 3, delta = 1) => h.panel.handleMouse(mouseEvent("wheel", x, y, { height: 24, wheelDelta: delta }));
+
+	// 只有输入框 / 只有字段的弹窗：点击和滚轮都被吞掉，什么都不做
+	const passive: Array<[string, () => Promise<void>]> = [
+		["rename prompt", async () => h.panel.handleInput("r")],
+		["session info", async () => {
+			h.panel.handleInput("i");
+			await flush();
+		}],
+	];
+	for (const [name, open] of passive) {
+		await open();
+		assert.notEqual(h.panel.state.mode, "normal", `${name} is open`);
+		assert.deepEqual(click(), { handled: true }, name);
+		assert.deepEqual(wheel(), { handled: true }, name);
+		assert.equal(h.panel.state.cursor.sessions, 0, `${name}: the list behind it did not move`);
+		h.panel.handleInput("\x1b");
+		assert.equal(h.panel.state.mode, "normal", name);
+	}
+
+	// 有列表 / 多区域的弹窗：鼠标归它自己，但在框内框外都不会漏到下面的面板
+	const interactive: Array<[string, () => Promise<void>, string]> = [
+		["delete confirmation", async () => h.panel.handleInput("d"), t("confirm.yes")],
+		[
+			"changelog",
+			async () => {
+				h.panel.handleInput("@");
+				await flush();
+				await flush();
+			},
+			"hello",
+		],
+		[
+			"tree dialog",
+			async () => {
+				h.panel.handleInput("2");
+				h.panel.handleInput("a");
+			},
+			"msg 1",
+		],
+		["settings", async () => h.panel.handleInput(","), t("settings.defaultSort")],
+	];
+	for (const [name, open, needle] of interactive) {
+		await open();
+		const mode = h.panel.state.mode;
+		const focus = h.panel.state.focus;
+		assert.notEqual(mode, "normal", `${name} is open`);
+		const inside = dialogCell(h, needle);
+		for (const [where, x, y] of [["outside", 2, 3], ["inside", inside.x, inside.y]] as Array<[string, number, number]>) {
+			assert.deepEqual(click(x, y), { handled: true }, `${name} click ${where}`);
+			assert.deepEqual(wheel(x, y), { handled: true }, `${name} wheel ${where}`);
+			assert.equal(h.panel.state.mode, mode, `${name}: still open after a ${where} click`);
+			assert.equal(h.panel.state.cursor.sessions, 0, `${name}: the sessions cursor did not move (${where})`);
+			assert.equal(h.panel.state.listScroll.sessions, null, `${name}: nor scroll (${where})`);
+			assert.equal(h.panel.state.focus, focus, `${name}: focus unchanged (${where})`);
+		}
+		h.panel.handleInput("\x1b");
+		assert.equal(h.panel.state.mode, "normal", name);
+		h.panel.handleInput("1");
+	}
+
+	// with every dialog closed the same click selects the row
+	click();
+	assert.equal(h.panel.state.cursor.sessions, 1);
+	h.panel.dispose();
+});
+
+test("a confirmation menu: a single click selects the entry, a double-click is Enter", async () => {
+	const h = makeSessionActionPanel();
+	await h.panel.load();
+	await settle();
+	h.panel.handleInput("d"); // 删除确认框，默认停在 No
+	assert.equal(h.panel.state.mode, "confirm");
+
+	const yes = dialogCell(h, t("confirm.yes"));
+	h.panel.handleMouse(mouseEvent("click", yes.x, yes.y, { height: 24, clickCount: 1 }));
+	assert.equal(h.panel.state.mode, "confirm", "single click only selects");
+	assert.match(h.text(100)[yes.y]!, /› Yes/, "the cursor moved onto Yes");
+	assert.deepEqual(h.deletes, [], "nothing was deleted");
+
+	h.panel.handleMouse(mouseEvent("click", yes.x, yes.y, { height: 24, clickCount: 2 }));
+	await settle();
+	assert.deepEqual(h.deletes, ["/tmp/s1.jsonl"], "double-click confirmed (same as Enter)");
+	assert.notEqual(h.panel.state.mode, "confirm");
+	h.panel.dispose();
+});
+
+test("the tree dialog takes the mouse: clicking a row selects it and hands the keys back to the list", async () => {
+	const h = makeSessionActionPanel();
+	await h.panel.load();
+	await settle();
+	h.panel.handleInput("2");
+	h.panel.handleInput("a");
+	assert.equal(h.panel.state.mode, "tree");
+
+	// 先把按键交给搜索框：这时点列表行应该像 Esc 一样把按键交还给列表（关键字保留）
+	h.panel.handleInput("/");
+	const row = dialogCell(h, "msg 0");
+	const cursorRow = () => h.text(100).findIndex((line) => line.includes("›") && line.includes("msg "));
+	// 打开时光标落在活动叶子（msg 1）上，不在 msg 0
+	assert.notEqual(cursorRow(), row.y);
+	h.panel.handleMouse(mouseEvent("click", row.x, row.y, { height: 24 }));
+	assert.equal(cursorRow(), row.y, "点中的那一行拿到对话框光标");
+	assert.equal(h.panel.state.mode, "tree", "the dialog stays open");
+
+	// 按键已经回到列表：j 往下动的是列表光标（按键还在搜索框里的话，j 只会变成输入）
+	h.panel.handleInput("j");
+	assert.equal(cursorRow(), row.y + 1, "j moved the list cursor down");
+	h.panel.handleInput("\x1b");
+	assert.equal(h.panel.state.mode, "normal");
+	h.panel.dispose();
+});
+
+test("the changelog box scrolls with the wheel, and a click inside it does nothing", async () => {
+	const lines = Array.from({ length: 60 }, (_, i) => `line ${i}`).join("\n\n");
+	const h = makeSessionActionPanel({ data: { loadChangelog: async () => lines } });
+	await h.panel.load();
+	await settle();
+	h.panel.handleInput("@");
+	await flush();
+	await flush();
+	assert.equal(h.panel.state.mode, "changelog");
+
+	const inside = dialogCell(h, "line 0");
+	const top = h.text(100)[inside.y]!;
+	h.panel.handleMouse(mouseEvent("click", inside.x, inside.y, { height: 24 }));
+	assert.equal(h.text(100)[inside.y], top, "a click in a read-only box changes nothing");
+
+	h.panel.handleMouse(mouseEvent("wheel", inside.x, inside.y, { height: 24, wheelDelta: 3 }));
+	const down = h.text(100)[inside.y]!;
+	assert.notEqual(down, top, "the wheel scrolled the box");
+	h.panel.handleMouse(mouseEvent("wheel", inside.x, inside.y, { height: 24, wheelDelta: -3 }));
+	assert.equal(h.text(100)[inside.y], top, "and back up");
+	// 指针在框外：不滚（和面板一样，滚轮只作用于指针下的东西）
+	h.panel.handleMouse(mouseEvent("wheel", 1, inside.y, { height: 24, wheelDelta: 5 }));
+	assert.equal(h.text(100)[inside.y], top, "a wheel outside the box does nothing");
+	h.panel.dispose();
+});
+
+test("the settings page takes the mouse: clicking the sidebar switches category (the panes behind stay put)", async () => {
+	const h = makePanel();
+	await h.panel.load();
+	h.panel.handleInput(",");
+	assert.equal(h.panel.state.mode, "settings");
+	assert.equal(h.panel.state.settings.category, "general");
+
+	const layout = dialogCell(h, t("settings.category.layout"));
+	h.panel.handleMouse(mouseEvent("click", layout.x, layout.y));
+	assert.equal(h.panel.state.settings.category, "layout");
+	assert.equal(h.panel.state.settings.region, "categories");
+	assert.equal(h.panel.state.cursor.sessions, 0, "the panes behind it did not move");
+	assert.equal(h.panel.state.mode, "settings", "and the page stays open");
+	h.panel.dispose();
+});
+
+test("@ closes the changelog box even while it is still loading, and the late content does not reopen it", async () => {
+	let release: (markdown: string) => void = () => {};
+	const panel = new LazyPanel({
+		theme: fakeTheme,
+		data: {
+			listSessions: async () => [row(1, "/a")],
+			loadTree: async () => [],
+			loadContent: async () => [],
+			loadChangelog: () =>
+				new Promise<string>((resolve) => {
+					release = resolve;
+				}),
+		},
+		getHeight: () => 20,
+		requestRender: () => {},
+		onClose: () => {},
+	});
+	await panel.load();
+	panel.handleInput("@");
+	assert.equal(panel.state.mode, "changelog");
+	panel.handleInput("@");
+	assert.equal(panel.state.mode, "normal", "@ again cancels the loading box");
+	release("## [1.0.0]\n\n- hello");
+	await flush();
+	await flush();
+	assert.equal(panel.state.mode, "normal");
+	const lines = panel.render(100).map((l) => stripTerminalSequences(l));
+	assert.equal(dialogAt(lines, "What's New"), undefined, "the late content does not reopen the box");
+	panel.dispose();
+});
+
+test("session actions report loader / action failures in the footer and leave nothing open", async () => {
+	async function boom(): Promise<never> {
+		throw new Error("boom");
+	}
+	async function run(opts: Parameters<typeof makeSessionActionPanel>[0], keys: string[], expected: string, mode = "normal") {
+		const h = makeSessionActionPanel(opts);
+		await h.panel.load();
+		await settle();
+		for (const key of keys) {
+			h.panel.handleInput(key);
+			await flush();
+		}
+		assert.ok(h.footer().includes(expected), `${keys.join(" ")}: ${h.footer()}`);
+		assert.equal(h.panel.state.mode, mode, keys.join(" "));
+		h.panel.dispose();
+		return h;
+	}
+	// o: the fork points cannot be read
+	await run({ data: { loadForkPoints: boom } }, ["o"], t("status.forkFailed", { error: "boom" }));
+	// Y: the clipboard fails
+	await run({ actions: { copyLastReply: boom } }, ["Y"], t("status.copyFailed", { error: "boom" }));
+	// i: the info cannot be loaded / read; y in the box with a failing clipboard keeps the box open
+	await run({ data: { loadSessionInfo: boom } }, ["i"], t("status.sessionInfoFailed", { error: "boom" }));
+	await run({ data: { loadSessionInfo: async () => undefined } }, ["i"], t("status.sessionInfoCannotRead", { file: "/tmp/s1.jsonl" }));
+	await run({ actions: { copyText: boom } }, ["i", "y"], t("status.copyFailed", { error: "boom" }), "info");
+	// p: saving the pins fails → the pin is rolled back
+	const pinned = await run({ actions: { updateSessionState: boom } }, ["p"], t("status.pinFailed", { error: "boom" }));
+	assert.deepEqual(pinned.panel.state.pinnedFiles, [], "the failed pin is rolled back");
+	// d with a selection but no actions wired
+	await run({ actions: null }, [" ", "d"], t("status.deleteUnavailable"));
+});
+
+test("an action bound where it does nothing, or misspelled in the config, only says so in the footer", () => {
+	// tree-filter-all belongs to the tree dialog; "tree-filter-everything" is no action at all (the config does not check names)
+	const keymap = mergeKeymap(DEFAULT_KEYMAP, { sessions: { "tree-filter-all": "F2", "tree-filter-everything": "F3" } as never });
+	const h = makePanel({ keymap });
+	const footer = () => h.text(200).at(-1)!;
+	h.panel.handleInput("\x1bOQ"); // F2
+	assert.ok(footer().includes(t("status.notImplemented", { action: "tree-filter-all" })), footer());
+	h.panel.handleInput("\x1bOR"); // F3
+	assert.ok(footer().includes(t("status.notImplemented", { action: "tree-filter-everything" })), footer());
+	assert.equal(h.closed(), false);
+	assert.equal(h.panel.state.mode, "normal");
+	h.panel.dispose();
+});
+
+/**
+ * 回归：面板必须从 live theme 取值（入口传 `ctx.ui.theme` 那个 proxy），而不是构造时的快照。
+ * pi 换主题时是整体替换 Theme 实例的，快照会让面板一直用旧颜色。
+ */
+test("the panel reads colors through the live theme, not a snapshot", () => {
+	let accent = "RED";
+	// 模拟 pi 的导出 `theme` proxy：每次取属性都现查当前实例。
+	const live = new Proxy({} as Theme, {
+		get: (_target, prop) => {
+			const current = {
+				fg: (color: string, s: string) => color === "accent" ? `<${accent}>${s}</${accent}>` : s,
+				bg: (_color: string, s: string) => s,
+				bold: (s: string) => s,
+				italic: (s: string) => s,
+				underline: (s: string) => s,
+				inverse: (s: string) => s,
+				strikethrough: (s: string) => s,
+			} as unknown as Record<string | symbol, unknown>;
+			return current[prop];
+		},
+	});
+	const panel = new LazyPanel({ theme: live, data: { listSessions: async () => [row(1, "/a")], loadTree: async () => [], loadContent: async () => [] }, getHeight: () => 20, requestRender: () => {}, onClose: () => {} });
+	const render = () => panel.render(80).join("\n");
+	assert.ok(render().includes("<RED>"), "constructed with the first theme");
+	accent = "BLUE"; // 用户在 pi 里换了主题
+	assert.ok(render().includes("<BLUE>"), "a later render picks up the new theme");
+	assert.ok(!render().includes("<RED>"), "the old snapshot is gone");
+	panel.dispose();
+});
+
+/**
+ * 回归：CONTENT 的排版（正文颜色）和 changelog 的渲染结果都带主题颜色，缓存的 key（宽度 / 高亮 /
+ * markdown）在换主题时不动，所以 pi 调 `invalidate()` 时必须把它们丢掉，否则面板边框变了、
+ * 正文还留在旧颜色。
+ */
+test("invalidate drops the theme-colored caches so a repaint uses the new theme", async () => {
+	let accent = "RED";
+	const live = new Proxy({} as Theme, {
+		get: (_target, prop) => ({
+			fg: (color: string, s: string) => color === "accent" ? `<${accent}>${s}</${accent}>` : s,
+			bg: (_color: string, s: string) => s,
+			bold: (s: string) => s,
+			italic: (s: string) => s,
+			underline: (s: string) => s,
+			inverse: (s: string) => s,
+			strikethrough: (s: string) => s,
+		} as unknown as Record<string | symbol, unknown>)[prop],
+	});
+	const panel = new LazyPanel({
+		theme: live,
+		data: { listSessions: async () => [row(1, "/a")], loadTree: async () => [treeRow(0)], loadContent: async () => [{ entryId: "e0", role: "user", timestamp: 0, markdown: "hello" } as ContentBlock] },
+		getHeight: () => 20,
+		requestRender: () => {},
+		onClose: () => {},
+	});
+	await panel.load();
+	assert.ok(panel.render(100).join("\n").includes("<RED>"));
+	accent = "BLUE";
+	panel.invalidate();
+	assert.ok(panel.render(100).join("\n").includes("<BLUE>"), "the content layout is re-rendered in the new theme");
+	assert.ok(!panel.render(100).join("\n").includes("<RED>"), "no stale colors survive the invalidate");
+	panel.dispose();
+});
+
+/**
+ * 假的主题端口：`sets` 记下真正的切换，pi 当前生效（也就是它保存）的主题是 "dark"。
+ * `fail` 让切换失败，用来覆盖"留在面板上重试"的路径。
+ */
+function fakeThemeSource(fail = false): { source: ThemeSource; sets: string[] } {
+	const sets: string[] = [];
+	return {
+		source: {
+			list: () => [{ name: "dark", path: "/pi/dark.json" }, { name: "nord", path: "/home/u/.pi/agent/themes/nord.json" }],
+			theme: { name: "dark" } as unknown as Theme,
+			savedName: () => sets.at(-1) ?? "dark",
+			set: (name) => {
+				if (fail) return { success: false, error: "invalid theme" };
+				sets.push(name);
+				return { success: true };
+			},
+		},
+		sets,
+	};
+}
+
+function fakeSettingsSource(): SettingsSource {
+	return {
+		read: async () => ({ raw: {}, fingerprint: "x" }),
+		save: async () => ({ snapshot: { raw: {}, fingerprint: "y" }, warnings: [] }),
+		apply: () => {},
+	};
+}
+
+/** Wait until the settings read / save settled. */
+async function settingsSettled(panel: LazyPanel): Promise<void> {
+	for (let i = 0; i < 100 && (panel.state.settings.loading || panel.state.settings.saving); i++) await new Promise((resolve) => setTimeout(resolve, 2));
+	assert.equal(panel.state.settings.loading, false);
+	assert.equal(panel.state.settings.saving, false);
+}
+
+/**
+ * 回归：设置页的主题选择走的是真实按键路径（分类 → 列表 → Enter → 菜单 → Enter），
+ * 这条链上踩过两次坑：主题列表在构造时被快照成空、主题行的 id 是空串导致 Enter 什么都不做。
+ * 主题页只有一行（右边是当前主题），回车弹菜单；选中当场切 pi（由 pi 自己持久化）。
+ */
+test("the theme page switches pi the moment a theme is picked", async () => {
+	const themes = fakeThemeSource();
+	const h = makePanel({ themeSource: themes.source, settingsSource: fakeSettingsSource() });
+	h.panel.openSettings();
+	await settingsSettled(h.panel);
+	assert.equal(h.panel.state.settings.activeTheme, "dark");
+	// 分类光标走到 Theme，再进列表（l）：一行设置，右边是 pi 生效的主题。
+	for (const key of ["j", "j", "j", "l"]) h.panel.handleInput(key);
+	assert.equal(h.panel.state.settings.category, "theme");
+	assert.match(h.text(120).join("\n"), /Theme/);
+	assert.match(h.text(120).join("\n"), /dark/);
+	// Enter 打开主题菜单，选中 nord：当场切 pi，不留草稿、不用再按 s。
+	h.panel.handleInput("\r");
+	assert.match(h.text(120).join("\n"), /Theme/);
+	h.panel.handleInput("j");
+	h.panel.handleInput("\r");
+	assert.deepEqual(themes.sets, ["nord"]);
+	assert.equal(h.panel.state.settings.activeTheme, "nord");
+	assert.equal(h.panel.state.settings.themeDraft, undefined);
+	assert.equal(settingsDirtyCount(h.panel.state.settings), 0);
+	assert.doesNotMatch(h.text(120).join("\n"), /\* Theme/);
+	// 主题页平时只有一行值，没有说明；底部说明框也不出现（只有切换失败时才有）。
+	assert.match(h.text(120).join("\n"), /Theme\s+nord/);
+	h.panel.dispose();
+});
+
+test("a failed theme switch stays on the page, marked and retryable", async () => {
+	const themes = fakeThemeSource(true);
+	const h = makePanel({ themeSource: themes.source, settingsSource: fakeSettingsSource() });
+	h.panel.openSettings();
+	await settingsSettled(h.panel);
+	for (const key of ["j", "j", "j", "l", "\r", "j", "\r"]) h.panel.handleInput(key);
+	// pi 没切过去：当前主题还是 dark，失败的 nord 留着等重试。
+	assert.deepEqual(themes.sets, []);
+	assert.equal(h.panel.state.settings.activeTheme, "dark");
+	assert.equal(h.panel.state.settings.themeDraft, "nord");
+	assert.match(h.text(120).join("\n"), /Cannot switch theme/);
+	assert.match(h.text(120).join("\n"), /s Retry/);
+	assert.match(h.text(120).join("\n"), /\* Theme/);
+	// q：还有没生效的改动 → 挽留 → 选"放弃改动并退出" → 确认。
+	h.panel.handleInput("q");
+	h.panel.handleInput("j");
+	h.panel.handleInput("j");
+	h.panel.handleInput("\r");
+	h.panel.handleInput("y");
+	assert.equal(h.panel.state.settings.phase, "closed");
+	assert.equal(h.panel.state.settings.themeDraft, undefined);
+	h.panel.dispose();
+});
+
+test("picking a value on the general page writes and applies it right away", async () => {
+	let applied = 0;
+	const saved: Record<string, unknown>[] = [];
+	const source: SettingsSource = {
+		read: async () => ({ raw: {}, fingerprint: "x" }),
+		save: async (_baseline, patch) => {
+			saved.push({ ...patch });
+			return { snapshot: { raw: { ...patch }, fingerprint: `saved-${saved.length}` }, warnings: [] };
+		},
+		apply: () => { applied++; },
+	};
+	const h = makePanel({ settingsSource: source });
+	h.panel.openSettings();
+	await settingsSettled(h.panel);
+	// 进列表（l）→ Enter 打开"界面语言"菜单 → 下移到中文 → Enter。
+	for (const key of ["l", "\r", "j", "\r"]) h.panel.handleInput(key);
+	await settingsSettled(h.panel);
+	assert.deepEqual(saved, [{ locale: "zh" }], "回车当场落盘，不用再按 s");
+	assert.equal(applied, 1);
+	assert.equal(settingsDirtyCount(h.panel.state.settings), 0);
+	assert.equal(h.panel.state.settings.patch.locale, undefined);
+	assert.match(h.text(120).join("\n"), /Simplified Chinese/);
+	h.panel.dispose();
+});
+
+/**
+ * 回归：footer 的 status 在启动时就是配置里的第一条警告（index.ts 把 config.warnings[0]
+ * 当 status 传进来）。保存设置会走 refreshConfig，那里曾经无条件 `this.status = undefined`，
+ * 于是改任意一项（哪怕和警告无关）都会让配置里的问题不再提示，而且不会自己回来。
+ */
+test("saving settings keeps the startup config warning in the footer", async () => {
+	// 真的警告文案来自 src/config/config.ts:123（不是 i18n 文案，这里是它的前缀）。
+	const warning = 'config: "theme" is not a plugin setting';
+	// 落盘的配置里带着 theme：resolveConfig 每次都会为它推一条警告。
+	const raw = { theme: "dark" };
+	const source: SettingsSource = {
+		read: async () => ({ raw, fingerprint: "x" }),
+		save: async (_baseline, patch) => ({ snapshot: { raw: { ...raw, ...patch }, fingerprint: "y" }, warnings: [] }),
+		apply: () => {},
+	};
+	const h = makePanel({ settingsSource: source, status: warning });
+	assert.match(h.text(120).at(-1)!, /is not a plugin setting/, "启动时的 status（配置警告）显示在 footer");
+	h.panel.openSettings();
+	await settingsSettled(h.panel);
+	// 改一个和警告无关的项：l 进列表 → Enter 开菜单 → j 下移 → Enter 当场保存 → apply → refreshConfig。
+	for (const key of ["l", "\r", "j", "\r"]) h.panel.handleInput(key);
+	await settingsSettled(h.panel);
+	h.panel.handleInput("q");
+	assert.equal(h.panel.state.settings.phase, "closed");
+	assert.match(h.text(120).at(-1)!, /is not a plugin setting/, "保存后 footer 的配置警告仍在");
+	h.panel.dispose();
+
+	// 配置没问题时照旧清掉：保存前的临时提示不该一直挂着。
+	const clean = makePanel({ settingsSource: fakeSettingsSource(), status: warning });
+	clean.panel.openSettings();
+	await settingsSettled(clean.panel);
+	for (const key of ["l", "\r", "j", "\r"]) clean.panel.handleInput(key);
+	await settingsSettled(clean.panel);
+	clean.panel.handleInput("q");
+	assert.doesNotMatch(clean.text(120).join("\n"), /is not a plugin setting/);
+	clean.panel.dispose();
+});
+
+/**
+ * 回归：refreshConfig 曾经无条件 `contentViewport.setBlocks(blocks, leaf)` 来失效正文排版缓存
+ * （排版里有本地化标题）。于是保存任意一项设置——哪怕只是改键位——都会把整篇 Markdown 重排一遍。
+ * 现在语言算进了缓存的键（见 ContentViewport.layout），保存不再需要清缓存，会话和滚动位置照旧不动。
+ */
+test("saving settings no longer drops the CONTENT layout cache", async (ctx) => {
+	const setBlocks = ctx.mock.method(ContentViewport.prototype, "setBlocks");
+	const h = makePanel({ settingsSource: fakeSettingsSource() });
+	await h.panel.load();
+	h.text(120);
+	const before = setBlocks.mock.callCount();
+	h.panel.openSettings();
+	await settingsSettled(h.panel);
+	// 进列表（l）→ Enter 开菜单 → j 下移 → Enter 当场保存 → apply → refreshConfig。
+	for (const key of ["l", "\r", "j", "\r"]) h.panel.handleInput(key);
+	await settingsSettled(h.panel);
+	h.panel.handleInput("q");
+	assert.equal(h.panel.state.settings.phase, "closed");
+	assert.equal(setBlocks.mock.callCount(), before, "保存设置不再走 setBlocks 清正文排版缓存");
+	h.panel.dispose();
+});

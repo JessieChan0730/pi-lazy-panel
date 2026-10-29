@@ -17,7 +17,7 @@ ctx.ui.theme（live proxy，每次取属性都现查当前主题实例）
 
 - **跟随 pi**：入口传的是 `ctx.ui.theme`，不是 `ctx.ui.custom` 回调参数里的 `theme`。后者是
   构造那一刻的快照——pi 换主题时整体替换 `globalThis[THEME_KEY]`，拿着快照的面板会一直用旧
-  颜色（`test/panel.test.ts` 的 "reads colors through the live theme" 锁住这一点）。
+  颜色（`test/app/panel.test.ts` 的 "reads colors through the live theme" 锁住这一点）。
   pi 侧换主题（`/settings`、主题文件热重载）会触发 `ui.requestRender()`，面板跟着重绘。
 - **内置 + 自定义主题**：都是 pi 的主题，面板不额外发明格式。用户按 pi 的
   `docs/themes.md` 写一个 JSON（全部 53 个必填 token + 可选 `vars`）丢进
