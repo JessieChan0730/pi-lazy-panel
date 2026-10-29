@@ -1,0 +1,87 @@
+/**
+ * pi settings the panel reads (`branchSummary.skipPrompt`) through pi's own
+ * SettingsManager, against temp agent / project directories.
+ * Run with `npm test` (node --test via tsx).
+ */
+
+import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { test } from "node:test";
+import { DEFAULT_PI_SETTINGS, loadPiSettings } from "../../src/config/pi-settings.ts";
+
+function tempDir(t: { after: (fn: () => void) => void }): string {
+	const dir = mkdtempSync(join(tmpdir(), "lazy-panel-settings-"));
+	t.after(() => rmSync(dir, { recursive: true, force: true }));
+	return dir;
+}
+
+test("loadPiSettings reads branchSummary.skipPrompt from the global and project files, defaulting to false", (t) => {
+	const dir = tempDir(t);
+	const agentDir = join(dir, "agent");
+	const cwd = join(dir, "project");
+	mkdirSync(agentDir, { recursive: true });
+	mkdirSync(cwd, { recursive: true });
+
+	// nothing on disk → pi's defaults
+	assert.deepEqual(loadPiSettings(cwd, agentDir), DEFAULT_PI_SETTINGS);
+	assert.equal(DEFAULT_PI_SETTINGS.skipBranchSummaryPrompt, false);
+
+	// global file
+	writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ branchSummary: { skipPrompt: true } }));
+	assert.equal(loadPiSettings(cwd, agentDir).skipBranchSummaryPrompt, true);
+
+	// the project file wins, but only when the project is trusted
+	mkdirSync(join(cwd, ".pi"), { recursive: true });
+	writeFileSync(join(cwd, ".pi", "settings.json"), JSON.stringify({ branchSummary: { skipPrompt: false } }));
+	assert.equal(loadPiSettings(cwd, agentDir, true).skipBranchSummaryPrompt, false);
+	assert.equal(loadPiSettings(cwd, agentDir, false).skipBranchSummaryPrompt, true);
+
+	// treeFilterMode (the filter pi's /tree opens with) maps to the panel's filter names; unknown values fall back to default
+	assert.equal(DEFAULT_PI_SETTINGS.treeFilter, "default");
+	assert.equal(loadPiSettings(cwd, agentDir).treeFilter, "default");
+	writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ treeFilterMode: "labeled-only" }));
+	assert.equal(loadPiSettings(cwd, agentDir, false).treeFilter, "labeled");
+	writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ treeFilterMode: "no-tools" }));
+	assert.equal(loadPiSettings(cwd, agentDir, false).treeFilter, "no-tools");
+	writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ treeFilterMode: "bogus" }));
+	assert.equal(loadPiSettings(cwd, agentDir, false).treeFilter, "default");
+
+	// a broken file never throws: pi's loader keeps the other scope and reports the error elsewhere
+	writeFileSync(join(agentDir, "settings.json"), "{ not json");
+	assert.equal(loadPiSettings(cwd, agentDir, true).skipBranchSummaryPrompt, false);
+});
+
+test("loadPiSettings reads sessionShareDestination from the merged settings, defaulting to auto", (t) => {
+	const dir = tempDir(t);
+	const agentDir = join(dir, "agent");
+	const cwd = join(dir, "project");
+	mkdirSync(agentDir, { recursive: true });
+	mkdirSync(join(cwd, ".pi"), { recursive: true });
+
+	assert.equal(DEFAULT_PI_SETTINGS.shareDestination, "auto");
+	assert.equal(loadPiSettings(cwd, agentDir).shareDestination, "auto");
+
+	// global file
+	writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ sessionShareDestination: "radius" }));
+	assert.equal(loadPiSettings(cwd, agentDir).shareDestination, "radius");
+
+	// the project file wins, but only when the project is trusted
+	writeFileSync(join(cwd, ".pi", "settings.json"), JSON.stringify({ sessionShareDestination: "gist" }));
+	assert.equal(loadPiSettings(cwd, agentDir, true).shareDestination, "gist");
+	assert.equal(loadPiSettings(cwd, agentDir, false).shareDestination, "radius");
+
+	// an invalid project value falls back to pi's auto, not to the global value
+	writeFileSync(join(cwd, ".pi", "settings.json"), JSON.stringify({ sessionShareDestination: "bogus" }));
+	assert.equal(loadPiSettings(cwd, agentDir, true).shareDestination, "auto");
+
+	// an explicit null also wins over global and falls back to auto
+	writeFileSync(join(cwd, ".pi", "settings.json"), JSON.stringify({ sessionShareDestination: null }));
+	assert.equal(loadPiSettings(cwd, agentDir, true).shareDestination, "auto");
+
+	// so does an invalid global value
+	writeFileSync(join(cwd, ".pi", "settings.json"), JSON.stringify({}));
+	writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ sessionShareDestination: "bogus" }));
+	assert.equal(loadPiSettings(cwd, agentDir).shareDestination, "auto");
+});
