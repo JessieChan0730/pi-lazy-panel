@@ -288,7 +288,7 @@ test("the box opens on the current project; p switches to all / other projects",
 	assert.deepEqual(h.archivedShown().map((r) => r.id), ["a", "b"], "adapter rows are unfiltered; the dialog filters the view");
 	await h.press("p");
 	assert.equal(h.panel.state.mode, "archive");
-	assert.match(h.text(), /Project/);
+	assert.match(h.text(), /Scope/);
 	assert.match(h.text(), /All projects/);
 	assert.match(h.text(), /Current project \(~?\/tmp\/opencode\/project\)/);
 	await h.press("j");
