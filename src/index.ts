@@ -14,7 +14,7 @@
 
 import { getAgentDir, type ExtensionAPI, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { KeyId, OverlayHandle } from "@earendil-works/pi-tui";
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -44,7 +44,7 @@ import { loadChangelog } from "./data/changelog.ts";
 import { loadContent, loadForkPoints, loadSessionInfo } from "./data/content.ts";
 import { loadContextUsage } from "./data/context-usage.ts";
 import { initI18n, t } from "./i18n/index.ts";
-import { filterSessions, listSessions, sortSessions } from "./data/sessions.ts";
+import { filterSessions, listArchivedSessions as loadArchivedSessions, listSessions, sortSessions } from "./data/sessions.ts";
 import { applyTreeFilter, loadTree } from "./data/tree.ts";
 import { LazyPanel } from "./ui/app.ts";
 import type { ActionSource, DataSource } from "./ui/ports.ts";
@@ -98,6 +98,9 @@ async function openPanel(pi: ExtensionAPI, ctx: ExtensionCommandContext, args: s
 	const data: DataSource = {
 		loadSessionState: async () => loadSessionFileState(getAgentDir()),
 		listSessions: async (scope, sort, pinned, filter) => sortSessions(filterSessions(await listSessions({ cwd: ctx.cwd, scope }), filter), sort, pinned),
+		// 归档框读取所有目录的归档行（不受 C/A 范围限制），打开时默认只看当前项目，`p` 可切到所有项目。
+		// 没有归档时直接返回，不扫全库。
+		listArchivedSessions: async (archived) => sortSessions(await loadArchivedSessions(archived), "recent"),
 		loadTree: async (file, filter) => applyTreeFilter(await loadTree(file), filter),
 		loadContent: (file, leafEntryId) =>
 			loadContent(leafEntryId ? { sessionFile: file, leafEntryId } : { sessionFile: file }),
@@ -191,6 +194,7 @@ async function openPanel(pi: ExtensionAPI, ctx: ExtensionCommandContext, args: s
 				keymap: config.keymap,
 				initialState: { scope: config.defaultScope, sort: config.defaultSort, treeFilter: piSettings.treeFilter },
 				leftColumnRatio: config.leftColumnRatio,
+				currentProjectCwd: ctx.cwd,
 				configDefaults: config,
 				settingsSource: {
 					read: () => readConfigSnapshot(getAgentDir()),
@@ -246,7 +250,16 @@ async function openPanel(pi: ExtensionAPI, ctx: ExtensionCommandContext, args: s
 }
 
 /** `pi` surface the shortcut needs; kept minimal so tests can pass a fake. */
-export type ShortcutHost = Pick<ExtensionAPI, "registerShortcut" | "sendUserMessage">;
+export type ShortcutHost = Pick<ExtensionAPI, "registerShortcut" | "sendUserMessage" | "getCommands">;
+
+/** 入口可能经过符号链接；只规范化完整路径，不按目录名猜插件归属。 */
+function commandSourcePath(file: string): string {
+	try {
+		return realpathSync(file);
+	} catch {
+		return path.resolve(file);
+	}
+}
 
 /**
  * Register the pi-level shortcut that opens the panel (default `alt+l`, see
@@ -256,21 +269,34 @@ export type ShortcutHost = Pick<ExtensionAPI, "registerShortcut" | "sendUserMess
  * 执行扩展命令，这样处理器拿到的 command ctx 才带 newSession / switchSession /
  * navigateTree / fork（快捷键自带的 ctx 没有这些会话控制方法）。
  */
-export function registerOpenShortcut(pi: ShortcutHost, shortcut: string | null): void {
+export function registerOpenShortcut(pi: ShortcutHost, shortcut: string | null, entryPath = fileURLToPath(import.meta.url)): void {
 	if (!shortcut) return;
+	const sourcePath = commandSourcePath(entryPath);
+	const commandName = new RegExp(`^${COMMAND_NAME}(?::[0-9]+)?$`);
 	pi.registerShortcut(shortcut as KeyId, {
 		description: t("command.description"),
-		handler: () => {
-			pi.sendUserMessage(`/${COMMAND_NAME}`, { expandPromptTemplates: true });
+		handler: (ctx) => {
+			// 重复加载时 pi 会分配 :N，编号可能变化，必须按键时查询而不是注册时缓存。
+			const commands = pi.getCommands().filter((command) =>
+				command.source === "extension" &&
+				commandName.test(command.name) &&
+				commandSourcePath(command.sourceInfo.path) === sourcePath,
+			);
+			// 没有唯一匹配时不猜编号，也不把无效 slash command 发给模型。
+			if (commands.length !== 1) {
+				ctx.ui.notify(t("notify.openCommandUnavailable", { command: COMMAND_NAME, path: entryPath }), "warning");
+				return;
+			}
+			pi.sendUserMessage(`/${commands[0]!.name}`, { expandPromptTemplates: true });
 		},
 	});
 }
 
-export default function (pi: ExtensionAPI) {
+export default function (pi: ExtensionAPI, entryPath = fileURLToPath(import.meta.url)) {
 	// 按系统语言初始化 i18n（命令描述和快捷键描述在注册时就要用到）。
 	initI18n();
 	// 快捷键必须在扩展工厂里同步注册；配置文件也只在这里同步读一次（改键后 /reload 生效）。
-	registerOpenShortcut(pi, loadConfigSync(getAgentDir()).openShortcut);
+	registerOpenShortcut(pi, loadConfigSync(getAgentDir()).openShortcut, entryPath);
 	pi.registerCommand(COMMAND_NAME, {
 		description: t("command.description"),
 		handler: async (args, ctx) => {
