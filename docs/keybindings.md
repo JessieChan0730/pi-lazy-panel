@@ -182,6 +182,7 @@ Inside the archive dialog (fixed list keys; the footer shows them):
 | --- | --- |
 | `j` / `k` / `↑` / `↓`, `gg` / `G` | Move the cursor / top / bottom |
 | `Enter` | Restore (unarchive) the cursor row: it goes back into SESSIONS, the dialog stays open and the row disappears from the archive list |
+| `R` | Restore every archived row still visible after the live search and project filter — the counterpart of `D`, in one metadata write and one list reload. No confirmation (nothing is destroyed); the footer reports the count. Rows filtered out stay archived |
 | `d` | Delete the cursor row: a *Delete session?* box asks Yes / No first, then the file is permanently removed (system trash when the `trash` CLI exists, otherwise unlink directly) and both pin/archive metadata are cleaned. The session pi currently has open is refused with an alert |
 | `D` | Delete every archived row still visible after the live search and project filter. One confirmation names the count; the session pi has open is skipped with a note (if it is the only visible row, the same refusal alert appears) |
 | `/` | Live-search the archived rows (name / preview / model / path / date, like the SESSIONS search). `Enter` leaves the search field and keeps the filter; `Esc` does the same |
@@ -189,7 +190,7 @@ Inside the archive dialog (fixed list keys; the footer shows them):
 | `p` | Scope menu (titled *Scope*): *Current project* (the directory pi opened in, and the dialog's default scope) → *All projects* → every other project that appears in the archived rows |
 | `Esc` / `q` | Close the dialog |
 
-- The archive dialog is a management view, not a second SESSIONS pane: it has no TREE / CONTENT, no resume and no export. Restoring is the only way back to a normal session; use `Enter` (or double-click a row). Search and the project filter only narrow the dialog and decide what `D` deletes.
+- The archive dialog is a management view, not a second SESSIONS pane: it has no TREE / CONTENT, no resume and no export. Restoring is the only way back to a normal session; use `Enter` (or double-click a row), or `R` for the whole filtered group. Search and the project filter only narrow the dialog and decide what `D` deletes / `R` restores.
 - Archive is **panel-only organization**, not deletion, backup, or compaction. JSONL files and their entire trees stay untouched; pi's own `/resume` still lists them. Separately forked/cloned/imported files do not inherit the archive flag (identity is the file path, not the session UUID).
 - Archiving the currently running session does not interrupt it. The panel keeps showing the normal list; when the current session is archived, the footer names `X` so it can be restored. Restoring it works like any other row.
 - After archive/unarchive, the SESSIONS cursor stays on a surviving row or moves to its next neighbour (previous at the end). Empty lists clear TREE / CONTENT. Esc clears pending keys, search and selection before quitting; `q` quits directly. The archive footer names the configured global `archive-open` and `search` keys.

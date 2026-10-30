@@ -254,6 +254,48 @@ test("archive search filters live; Enter leaves the search row, the next Enter r
 	assert.match(h.footer(), /session unarchived/);
 });
 
+test("R restores every visible row in one write and leaves the filtered-out rows archived", async (t) => {
+	const alpha = row("alpha").file;
+	const beta = row("beta").file;
+	const other = row("other", "/tmp/opencode/other").file;
+	const h = harness(t, {
+		rows: [row("alpha"), row("beta"), row("other", "/tmp/opencode/other")],
+		store: { value: { pinned: [], archived: [alpha, beta, other] } },
+		// 和行的 cwd 同一个目录名：项目筛选按 resolve 后的路径比较。
+		currentProjectCwd: "project",
+	});
+	await h.panel.load();
+	await h.press("X");
+	assert.match(h.footer(), /R restore all/, "the footer names the batch restore key");
+	assert.doesNotMatch(h.text(), /tmp\/opencode\/other/, "the box starts scoped to the current project");
+
+	await h.press("R");
+	assert.equal(h.panel.state.mode, "archive", "restoring leaves the dialog open");
+	assert.equal(h.changes.length, 1, "the whole group is one metadata write");
+	assert.equal(h.changes[0]!.type, "unarchive");
+	assert.deepEqual([...h.changes[0]!.files].sort(), [alpha, beta].sort());
+	assert.deepEqual(h.store.value.archived, [other], "the filtered-out project stays archived");
+	assert.match(h.text(), /0\/0/);
+	assert.equal(h.archiveLoads(), 1, "restoring drops the rows locally instead of rescanning every directory");
+	assert.ok(h.shown().some((r) => r.id === "alpha") && h.shown().some((r) => r.id === "beta"), "the rows are back in SESSIONS");
+	assert.match(h.footer(), /2 sessions unarchived/);
+});
+
+test("R on an empty / fully filtered archive writes nothing", async (t) => {
+	const archived = [row("alpha").file];
+	const h = harness(t, { store: { value: { pinned: [], archived } } });
+	await h.panel.load();
+	await h.press("X");
+	await h.press("/");
+	h.panel.handleInput("zzz");
+	await flush();
+	await h.press("\r");
+	await h.press("R");
+	assert.deepEqual(h.changes, [], "nothing visible, nothing restored");
+	assert.deepEqual(h.store.value.archived, archived);
+	assert.equal(h.panel.state.mode, "archive");
+});
+
 test("s cycles updated / created / title and keeps the cursor on its row", async (t) => {
 	const old = { ...row("z-old"), updatedAt: 100, createdAt: 100 };
 	const recent = { ...row("a-recent"), updatedAt: 300, createdAt: 50 };

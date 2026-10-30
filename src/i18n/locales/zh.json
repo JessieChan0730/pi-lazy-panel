@@ -551,6 +551,7 @@
     "sort": "排序",
     "project": "范围",
     "restore": "恢复",
+    "restoreAll": "全部恢复",
     "delete": "删除",
     "deleteAll": "全部删除",
     "toSearch": "按 {{key}} 搜索"

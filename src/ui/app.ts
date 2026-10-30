@@ -61,7 +61,7 @@ import type {
 	TreeRow,
 } from "../types.ts";
 import { ContentViewport } from "./content-viewport.ts";
-import { confirmDeleteArchivedSessions, restoreArchivedSession, toggleArchive, togglePin } from "./flows/archive-flows.ts";
+import { confirmDeleteArchivedSessions, restoreArchivedSessions, toggleArchive, togglePin } from "./flows/archive-flows.ts";
 import type { SettingsFlowHost } from "./flows/host.ts";
 import { editSetting, exitSettings, readSettings, reloadSettings, restoreSettingsDefaults, retrySettings } from "./flows/settings-flows.ts";
 import {
@@ -1379,7 +1379,7 @@ export class LazyPanel implements Component, Focusable {
 				rows,
 				...(this.o.currentProjectCwd ? { currentProject: this.o.currentProjectCwd } : {}),
 				...(searchKey ? { searchKey } : {}),
-				onRestore: (row) => void restoreArchivedSession(this.flowHost, row),
+				onRestore: (rows) => void restoreArchivedSessions(this.flowHost, rows),
 				onDelete: (rows) => confirmDeleteArchivedSessions(this.flowHost, rows),
 				onProjectMenu: () => this.openArchiveProjectMenu(),
 				onClose: () => this.closeArchiveDialog(),
@@ -1430,7 +1430,7 @@ export class LazyPanel implements Component, Focusable {
 				this.archiveDialog.moveTo(hit);
 				if (double) {
 					const row = this.archiveDialog.selectedRow;
-					if (row) void restoreArchivedSession(this.flowHost, row);
+					if (row) void restoreArchivedSessions(this.flowHost, [row]);
 				}
 			},
 		);

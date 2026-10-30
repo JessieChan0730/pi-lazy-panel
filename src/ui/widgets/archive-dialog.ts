@@ -2,7 +2,8 @@
  * Archive dialog — the archived sessions of every directory in one big box,
  * opened with the global `X`. It is deliberately a management view, not a
  * second sessions pane: there is no content preview and no resume; Enter
- * restores a session (back into SESSIONS) and d / D delete files permanently.
+ * restores a session (back into SESSIONS), R restores every visible one, and
+ * d / D delete files permanently.
  *
  *   ┌─ ARCHIVE ───────────────── 2/5 · Updated · Current project (~…) ┐
  *   │ / to search                                                    │
@@ -10,7 +11,7 @@
  *   │ › Fix the router              ~/code/panel  10-22 14:03          │
  *   │   Notes from the trip         ~/notes       10-21 09:12          │
  *   └────────────────────────────────────────────────────────────────┘
- *    ARCHIVE │ / search  j/k move  Enter restore  s sort  p project …
+ *    ARCHIVE │ / search  j/k move  Enter restore  R restore all  s sort …
  *
  * The rows come from the panel (all archived sessions, newest update first);
  * the dialog owns the live search, sorting, project filter, cursor and mouse.
@@ -18,10 +19,10 @@
  * another project's archives stay behind the `p` menu. `/` filters live,
  * `s` cycles updated / created / title, `p` asks the panel for its project
  * menu. The panel resolves the keys (global scope) and passes them in; this
- * widget only has the list's own d / D / s / p / q / Esc.
+ * widget only has the list's own d / D / R / s / p / q / Esc.
  *
  * 归档管理框：只列出已归档会话，不查看、不进入。搜索 / 排序 / 项目筛选 / 光标和画法在这里，
- * 恢复和删除的 I/O 由 app.ts 的流程完成（始终带确认）。
+ * 恢复和删除的 I/O 由 app.ts 的流程完成（删除始终带确认，恢复不弹确认）。
  */
 
 import { resolve } from "node:path";
@@ -61,8 +62,8 @@ export interface ArchiveDialogSpec {
 	currentProject?: string;
 	/** Label of the key that focuses the search row, for the idle row's `/ to search` hint. */
 	searchKey?: string;
-	/** Enter: restore this row (the panel keeps the dialog open). */
-	onRestore: (row: SessionRow) => void;
+	/** Enter (one row) / R (every visible row): restore these rows (the panel keeps the dialog open). */
+	onRestore: (rows: readonly SessionRow[]) => void;
 	/** d / D: delete these rows (the panel confirms first). */
 	onDelete: (rows: readonly SessionRow[]) => void;
 	/** p: open the project menu (the panel owns it). */
@@ -125,6 +126,7 @@ export class ArchiveDialog {
 			[searchKey, t("archive.search")],
 			["j/k/↑↓", t("hint.move")],
 			["Enter", t("archive.restore")],
+			["R", t("archive.restoreAll")],
 			["s", t("archive.sort")],
 			["p", t("archive.project")],
 			["d", t("archive.delete")],
@@ -280,7 +282,12 @@ export class ArchiveDialog {
 		}
 		if (matchesKeyId(data, "return")) {
 			const row = this.selectedRow;
-			if (row) spec.onRestore(row);
+			if (row) spec.onRestore([row]);
+			return;
+		}
+		// R 恢复筛选后仍可见的全部行（`D` 的对称操作）。恢复不删数据，所以不弹确认，只在 footer 报数量。
+		if (matchesKeyId(data, "shift+r")) {
+			if (this.visible.length) spec.onRestore(this.visible);
 			return;
 		}
 		// shift+d before d: shift+d is "delete every visible row", d is the cursor row.

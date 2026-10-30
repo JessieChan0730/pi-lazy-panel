@@ -82,27 +82,32 @@ async function changeSessionFiles(host: FlowHost, change: SessionFileChange, kee
 	}
 }
 
-/** Enter in the archive dialog: unarchive the row and put it back into the SESSIONS list. */
-export async function restoreArchivedSession(host: FlowHost, row: SessionRow): Promise<void> {
-	if (host.state.sessionStateBusy) return;
+/**
+ * Enter / R in the archive dialog: unarchive these rows in one write and put
+ * them back into the SESSIONS list. One call for the whole group, so a batch
+ * restore is a single metadata write and a single relist.
+ */
+export async function restoreArchivedSessions(host: FlowHost, rows: readonly SessionRow[]): Promise<void> {
+	if (host.state.sessionStateBusy || rows.length === 0) return;
 	const update = host.actions?.updateSessionState;
 	if (!update) {
 		host.setStatus(t("status.archiveUnavailable"));
 		return;
 	}
+	const files = rows.map((row) => row.file);
 	host.state.sessionStateBusy = true;
 	host.setStatus(t("status.savingSessionState"));
 	try {
-		const saved = await update({ type: "unarchive", files: [row.file] });
+		const saved = await update({ type: "unarchive", files });
 		if (host.isDisposed()) return;
 		applySessionFileState(host.state, saved);
 		const keep = host.sessionRows()[host.state.cursor.sessions]?.file;
-		// 恢复成功后这行不可能还在归档里：本地删掉即可，不用再扫一遍所有目录。
-		host.removeArchivedRows([row.file]);
+		// 恢复成功后这些行不可能还在归档里：本地删掉即可，不用再扫一遍所有目录。
+		host.removeArchivedRows(files);
 		if (await host.relist(keep)) {
 			host.setStatus(saved.warning
 				? t("status.sessionStateSavedWarning", { error: saved.warning })
-				: t("status.sessionsUnarchived", { count: 1 }));
+				: t("status.sessionsUnarchived", { count: files.length }));
 		}
 		await host.followSessionsCursor();
 	} catch (err) {

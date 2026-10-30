@@ -149,7 +149,7 @@ test/                        # 目录是 src 分层的镜像：一个模块的�
 ├── smoke.test.ts             # 键位表、搜索解析的冒烟测试（跨层，留在根）
 ├── app/                      # LazyPanel 端到端（同一个操作要从按键一路验到渲染）+ 扩展入口
 │   ├── panel.test.ts         # LazyPanel 行为：焦点切换、C/A、? 帮助、/ 搜索（三个面板的实时跳转 / Enter / Esc / n N 回绕 / 标题计数 / 折叠展开 / 高亮 / 切面板保留关键字）、自定义键位、y/T/Enter（含摘要菜单）、树对话框（移动、搜索、过滤、z 折叠、y/T/Enter、关闭后面板光标跟随）、SESSIONS 的 space 多选 / 批量删除 / d 确认删除 / r 改名 / s 排序 / i 信息弹窗 / n o y Y / e I S、@ changelog 弹窗、InputDialog / SelectDialog；拆分 app.ts 时补的行为锁定：输入法光标（CURSOR_MARKER）跟着各输入框走、多键超时、弹窗打开时屏蔽鼠标、各流程的失败分支、绑错 scope / 写错名字的动作只在 footer 提示
-│   ├── archive-panel.test.ts # X 归档框：跨目录扫描 / 项目筛选 / 实时搜索 / s 排序、Enter 恢复并保留弹窗、d 拒绝当前会话、确认删除（文件 + 元数据）、加载失败、自定义多键
+│   ├── archive-panel.test.ts # X 归档框：跨目录扫描 / 项目筛选 / 实时搜索 / s 排序、Enter 恢复与 R 批量恢复（并保留弹窗）、d 拒绝当前会话、确认删除（文件 + 元数据）、加载失败、自定义多键
 │   ├── tree-filter.test.ts   # f 过滤菜单：五种模式 / 直选键 / 取消保留 / 面板与树对话框双向共享 / 清折叠 / 空结果恢复 / 失败回滚可重试 / 可配置与帮助 footer
 │   ├── label-time.test.ts    # T / L 与标签时间：可选的独立时间、宽度安全、选中背景与搜索高亮不断、跨树视图共享、清空同时移除、重新绑定 / 解绑 / 帮助执行
 │   ├── index.test.ts         # 扩展入口：带 settings 参数直开设置且不写配置、General 字段即时写入 / 语言即时生效 / scope·sort 下次打开生效、非 TUI 守卫

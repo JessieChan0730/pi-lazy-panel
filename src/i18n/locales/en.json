@@ -551,6 +551,7 @@
     "sort": "sort",
     "project": "scope",
     "restore": "restore",
+    "restoreAll": "restore all",
     "delete": "delete",
     "deleteAll": "delete all",
     "toSearch": "{{key}} to search"
