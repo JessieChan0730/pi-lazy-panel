@@ -366,7 +366,9 @@
     "fork": "分叉会话？",
     "import": "导入并切换过去？",
     "overwrite": "覆盖文件？",
-    "radiusSignOut": "退出 Radius 登录？"
+    "radiusSignOut": "退出 Radius 登录？",
+    "switchRunning": "进入其他对话？",
+    "switchRunningMessage": "当前有对话正在进行。进入其他对话可能会中断当前正在进行的对话，是否确认进入？"
   },
   "info": {
     "name": "名称",

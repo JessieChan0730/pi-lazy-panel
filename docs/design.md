@@ -90,7 +90,7 @@
 ~~S: 分享会话 上传为私有 GitHub Gist，生成可分享的 HTML 链接，这里用大写的S, 避免和排序冲突~~（2026-09-24 完成：先确认，再用 `gh` 上传 secret gist，pi.dev 的查看链接自动复制到剪贴板并显示在 footer；2026-10-20 改为 Auto / Gist / Radius 三选菜单，显式选 Radius 未登录时在面板内接管 `/login radius`，登录成功继续分享；浏览器登录的链接复制到剪贴板、等待期间 Esc 取消登录；已登录时选 Radius 先弹“分享到 Radius / 退出登录”，退出登录确认后清除本地凭据（相当于 pi 的 `/logout radius`），网页端会话不受影响）
 ~~Y: 复制回复 复制 AI 最后一条回复到剪贴板~~（2026-09-23 完成：照搬 pi 的 `getLastAssistantText`——活动分支上最后一条 assistant 回复，只取 text 片段，跳过中止且没有内容的回复；面板不关，footer 报 `copied last reply` / `no assistant reply to copy`）
 ~~s: 对列表排序：（Threaded， Recent， Fuzzy）~~（2026-09-23 完成：循环 recent → created → title → threaded，标题右侧显示当前排序，光标跟着同一会话走。pi 的 fuzzy 只在有搜索关键字时有意义，换成了 created / title 两个没有 fork 会话也能看出效果的维度；title 按面板显示的标题排序，没名字的用首条消息预览参与排序，避免"没名字就一律沉底"的反直觉）
-~~enter：点击恢复这个对话~~（对应 /resume：切过去并关闭面板，失败原因留在 footer）
+~~enter：点击恢复这个对话~~（对应 /resume：切过去并关闭面板，失败原因留在 footer；2026-11-07：当前对话运行中时，进入其他会话先弹是 / 否确认，提示可能中断当前对话，默认否；取消保留运行中的对话和面板，确认后才切换。双击会话与 TREE 跨会话恢复共用保护；只读浏览或进入当前会话不弹警告）
 ~~n: 新建一个对话，显示输入框，必须输入新对话的名称（/name）,输出完成后，回车关闭这个插件，并且进入到聊天界面~~（2026-09-23 完成：居中输入框输入名字，**名字可以留空**（对应 /name 的可选 `[name]` 参数，空则不设置名称，不再强制必须输入），回车新建并关闭面板进入新对话）
 v: 暂定
 ~~i: 弹出对话框展示 Session Info 信息，就是 /seesion 中的内容（这个对话框弹出的时候使用y，可以复制对话框中全部的内容）~~（2026-09-23 完成：居中弹窗列 Name / Model / Messages / Tokens / Cost / Created / Updated / Path / ID，y 复制全部（路径用完整路径），Esc / q 关闭）

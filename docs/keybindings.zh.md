@@ -150,7 +150,7 @@ lazygit 风格，每个面板各记各的：列表行永不过滤，光标在匹
 | `j` `k` `↑` `↓` | `move-down` / `move-up`（global） | 移动光标 |
 | `gg` / `G` | `go-top` / `go-bottom` | 顶部 / 底部 |
 | `J` / `K` | `scroll-content-down` / `scroll-content-up` | 滚动右侧 CONTENT 面板 |
-| `Enter` | `session-resume` | 恢复会话：pi 切换过去、面板关闭；失败（文件缺失、切换取消）停留在 footer |
+| `Enter` | `session-resume` | 恢复会话：pi 切换过去、面板关闭；当前有对话正在进行时，进入其他会话先提示切换可能中断当前对话，并询问是 / 否（默认否，`y` 确认，`n` / `Esc` 取消）。仅浏览或进入当前会话不询问。失败（文件缺失、切换取消）停留在 footer |
 | `d` | `session-delete` | 删除：居中的 *Delete session?* 框问 Yes / No（光标停在 No，`y` / `n` 直接选，`Enter` 确认高亮项，`Esc` 取消）。和 pi 的 `/resume` 一样，有 `trash` CLI 时移入系统回收站，否则直接 unlink（footer 说明用了哪种）；pi 当前打开的会话会被拒绝、不询问。列表重新加载，光标夹回范围内，TREE / CONTENT 跟随 |
 | `r` | `session-rename` | 在预填当前名字的居中框里改名（`Enter` 保存，`Esc` 取消，空值清除名字；等同 `/name` 或 `/resume` 里的 ctrl+r）。列表重新加载，光标仍停在该会话 |
 | `n` | `session-new` | 新建会话（`/new`）：居中的 *New session* 框询问名字（`Enter` 创建，`Esc` 取消，**留空则以未命名启动** —— `/name` 的 `[name]` 参数不设置）。pi 切换到新会话、面板关闭 |
@@ -205,7 +205,7 @@ lazygit 风格，每个面板各记各的：列表行永不过滤，光标在匹
 | --- | --- | --- |
 | `j` `k` `↑` `↓` | `move-down` / `move-up`（global） | 移动光标 |
 | `gg` / `G` | `go-top` / `go-bottom` | 顶部 / 底部 |
-| `Enter` | `tree-restore` | 恢复到节点，和 `/tree` 一样：居中菜单问 *No summary / Summarize / Summarize with custom prompt*（`j`/`k`/`↑`/`↓` 移动，`Enter` 选，`Esc` 退回树）；自定义提示是单行输入（`Enter` 摘要，`Esc` 退回菜单）。需要时先切换到该会话。节点本身就是叶子（`Enter` 直接关闭面板）或 pi 的 `branchSummary.skipPrompt` 开启时不弹菜单 |
+| `Enter` | `tree-restore` | 恢复到节点，和 `/tree` 一样：居中菜单问 *No summary / Summarize / Summarize with custom prompt*（`j`/`k`/`↑`/`↓` 移动，`Enter` 选，`Esc` 退回树）；自定义提示是单行输入（`Enter` 摘要，`Esc` 退回菜单）。需要时先切换到该会话，运行中的跨会话切换采用与 SESSIONS 相同的确认框。节点本身就是叶子或 pi 的 `branchSummary.skipPrompt` 开启时跳过摘要菜单，但进入其他会话仍会检查是否需要切换警告 |
 | `z` | `tree-fold` | 折叠 / 展开光标所在分支：在 `▸` / `▾` 行上切换，在分支内任意行则折叠该分支并跳到段头（vim 的 `zc`）；线性对话的主干没有可折叠的段 |
 | `y` | `tree-copy` | 复制节点文本（完整文本，等同 `/tree` 里的 `Ctrl+x`） |
 | `L` | `tree-label` | 在居中对话框里添加 / 编辑 label，类似 lazygit 的 commit 弹窗（`Enter` 保存，`Esc` 取消，空值删除；等同当前 pi `/tree` 里的 `Shift+L`） |

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { currentLocale, initI18n } from "../../src/i18n/index.ts";
-import { getAgentDir, type ExtensionAPI, type ExtensionCommandContext, type Theme } from "@earendil-works/pi-coding-agent";
+import { CURRENT_SESSION_VERSION, getAgentDir, SessionManager, type ExtensionAPI, type ExtensionCommandContext, type Theme } from "@earendil-works/pi-coding-agent";
 import extension from "../../src/index.ts";
 import { LazyPanel } from "../../src/ui/app.ts";
 
@@ -182,6 +182,73 @@ test("settings writes General fields as soon as they are picked, applies languag
 	await command.handler("settings", context);
 	await command.handler("settings", context);
 	assert.equal(opens, 2);
+});
+
+test("the entry point checks live pi activity before switching and cancellation never calls switchSession or abort", async (ctx) => {
+	const dir = await mkdtemp(join(tmpdir(), "lazy-panel-running-"));
+	const previous = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = dir;
+	ctx.after(async () => {
+		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previous;
+		await rm(dir, { recursive: true, force: true });
+	});
+	await writeFile(join(dir, "lazy-panel.json"), JSON.stringify({ locale: "en" }));
+	const file = join(dir, "b.jsonl");
+	const now = new Date();
+	const entries = [
+		{ type: "session", version: CURRENT_SESSION_VERSION, id: "session-b", timestamp: now.toISOString(), cwd: dir },
+		{ type: "message", id: "u1", parentId: null, timestamp: now.toISOString(), message: { role: "user", content: [{ type: "text", text: "B conversation" }], timestamp: now.getTime() } },
+	];
+	await writeFile(file, `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
+	ctx.mock.method(SessionManager, "list", async () => [{ path: file, id: "session-b", cwd: dir, name: "B", created: now, modified: now, messageCount: 1, firstMessage: "B conversation", allMessagesText: "B conversation" }]);
+	const switched: string[] = [];
+	let idle = false;
+	let idleQueries = 0;
+	let closed = false;
+	const context = {
+		mode: "tui",
+		cwd: dir,
+		isProjectTrusted: () => false,
+		isIdle: () => {
+			idleQueries++;
+			return idle;
+		},
+		abort: () => assert.fail("cancelling a switch must not abort the current response"),
+		sessionManager: { getSessionFile: () => join(dir, "a.jsonl") },
+		switchSession: async (target: string) => {
+			switched.push(target);
+			return { cancelled: false };
+		},
+		ui: fakeUi({
+			custom: async (factory: PanelFactory) => {
+				const panel = factory({ mode: "fullscreen", terminal: { rows: 24, columns: 120 }, requestRender: () => {} }, theme, {}, () => {
+					closed = true;
+				});
+				try {
+					await panel.load();
+					assert.equal(idleQueries, 0, "activity is not cached when the panel opens");
+					panel.handleInput("\r");
+					assert.equal(panel.state.mode, "confirm");
+					assert.match(panel.render(120).join("\n"), /A conversation is currently running/);
+					assert.deepEqual(switched, []);
+					panel.handleInput("n");
+					assert.equal(panel.state.mode, "normal");
+					assert.equal(closed, false);
+					assert.deepEqual(switched, []);
+					idle = true;
+					panel.handleInput("\r");
+					await delay(0);
+					assert.deepEqual(switched, [file]);
+					assert.equal(closed, true);
+					assert.equal(idleQueries, 2);
+				} finally {
+					panel.dispose();
+				}
+			},
+		}),
+	} as unknown as ExtensionCommandContext;
+	await registeredCommand().handler("", context);
 });
 
 test("settings command preserves the non-TUI guard", async () => {

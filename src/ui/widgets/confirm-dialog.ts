@@ -72,9 +72,22 @@ export function radiusSignOutTitle(): string {
 	return t("confirm.radiusSignOut");
 }
 
+/** Warn before switching away from a conversation that is still running. */
+export function runningSessionSwitchSpec(subject: string, onConfirm: () => void, onCancel: () => void): SelectDialogSpec {
+	return confirmDialogSpec({
+		title: t("confirm.switchRunning"),
+		message: t("confirm.switchRunningMessage"),
+		subject,
+		onConfirm,
+		onCancel,
+	});
+}
+
 export interface ConfirmSpecOptions {
 	/** Title on the top border, e.g. "Delete session?". */
 	title: string;
+	/** Optional explanation above the Yes / No choices, wrapped to the dialog width. */
+	message?: string;
 	/** What is about to be acted on, shown at the right end of the title bar. */
 	subject?: string;
 	onConfirm: () => void;
@@ -88,6 +101,7 @@ export interface ConfirmSpecOptions {
 export function confirmDialogSpec(o: ConfirmSpecOptions): SelectDialogSpec {
 	return {
 		title: o.title,
+		...(o.message ? { message: o.message } : {}),
 		items: confirmItems(),
 		initialIndex: CONFIRM_NO_INDEX,
 		...(o.subject ? { subject: o.subject } : {}),

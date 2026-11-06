@@ -69,7 +69,7 @@ export function openSessionFile(sessionFile: string): SessionManager {
  * Switch pi to `sessionFile` (what `/resume` does when a session is picked).
  *
  * 目标就是当前会话时什么都不做（返回 `unchanged`）；否则先确认文件能打开，再交给
- * `ctx.switchSession`。pi 自己会先中断正在输出的回复再切换（和内置 /resume 一样，不额外确认）。
+ * `ctx.switchSession`。pi 自己会先中断正在输出的回复再切换；运行期间的切换确认由调用方负责。
  * 切换成功后传入的 `ctx` 就失效了，后续要在新会话里做的事只能放进 `options.withSession`。
  *
  * Throws when the file cannot be opened or pi / another extension cancelled the switch.

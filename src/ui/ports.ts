@@ -72,6 +72,8 @@ import type {
 
 /** Async loaders injected by the entry point (they wrap src/data/*). */
 export interface DataSource {
+	/** Live pi activity, checked before entering another session; absent = no activity guard. */
+	isAgentIdle?(): boolean;
 	/** Apply visibility before pinning / threaded sorting. */
 	listSessions(scope: ListScope, sort: SessionSortMode, pinned: readonly string[], filter: SessionListFilter): Promise<SessionRow[]>;
 	/** X dialog: archived sessions from every directory, newest update first. */

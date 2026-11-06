@@ -62,6 +62,7 @@ import { radiusAccountActions, radiusAccountHints, radiusAccountTitle } from "..
 import { shareDestinations, shareHints, shareInitialIndex, shareTitle } from "../widgets/share-dialog.ts";
 import { forgetDeletedSessions } from "./archive-flows.ts";
 import type { FlowHost } from "./host.ts";
+import { confirmSessionSwitch } from "./session-switch.ts";
 
 /** Session `o` forks: its file, title-bar subject and the user messages to pick from. */
 interface ForkTarget {
@@ -85,7 +86,9 @@ export async function resumeSession(host: FlowHost): Promise<void> {
 		host.setStatus(t("status.resumeUnavailable"));
 		return;
 	}
-	await host.enter("resume", () => actions.resumeSession(row.file));
+	const enter = () => host.enter("resume", () => actions.resumeSession(row.file));
+	if (confirmSessionSwitch(host, row.file, sessionSubject(row), enter)) return;
+	await enter();
 }
 
 /**
