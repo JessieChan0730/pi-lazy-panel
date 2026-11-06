@@ -25,7 +25,6 @@
  * 恢复和删除的 I/O 由 app.ts 的流程完成（删除始终带确认，恢复不弹确认）。
  */
 
-import { resolve } from "node:path";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { matchesKeyId } from "../../config/keys.ts";
@@ -510,5 +509,5 @@ export class ArchiveDialog {
 
 /** Compare working directories the same way session identity compares files. */
 function projectKey(path: string): string {
-	return path ? resolve(path) : "";
+	return path ? sessionFileKey(path) : "";
 }

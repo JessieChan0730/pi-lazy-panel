@@ -123,7 +123,7 @@ export async function restoreArchivedSessions(host: FlowHost, rows: readonly Ses
  * session pi has open is skipped (a single d on it only shows the warning).
  */
 export function confirmDeleteArchivedSessions(host: FlowHost, rows: readonly SessionRow[]): void {
-	if (!rows.length) return;
+	if (host.isDisposed() || host.state.sessionStateBusy || !rows.length) return;
 	if (!host.actions?.deleteSession) {
 		host.setStatus(t("status.deleteUnavailable"));
 		return;
@@ -161,37 +161,45 @@ function openCannotDeleteAlert(host: FlowHost, row: SessionRow | undefined): voi
 
 /** Yes on the archive deletion confirmation: delete one by one, refresh the dialog and report. */
 async function deleteArchivedSessions(host: FlowHost, targets: readonly SessionRow[]): Promise<void> {
-	host.closeDialogs();
+	if (host.isDisposed() || host.state.sessionStateBusy) return;
 	const remove = host.actions?.deleteSession;
 	if (!remove || targets.length === 0) return;
-	host.setStatus(t("status.deletingN", { count: targets.length }));
-	let deleted = 0;
-	let firstError: string | undefined;
-	const removed: string[] = [];
-	const methods: DeleteMethod[] = [];
-	for (const row of targets) {
-		try {
-			methods.push(await remove(row.file));
-			deleted++;
-			removed.push(row.file);
-		} catch (err) {
-			firstError ??= `${sessionTitle(row) || t("pane.emptySession")}: ${(err as Error).message}`;
+	// Deletion and restore share one lock, including the metadata cleanup.
+	host.state.sessionStateBusy = true;
+	try {
+		host.closeDialogs();
+		host.setStatus(t("status.deletingN", { count: targets.length }));
+		let deleted = 0;
+		let firstError: string | undefined;
+		const removed: string[] = [];
+		const methods: DeleteMethod[] = [];
+		for (const row of targets) {
+			if (host.isDisposed()) break;
+			try {
+				methods.push(await remove(row.file));
+				deleted++;
+				removed.push(row.file);
+			} catch (err) {
+				firstError ??= `${sessionTitle(row) || t("pane.emptySession")}: ${(err as Error).message}`;
+			}
 		}
+		// Even after disposal, clean up files whose deletion already completed.
+		const warning = await forgetDeletedSessions(host, removed);
 		if (host.isDisposed()) return;
+		// 删除成功的行直接本地移除；失败的仍留在框里。
+		host.removeArchivedRows(removed);
+		const failed = targets.length - deleted;
+		const summary = targets.length === 1
+			? failed
+				? t("status.deleteFailed", { error: firstError })
+				: methods[0] === "trash" ? t("status.movedToTrash") : t("status.deleted")
+			: failed
+				? t("status.batchDeletedFailed", { deleted, failed, error: firstError })
+				: t("status.sessionsDeleted", { count: deleted });
+		host.setStatus([summary, warning].filter(Boolean).join(" — "));
+	} finally {
+		host.state.sessionStateBusy = false;
 	}
-	const warning = await forgetDeletedSessions(host, removed);
-	if (host.isDisposed()) return;
-	// 删除成功的行直接本地移除；失败的仍留在框里。
-	host.removeArchivedRows(removed);
-	const failed = targets.length - deleted;
-	const summary = targets.length === 1
-		? failed
-			? t("status.deleteFailed", { error: firstError })
-			: methods[0] === "trash" ? t("status.movedToTrash") : t("status.deleted")
-		: failed
-			? t("status.batchDeletedFailed", { deleted, failed, error: firstError })
-			: t("status.sessionsDeleted", { count: deleted });
-	host.setStatus([summary, warning].filter(Boolean).join(" — "));
 }
 
 /** JSONL deletion already succeeded. Metadata failure must be reported separately, not as a failed delete. */

@@ -9,6 +9,7 @@ import { filterArchivedSessions, filterSessions, sortSessions } from "../../src/
 import { initI18n, t as translate } from "../../src/i18n/index.ts";
 import type { Keymap, SessionFileChange, SessionFileState, SessionRow } from "../../src/types.ts";
 import { LazyPanel } from "../../src/ui/app.ts";
+import { PENDING_TIMEOUT_MS } from "../../src/ui/key-sequencer.ts";
 import type { ActionSource, DataSource } from "../../src/ui/ports.ts";
 import { buildHelpLines } from "../../src/ui/widgets/help-overlay.ts";
 
@@ -254,6 +255,143 @@ test("archive search filters live; Enter leaves the search row, the next Enter r
 	assert.match(h.footer(), /session unarchived/);
 });
 
+for (const [binding, keys, label] of [
+	["zx", ["z", "x"], "zx"],
+	["ctrl+w h", ["\x17", "h"], "Ctrl+w h"],
+] as const) {
+	test(`archive search supports the configured ${binding} sequence`, async (t) => {
+		const archived = [row("alpha").file, row("beta").file];
+		const keymap = mergeKeymap(DEFAULT_KEYMAP, { global: { search: binding } }, []);
+		const h = harness(t, { keymap, store: { value: { pinned: [], archived } } });
+		await h.panel.load();
+		await h.press("X");
+		assert.ok(h.footer().includes(`${label} search`));
+		h.panel.handleInput(keys[0]);
+		assert.match(h.footer(), /pending:/);
+		h.panel.handleInput(keys[1]);
+		h.panel.handleInput("bet");
+		assert.match(h.text(), /beta/);
+		assert.doesNotMatch(h.text(), /alpha/);
+		assert.doesNotMatch(h.footer(), /pending:/);
+		assert.deepEqual(h.changes, []);
+		await h.press("\r");
+		assert.deepEqual(h.store.value.archived, archived, "Enter only leaves the search field");
+		await h.press("\r");
+		assert.deepEqual(h.store.value.archived, [row("alpha").file]);
+	});
+}
+
+test("archive search consumes a destructive list-key prefix without deleting", async (t) => {
+	const alpha = row("alpha").file;
+	const keymap = mergeKeymap(DEFAULT_KEYMAP, { global: { search: "d s" } }, []);
+	const h = harness(t, { keymap, store: { value: { pinned: [], archived: [alpha] } } });
+	await h.panel.load();
+	await h.press("X");
+	h.panel.handleInput("d");
+	assert.equal(h.panel.state.mode, "archive", "the search prefix must not open deletion confirmation");
+	assert.match(h.footer(), /pending: d/);
+	h.panel.handleInput("s");
+	h.panel.handleInput("alpha");
+	assert.match(h.text(), /Search: alpha/);
+	assert.deepEqual(h.deletes, []);
+	assert.deepEqual(h.changes, []);
+});
+
+for (const key of ["?", "q"]) {
+	test(`archive search keeps supporting the custom single-key ${key} binding`, async (t) => {
+		const keymap = mergeKeymap(DEFAULT_KEYMAP, { global: { search: key } }, []);
+		const h = harness(t, { keymap, store: { value: { pinned: [], archived: [row("beta").file] } } });
+		await h.panel.load();
+		await h.press("X");
+		h.panel.handleInput(key);
+		h.panel.handleInput("bet");
+		assert.match(h.text(), /Search: bet/);
+		assert.equal(h.panel.state.mode, "archive");
+		assert.deepEqual(h.changes, []);
+	});
+}
+
+test("archive search times out unfinished sequences without triggering list actions", async (t) => {
+	const alpha = row("alpha").file;
+	const keymap = mergeKeymap(DEFAULT_KEYMAP, { global: { search: "zd" } }, []);
+	const h = harness(t, { keymap, store: { value: { pinned: [], archived: [alpha] } } });
+	await h.panel.load();
+	await h.press("X");
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	h.panel.handleInput("z");
+	assert.match(h.footer(), /pending: z/);
+	t.mock.timers.tick(PENDING_TIMEOUT_MS - 1);
+	assert.match(h.footer(), /pending: z/);
+	t.mock.timers.tick(1);
+	assert.doesNotMatch(h.footer(), /pending:/);
+	h.panel.handleInput("z");
+	h.panel.handleInput("D");
+	assert.equal(h.panel.state.mode, "archive", "an invalid continuation must not trigger batch deletion");
+	assert.doesNotMatch(h.footer(), /pending:/);
+	h.panel.handleInput("d");
+	assert.equal(h.panel.state.mode, "confirm", "a fresh key after the dropped sequence works normally");
+	assert.deepEqual(h.deletes, []);
+	h.panel.handleInput("\x1b");
+	h.panel.handleInput("z");
+	assert.match(h.footer(), /pending: z/);
+	h.panel.dispose();
+	t.mock.timers.tick(PENDING_TIMEOUT_MS);
+	assert.doesNotMatch(h.footer(), /pending:/, "disposal clears the buffer and its timer");
+});
+
+for (const closeKey of ["q", "\x1b"]) {
+	test(`closing the archive with ${JSON.stringify(closeKey)} clears a pending search sequence`, async (t) => {
+		const keymap = mergeKeymap(DEFAULT_KEYMAP, { global: { search: "zx" } }, []);
+		const h = harness(t, { keymap });
+		await h.panel.load();
+		await h.press("X");
+		h.panel.handleInput("z");
+		await h.press(closeKey);
+		assert.equal(h.panel.state.mode, "normal");
+		assert.doesNotMatch(h.footer(), /pending:/);
+		await h.press("X");
+		h.panel.handleInput("x");
+		assert.match(h.footer(), /zx search/, "the stale prefix must not focus search after reopening");
+		h.panel.handleInput("z");
+		h.panel.handleInput("x");
+		assert.ok(h.footer().includes(translate("hint.backToList")));
+	});
+}
+
+test("archive search does not let unrelated global sequences capture fixed list controls", async (t) => {
+	const archived = [row("alpha").file, row("beta").file];
+	const keymap = mergeKeymap(DEFAULT_KEYMAP, { global: { search: "zx", "focus-next": "j k" } }, []);
+	const h = harness(t, { keymap, store: { value: { pinned: [], archived } } });
+	await h.panel.load();
+	await h.press("X");
+	await h.press("j");
+	assert.match(h.text(), /2\/2/);
+	assert.doesNotMatch(h.footer(), /pending:/);
+	await h.press("g");
+	assert.match(h.text(), /1\/2/);
+});
+
+test("archive mouse focus changes clear an unfinished search sequence", async (t) => {
+	const archived = [row("alpha").file, row("beta").file];
+	const keymap = mergeKeymap(DEFAULT_KEYMAP, { global: { search: "zx" } }, []);
+	const h = harness(t, { keymap, store: { value: { pinned: [], archived } } });
+	await h.panel.load();
+	await h.press("X");
+	const searchCell = cellOn(h, "Search");
+	h.panel.handleInput("z");
+	h.panel.handleMouse(mouseEvent("click", searchCell.x, searchCell.y));
+	assert.doesNotMatch(h.footer(), /pending:/);
+	await h.press("\r");
+	h.panel.handleInput("x");
+	assert.match(h.footer(), /zx search/, "typing cannot complete the prefix from before the mouse click");
+	h.panel.handleInput("z");
+	const betaCell = cellOn(h, "beta");
+	h.panel.handleMouse(mouseEvent("click", betaCell.x, betaCell.y));
+	h.panel.handleInput("x");
+	assert.match(h.footer(), /zx search/);
+	assert.match(h.text(), /2\/2/);
+});
+
 test("R restores every visible row in one write and leaves the filtered-out rows archived", async (t) => {
 	const alpha = row("alpha").file;
 	const beta = row("beta").file;
@@ -394,6 +532,115 @@ test("D deletes only the rows visible after search and project filtering", async
 	assert.match(h.footer(), /session moved to trash/);
 });
 
+for (const key of ["d", "D"]) {
+	test(`${key} blocks keyboard and mouse operations until deletion and metadata cleanup finish`, async (t) => {
+		const alpha = row("alpha").file;
+		const beta = row("beta").file;
+		let finishDelete!: () => void;
+		let finishCleanup!: () => void;
+		const deletion = new Promise<void>((done) => {
+			finishDelete = done;
+		});
+		const cleanup = new Promise<void>((done) => {
+			finishCleanup = done;
+		});
+		const calls: string[] = [];
+		const h = harness(t, {
+			store: { value: { pinned: [], archived: [alpha, beta] } },
+			actions: {
+				deleteSession: async (file) => {
+					calls.push(file);
+					await deletion;
+					return "trash";
+				},
+				updateSessionState: async (change) => {
+					h.changes.push(change);
+					await cleanup;
+					h.store.value = changeFiles(h.store.value, change);
+					return structuredClone(h.store.value);
+				},
+			},
+		});
+		await h.panel.load();
+		await h.press("X");
+		const betaCell = cellOn(h, "beta");
+		await h.press(key);
+		await h.press("y");
+		assert.equal(h.panel.state.sessionStateBusy, true);
+		assert.deepEqual(calls, [alpha]);
+		for (const input of ["d", "y", "D", "y", "R", "\r", "j", "p", "q", "\x1b"]) h.panel.handleInput(input);
+		h.panel.handleMouse(mouseEvent("click", betaCell.x, betaCell.y, { clickCount: 2 }));
+		h.panel.handleMouse(mouseEvent("wheel", betaCell.x, betaCell.y, { wheelDelta: 1 }));
+		assert.equal(h.panel.state.mode, "archive");
+		assert.deepEqual(calls, [alpha], "repeated confirmations cannot start another delete");
+		assert.deepEqual(h.changes, [], "restoring cannot race the pending delete");
+		assert.match(h.text(), /1\/2/, "input cannot change the cursor");
+
+		finishDelete();
+		await flush();
+		assert.deepEqual(calls, key === "D" ? [alpha, beta] : [alpha]);
+		assert.equal(h.panel.state.sessionStateBusy, true, "the lock covers metadata cleanup too");
+		assert.deepEqual(h.changes, [{ type: "delete", files: key === "D" ? [alpha, beta] : [alpha] }]);
+		h.panel.handleInput("R");
+		assert.equal(h.changes.length, 1);
+		finishCleanup();
+		await flush();
+		assert.equal(h.panel.state.sessionStateBusy, false);
+		assert.deepEqual(h.store.value.archived, key === "D" ? [] : [beta]);
+		await h.press("q");
+		assert.equal(h.panel.state.mode, "normal", "input resumes after cleanup");
+	});
+}
+
+test("a partial archive delete unlocks the dialog and leaves failed rows available for restore", async (t) => {
+	const alpha = row("alpha").file;
+	const beta = row("beta").file;
+	const h = harness(t, {
+		store: { value: { pinned: [], archived: [alpha, beta] } },
+		actions: { deleteSession: async (file) => {
+			if (file === beta) throw new Error("permission denied");
+			return "trash";
+		} },
+	});
+	await h.panel.load();
+	await h.press("X");
+	await h.press("D");
+	await h.press("y");
+	assert.equal(h.panel.state.sessionStateBusy, false);
+	assert.deepEqual(h.store.value.archived, [beta]);
+	assert.match(h.footer(), /deleted 1, 1 failed.*permission denied/);
+	await h.press("R");
+	assert.deepEqual(h.store.value.archived, []);
+});
+
+test("disposing during an archive delete stops the batch, cleans completed deletions and releases the lock", async (t) => {
+	const alpha = row("alpha").file;
+	const beta = row("beta").file;
+	let finish!: () => void;
+	const waiting = new Promise<void>((done) => {
+		finish = done;
+	});
+	const calls: string[] = [];
+	const h = harness(t, {
+		store: { value: { pinned: [], archived: [alpha, beta] } },
+		actions: { deleteSession: async (file) => {
+			calls.push(file);
+			await waiting;
+			return "trash";
+		} },
+	});
+	await h.panel.load();
+	await h.press("X");
+	await h.press("D");
+	await h.press("y");
+	h.panel.dispose();
+	finish();
+	await flush();
+	assert.deepEqual(calls, [alpha], "a disposed panel must not delete the next file");
+	assert.deepEqual(h.store.value.archived, [beta], "the completed deletion still needs metadata cleanup");
+	assert.equal(h.panel.state.sessionStateBusy, false);
+});
+
 test("a failed single archive delete reports the error and keeps the row", async (t) => {
 	const alpha = row("alpha").file;
 	const h = harness(t, {
@@ -411,6 +658,7 @@ test("a failed single archive delete reports the error and keeps the row", async
 	assert.deepEqual(h.store.value.archived, [alpha]);
 	assert.match(h.text(), /1\/1/);
 	assert.match(h.footer(), /delete failed: .*permission denied/);
+	assert.equal(h.panel.state.sessionStateBusy, false);
 });
 
 test("metadata cleanup failure after an archive delete is reported without claiming the file survived", async (t) => {
@@ -431,6 +679,7 @@ test("metadata cleanup failure after an archive delete is reported without claim
 	assert.deepEqual(h.deletes, [alpha]);
 	assert.match(h.text(), /0\/0/);
 	assert.match(h.footer(), /moved to trash.*metadata cleanup failed: disk full/);
+	assert.equal(h.panel.state.sessionStateBusy, false);
 });
 
 test("current-session warning names the new X key and the current session can be restored", async (t) => {
