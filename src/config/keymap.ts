@@ -36,6 +36,8 @@ export const DEFAULT_KEYMAP: Keymap = {
 		help: "?",
 		// 和 pi 的 /changelog 一样查看 pi 的更新日志（居中大弹窗，可滚动）。
 		changelog: "@",
+		// X 在任意面板打开归档管理框；x（SESSIONS 内）负责归档光标 / 所选会话。
+		"archive-open": "X",
 		"settings-open": ",",
 		quit: ["q", "ctrl+c"],
 	},
@@ -55,7 +57,6 @@ export const DEFAULT_KEYMAP: Keymap = {
 		// p 置顶 / 取消置顶光标（或所选）会话，置顶的会话固定在列表最上、不受排序影响。
 		"session-pin": "p",
 		"session-archive": "x",
-		"session-archive-view": "X",
 		// c 压缩光标所在会话（对应 /compact）；C（大写）是全局 scope-current，不冲突。
 		"session-compact": "c",
 		"session-fork": "o",
@@ -135,6 +136,7 @@ export const DISABLED_ACTIONS: Partial<Record<KeyScope, ActionId[]>> = {
 		"tree-open",
 		"tree-filter-menu",
 		"changelog",
+		"archive-open",
 		"settings-open",
 	],
 };

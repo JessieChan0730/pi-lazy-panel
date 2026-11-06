@@ -6,7 +6,7 @@
  */
 
 import { resolve } from "node:path";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { SessionManager, type SessionInfo } from "@earendil-works/pi-coding-agent";
 import type { ListScope, SessionListFilter, SessionRow, SessionSortMode } from "../types.ts";
 import { sessionFileKey } from "../utils/session-file-key.ts";
 import { singleLine } from "../utils/format.ts";
@@ -19,7 +19,13 @@ export interface ListSessionsOptions {
 /** Filter before sorting: a hidden parent must not leave its visible forks indented. */
 export function filterSessions(rows: SessionRow[], filter: SessionListFilter): SessionRow[] {
 	const archived = new Set([...filter.archived].map(sessionFileKey));
-	return rows.filter((row) => archived.has(sessionFileKey(row.file)) === (filter.view === "archived"));
+	return rows.filter((row) => !archived.has(sessionFileKey(row.file)));
+}
+
+/** Only the archived rows, for the archive dialog (all directories, independent of C/A). */
+export function filterArchivedSessions(rows: SessionRow[], archived: ReadonlySet<string>): SessionRow[] {
+	const files = new Set([...archived].map(sessionFileKey));
+	return rows.filter((row) => files.has(sessionFileKey(row.file)));
 }
 
 /** List sessions for the given scope. */
@@ -27,22 +33,36 @@ export async function listSessions(options: ListSessionsOptions): Promise<Sessio
 	const infos =
 		options.scope === "all" ? await SessionManager.listAll() : await SessionManager.list(options.cwd);
 
-	return infos.map((info) => {
-		const row: SessionRow = {
-			file: info.path,
-			id: info.id,
-			cwd: info.cwd,
-			preview: singleLine(info.firstMessage),
-			createdAt: info.created.getTime(),
-			updatedAt: info.modified.getTime(),
-			messageCount: info.messageCount,
-		};
-		if (info.name) row.name = info.name;
-		if (info.parentSessionPath) row.parentFile = info.parentSessionPath;
-		const model = readLastModel(info.path);
-		if (model) row.model = model;
-		return row;
-	});
+	return infos.map(toSessionRow);
+}
+
+/**
+ * Archived rows from every directory, for the archive dialog. With nothing
+ * archived there is nothing to scan; otherwise only the archived files get the
+ * extra per-file model read (`readLastModel`), not every session in history.
+ */
+export async function listArchivedSessions(archived: ReadonlySet<string>): Promise<SessionRow[]> {
+	if (archived.size === 0) return [];
+	const files = new Set([...archived].map(sessionFileKey));
+	const infos = await SessionManager.listAll();
+	return infos.filter((info) => files.has(sessionFileKey(info.path))).map(toSessionRow);
+}
+
+function toSessionRow(info: SessionInfo): SessionRow {
+	const row: SessionRow = {
+		file: info.path,
+		id: info.id,
+		cwd: info.cwd,
+		preview: singleLine(info.firstMessage),
+		createdAt: info.created.getTime(),
+		updatedAt: info.modified.getTime(),
+		messageCount: info.messageCount,
+	};
+	if (info.name) row.name = info.name;
+	if (info.parentSessionPath) row.parentFile = info.parentSessionPath;
+	const model = readLastModel(info.path);
+	if (model) row.model = model;
+	return row;
 }
 
 /**

@@ -50,9 +50,11 @@ The pi-related packages are `devDependencies`, so you must install dependencies 
 
 ```bash
 npm install            # install dependencies (pi packages included; not installed automatically by default)
-npm run dev            # load the plugin temporarily via pi -e ./src/index.ts, without writing config
+npm run dev            # load the plugin temporarily via pi -e ./index.ts, without writing config
 npm run install:pi     # pi install . registers this directory into pi (once only); after editing code, run /reload in pi to pick up the latest
 ```
+
+If an npm installation is also present, disable its extension with `pi config` while testing the local copy, or remove it with `pi remove npm:pi-lazy-panel`. Reload or restart pi afterward. If multiple copies are enabled, the open shortcut resolves its own entry's actual command name (`/lazy-panel` or `/lazy-panel:N`) at keypress time. Pi still gives a shared shortcut to the last-loaded extension; unresolved or ambiguous matches show a warning instead of sending an invalid command.
 
 Run the full check suite before committing (same as the pre-push hook):
 

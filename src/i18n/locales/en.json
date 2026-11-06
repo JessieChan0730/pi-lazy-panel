@@ -34,11 +34,22 @@
       "theme": "Theme"
     },
     "locale": "Interface language",
-    "language": { "en": "English", "zh": "Simplified Chinese" },
+    "language": {
+      "en": "English",
+      "zh": "Simplified Chinese"
+    },
     "defaultScope": "Default session scope",
     "defaultSort": "Default sort order",
-    "scope": { "current-folder": "Current folder", "all": "All folders" },
-    "sort": { "recent": "Recently updated", "created": "Creation time", "title": "Title", "threaded": "Fork relationships" },
+    "scope": {
+      "current-folder": "Current folder",
+      "all": "All folders"
+    },
+    "sort": {
+      "recent": "Recently updated",
+      "created": "Creation time",
+      "title": "Title",
+      "threaded": "Fork relationships"
+    },
     "leftWidth": "Left column width",
     "widthDescription": "SESSIONS and TREE share this width. Range: 15–60%, default: 25%.",
     "widthRange": "Range {{min}}–{{max}}%",
@@ -108,7 +119,8 @@
     "settings": "SETTINGS",
     "compact": "COMPACT",
     "visual": "VISUAL",
-    "preview": "PREVIEW"
+    "preview": "PREVIEW",
+    "archive": "ARCHIVE"
   },
   "pane": {
     "sessionsTitle": "SESSIONS",
@@ -116,7 +128,6 @@
     "contentTitle": "CONTENT",
     "sessionsEmpty": "No sessions",
     "sessionsEmptyCurrent": "No sessions · press {{key}} to see all folders",
-    "archivedSessionsTitle": "ARCHIVED",
     "treeEmpty": "No entries",
     "contentEmpty": "No messages",
     "emptySession": "(empty session)",
@@ -183,9 +194,8 @@
     "session-rename": "Rename session",
     "session-fork": "Fork session and open the fork",
     "session-toggle-select": "Toggle multi-select",
-    "session-pin": "Pin / unpin session (unarchive first; pinned stay on top)",
+    "session-pin": "Pin / unpin session (pinned stay on top)",
     "session-archive": "Archive",
-    "session-archive-view": "Switch between normal and archived sessions (keeps C/A scope)",
     "session-export": "Export to HTML / JSONL",
     "session-import": "Import from JSONL",
     "session-share": "Share session (GitHub Gist or Radius)",
@@ -210,7 +220,8 @@
     "tree-filter-all": "Filter: show everything (toggle)",
     "tree-dialog-close": "Close the tree dialog",
     "content-center": "Center the selected message in the pane",
-    "content-copy": "Copy the selected message text"
+    "content-copy": "Copy the selected message text",
+    "archive-open": "Open the archive (restore / delete archived sessions)"
   },
   "scopeTitle": {
     "global": "Global",
@@ -268,9 +279,6 @@
     "tree-dialog-close": "close"
   },
   "hint": {
-    "viewArchive": "{{key}} view archive",
-    "normalSessions": "Back to sessions",
-    "unarchive": "Unarchive",
     "save": "save",
     "cancel": "cancel",
     "searchConfirm": "search",
@@ -295,7 +303,8 @@
     "page": "page",
     "topBottom": "top/bottom",
     "backToList": "back to the list",
-    "preview": "preview"
+    "preview": "preview",
+    "openArchive": "{{key}} open archive"
   },
   "dialog": {
     "labelTitle": "Label",
@@ -419,6 +428,7 @@
     "compact": "compact"
   },
   "notify": {
+    "openCommandUnavailable": "Cannot uniquely resolve /{{command}} for this extension ({{path}}). Run /reload; if the problem persists, check duplicate extensions with pi config.",
     "tuiOnly": "/{{command}} is only available in TUI mode"
   },
   "status": {
@@ -429,7 +439,6 @@
     "sessionsUnarchived_one": "session unarchived",
     "sessionsUnarchived_other": "{{count}} sessions unarchived",
     "currentSessionArchived": "current session is archived · {{hint}}",
-    "unarchiveBeforePin": "unarchive this session before pinning it",
     "savingSessionState": "saving session state…",
     "sessionStateSavedWarning": "session state saved, but cleanup needs attention: {{error}}",
     "sessionStateCleanupFailed": "session metadata cleanup failed: {{error}}",
@@ -527,5 +536,24 @@
     "workFailed": "{{what}} failed: {{error}}",
     "notImplemented": "{{action}}: not implemented yet",
     "pending": "pending: {{keys}}"
+  },
+  "archive": {
+    "title": "ARCHIVE",
+    "empty": "No archived sessions",
+    "noMatches": "No matching archived sessions",
+    "allProjects": "All projects",
+    "currentProject": "Current project ({{path}})",
+    "projectTitle": "Scope",
+    "sortRecent": "Updated",
+    "sortCreated": "Created",
+    "sortTitle": "Title",
+    "search": "search",
+    "sort": "sort",
+    "project": "scope",
+    "restore": "restore",
+    "restoreAll": "restore all",
+    "delete": "delete",
+    "deleteAll": "delete all",
+    "toSearch": "{{key}} to search"
   }
 }

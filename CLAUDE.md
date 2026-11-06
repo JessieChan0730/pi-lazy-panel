@@ -34,7 +34,7 @@
 npm install            # 必须先执行：pi 相关包是 devDependencies，默认不会安装
 npm run check          # tsc --noEmit（strict、noUncheckedIndexedAccess、exactOptionalPropertyTypes）
 npm test               # node --import tsx --test "test/**/*.test.ts"
-npm run dev            # pi -e ./src/index.ts，临时把插件加载进一个 pi TUI，不写配置
+npm run dev            # pi -e ./index.ts，临时把插件加载进一个 pi TUI，不写配置
 npm run install:pi     # pi install .，把本目录以本地路径注册到 ~/.pi/agent/settings.json（pi 会把 . 解析成绝对路径），只需执行一次
 npm run uninstall:pi   # pi remove .，从 pi 中移除
 npm run i18n:scan      # 扫描 src 里的 t("…") key，和 src/i18n/locales/{en,zh}.json 对齐（缺失的以空串补进去、按字母排序），报告缺失 / 需翻译 / 复数 key 缺变体 / 孤儿；空串只算待翻译
@@ -48,7 +48,7 @@ npm run ci             # CI 入口（.github/workflows/ci.yml 调用）：跑和
 
 - 运行单个测试文件：`node --import tsx --test test/ui/ui.test.ts`
 - 按名称过滤：`node --import tsx --test --test-name-pattern="frame" test/ui/ui.test.ts`
-- 没有构建步骤：pi 直接加载 `src/index.ts`（见 `package.json` 的 `pi.extensions`）。`install:pi` 注册的是目录路径，改完代码后重启 pi 或在 pi 里输入 `/reload` 即为最新代码。
+- 没有构建步骤：pi 直接加载包根 `index.ts`（见 `package.json` 的 `pi.extensions`），入口再调用 `src/index.ts`。`install:pi` 注册的是目录路径，改完代码后重启 pi 或在 pi 里输入 `/reload` 即为最新代码。
 - 格式规范是 `.editorconfig`（tab 缩进、LF）+ `eslint.config.js`，提交前跑 `npm run lint`。
 - pi 扩展 API 文档在安装后的 `node_modules/@earendil-works/pi-coding-agent/docs/{extensions,tui,session-format}.md`，涉及 pi / pi-tui API 时先查文档，不要猜。
 
@@ -149,7 +149,7 @@ test/                        # 目录是 src 分层的镜像：一个模块的�
 ├── smoke.test.ts             # 键位表、搜索解析的冒烟测试（跨层，留在根）
 ├── app/                      # LazyPanel 端到端（同一个操作要从按键一路验到渲染）+ 扩展入口
 │   ├── panel.test.ts         # LazyPanel 行为：焦点切换、C/A、? 帮助、/ 搜索（三个面板的实时跳转 / Enter / Esc / n N 回绕 / 标题计数 / 折叠展开 / 高亮 / 切面板保留关键字）、自定义键位、y/T/Enter（含摘要菜单）、树对话框（移动、搜索、过滤、z 折叠、y/T/Enter、关闭后面板光标跟随）、SESSIONS 的 space 多选 / 批量删除 / d 确认删除 / r 改名 / s 排序 / i 信息弹窗 / n o y Y / e I S、@ changelog 弹窗、InputDialog / SelectDialog；拆分 app.ts 时补的行为锁定：输入法光标（CURSOR_MARKER）跟着各输入框走、多键超时、弹窗打开时屏蔽鼠标、各流程的失败分支、绑错 scope / 写错名字的动作只在 footer 提示
-│   ├── archive-panel.test.ts # X 归档框：跨目录扫描 / 项目筛选 / 实时搜索 / s 排序、Enter 恢复并保留弹窗、d 拒绝当前会话、确认删除（文件 + 元数据）、加载失败、自定义多键
+│   ├── archive-panel.test.ts # X 归档框：跨目录扫描 / 项目筛选 / 实时搜索 / s 排序、Enter 恢复与 R 批量恢复（并保留弹窗）、d 拒绝当前会话、确认删除（文件 + 元数据）、加载失败、自定义多键
 │   ├── tree-filter.test.ts   # f 过滤菜单：五种模式 / 直选键 / 取消保留 / 面板与树对话框双向共享 / 清折叠 / 空结果恢复 / 失败回滚可重试 / 可配置与帮助 footer
 │   ├── label-time.test.ts    # T / L 与标签时间：可选的独立时间、宽度安全、选中背景与搜索高亮不断、跨树视图共享、清空同时移除、重新绑定 / 解绑 / 帮助执行
 │   ├── index.test.ts         # 扩展入口：带 settings 参数直开设置且不写配置、General 字段即时写入 / 语言即时生效 / scope·sort 下次打开生效、非 TUI 守卫
@@ -198,7 +198,7 @@ AGENTS.md                     # 仅指向本文件，规则统一在这里维护
 
 快捷键是间接绑定：按键 → `resolveKeys`（`src/config/keys.ts`，按 `scopeChain` 的顺序查：面板 scope 再 global，树对话框是 tree-dialog → tree → global，支持 `gg` 这类多键序列） → `ActionId`（`src/types.ts`） → `LazyPanel.dispatch`（对话框里是 `dispatchInTreeDialog`）。默认值在 `src/config/keymap.ts`，`loadConfig` 深合并用户覆盖。新增动作时要同时改：`ActionId`、默认键位、`ACTION_DESCRIPTIONS`、`dispatch` 里的分发（漏了 tsc 会报错）、`docs/keybindings.md`。要弹窗或调 action 的命令，流程写成 `ui/flows/` 里的顶级函数（第一个参数是 `FlowHost`），`dispatch` 里只调用它；需要面板的新能力就加到 `FlowHost` 上。
 
-面板之外还有一个 pi 级快捷键（默认 `alt+l`，配置 `openShortcut`）：`src/index.ts` 在扩展工厂里同步注册，处理器只调 `pi.sendUserMessage("/lazy-panel", { expandPromptTemplates: true })` 回到命令路径（扩展快捷键自带的 ctx 没有 newSession / switchSession / navigateTree / fork，不能直接开面板）。改键要 pi `/reload` 才生效；设置页「快捷键」分类里也能改（`settings-flows.ts` 的 openOpenShortcutEditor：修改 / 关闭 / 恢复默认，补丁形状是 `OpenShortcutPatch`，因为 `null` 是「关闭」这个真实取值而不是删除）。
+面板之外还有一个 pi 级快捷键（默认 `alt+l`，配置 `openShortcut`）：`src/index.ts` 在扩展工厂里同步注册。包根 `index.ts` 传入自己的实际入口路径，直接加载 `src/index.ts` 时用它自己的路径；处理器在每次按键时通过 `pi.getCommands()` 按 `sourceInfo.path` 匹配当前实例，调用真实的 `/lazy-panel` 或 `/lazy-panel:N`（`expandPromptTemplates: true`）。路径会规范化符号链接；没有唯一匹配时只显示国际化警告，不发送命令。扩展快捷键自带的 ctx 没有 newSession / switchSession / navigateTree / fork，不能直接开面板。多份扩展共用一个键时仍由 pi 决定后加载者生效，开发测试建议禁用或卸载 npm 版。改键要 pi `/reload` 才生效；设置页「快捷键」分类里也能改（`settings-flows.ts` 的 openOpenShortcutEditor：修改 / 关闭 / 恢复默认，补丁形状是 `OpenShortcutPatch`，因为 `null` 是「关闭」这个真实取值而不是删除）。
 
 ## 代码风格/合作规范
 

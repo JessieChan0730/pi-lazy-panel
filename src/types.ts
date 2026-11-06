@@ -17,11 +17,8 @@ export type PaneId = (typeof PANE_IDS)[number];
 /** Which set of sessions the sessions pane lists. */
 export type ListScope = "current-folder" | "all";
 
-/** Archive visibility is independent of the directory scope. */
-export type SessionListView = "normal" | "archived";
-
+/** The sessions pane always hides archived files; the archive dialog owns their management. */
 export interface SessionListFilter {
-	view: SessionListView;
 	archived: ReadonlySet<string>;
 }
 
@@ -51,7 +48,8 @@ export type SessionSortMode = (typeof SESSION_SORT_MODES)[number];
  * dialog (`a` in the tree pane) is open, `confirm` / `rename` / `info` = the
  * delete confirmation, the Rename prompt or the Session Info dialog is open;
  * `export` / `import` / `share` = the dialogs of SESSIONS `e` / `I` / `S`;
- * `changelog` = the `@` changelog dialog, `usage` = the `u` context-usage box.
+ * `changelog` = the `@` changelog dialog, `usage` = the `u` context-usage box,
+ * `archive` = the archived-sessions dialog (`X`).
  */
 export type PanelMode =
 	| "normal"
@@ -59,6 +57,7 @@ export type PanelMode =
 	| "label"
 	| "restore"
 	| "tree"
+	| "archive"
 	| "tree-filter"
 	| "confirm"
 	| "rename"
@@ -404,6 +403,7 @@ export type ActionId =
 	| "search-next"
 	| "search-prev"
 	| "changelog"
+	| "archive-open"
 	| "settings-open"
 	// list navigation
 	| "move-down"
@@ -420,7 +420,6 @@ export type ActionId =
 	| "session-toggle-select"
 	| "session-pin"
 	| "session-archive"
-	| "session-archive-view"
 	| "session-export"
 	| "session-import"
 	| "session-share"

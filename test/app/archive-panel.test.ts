@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import { basename, resolve } from "node:path";
 import { test, type TestContext } from "node:test";
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import { stripTerminalSequences, type TuiMouseEvent, type TuiMouseEventType, visibleWidth } from "@earendil-works/pi-tui";
 import { mergeKeymap } from "../../src/config/config.ts";
 import { DEFAULT_KEYMAP } from "../../src/config/keymap.ts";
-import { filterSessions, sortSessions } from "../../src/data/sessions.ts";
+import { filterArchivedSessions, filterSessions, sortSessions } from "../../src/data/sessions.ts";
 import { initI18n, t as translate } from "../../src/i18n/index.ts";
 import type { Keymap, SessionFileChange, SessionFileState, SessionRow } from "../../src/types.ts";
 import { LazyPanel } from "../../src/ui/app.ts";
@@ -45,6 +45,7 @@ interface Options {
 	rows?: SessionRow[];
 	store?: { value: SessionFileState };
 	current?: string;
+	currentProjectCwd?: string;
 	keymap?: Keymap;
 	actions?: Partial<ActionSource>;
 	data?: Partial<DataSource>;
@@ -58,6 +59,8 @@ function harness(t: TestContext, opts: Options = {}) {
 	const copied: string[] = [];
 	const deletes: string[] = [];
 	let shown: SessionRow[] = [];
+	let archivedRows: SessionRow[] = [];
+	let archiveLoads = 0;
 	let closed = false;
 	const data: DataSource = {
 		loadSessionState: async () => structuredClone(store.value),
@@ -65,6 +68,12 @@ function harness(t: TestContext, opts: Options = {}) {
 			const scoped = scope === "all" ? rows : rows.filter((r) => r.cwd === "project");
 			shown = sortSessions(filterSessions(scoped, filter), sort, pinned);
 			return shown;
+		},
+		// The real adapter lists every directory, independent of the C/A scope.
+		listArchivedSessions: async (archived) => {
+			archiveLoads++;
+			archivedRows = sortSessions(filterArchivedSessions(rows, archived), "recent");
+			return archivedRows;
 		},
 		loadTree: async (file) => [{ entryId: file, kind: "message", role: "user", text: `body ${basename(file)}`, timestamp: 0, onActiveBranch: true, isLeaf: true }],
 		loadContent: async (file) => [{ entryId: file, role: "user", timestamp: 0, markdown: `body ${basename(file)}` }],
@@ -103,6 +112,7 @@ function harness(t: TestContext, opts: Options = {}) {
 		requestRender: () => {},
 		onClose: () => { closed = true; },
 		...(opts.current ? { currentSessionFile: opts.current } : {}),
+		...(opts.currentProjectCwd ? { currentProjectCwd: opts.currentProjectCwd } : {}),
 		...(opts.keymap ? { keymap: opts.keymap } : {}),
 	});
 	t.after(() => panel.dispose());
@@ -110,6 +120,8 @@ function harness(t: TestContext, opts: Options = {}) {
 		panel, rows, store, changes, entered, copied, deletes,
 		closed: () => closed,
 		shown: () => shown,
+		archivedShown: () => archivedRows,
+		archiveLoads: () => archiveLoads,
 		cursorFile: () => shown[panel.state.cursor.sessions]?.file,
 		text: (width = 180) => panel.render(width).map(stripTerminalSequences).join("\n"),
 		footer: () => stripTerminalSequences(panel.render(180).at(-1)!),
@@ -130,7 +142,43 @@ function search(panel: LazyPanel, text: string): void {
 	panel.handleInput("\r");
 }
 
-test("x archives atomically with unpin, follows the next row, and X/x brings it back without its pin", async (t) => {
+/** Dialog row order, from the rendered lines (the normal list is empty in these tests). */
+function rowOrder(text: string, names: readonly string[]): string[] {
+	const lines = text.split("\n");
+	return [...names].sort((a, b) => {
+		const ai = lines.findIndex((line) => line.includes(a));
+		const bi = lines.findIndex((line) => line.includes(b));
+		return ai - bi;
+	});
+}
+
+/** Synthetic normalized mouse event; the archive dialog draws into the same screen cells. */
+function mouseEvent(type: TuiMouseEventType, x: number, y: number, extra: Partial<TuiMouseEvent> = {}): TuiMouseEvent {
+	return {
+		type,
+		button: type === "wheel" ? "none" : "left",
+		x,
+		y,
+		screenX: x,
+		screenY: y,
+		width: 180,
+		height: 30,
+		shift: false,
+		alt: false,
+		ctrl: false,
+		...extra,
+	};
+}
+
+/** Screen cell of `needle` in the rendered frame (the archived row names only appear inside the box). */
+function cellOn(h: { panel: LazyPanel }, needle: string, width = 180): { x: number; y: number } {
+	const lines = h.panel.render(width).map(stripTerminalSequences);
+	const y = lines.findIndex((line) => line.includes(needle));
+	assert.ok(y >= 0, `"${needle}" is on screen`);
+	return { x: lines[y]!.indexOf(needle), y };
+}
+
+test("x archives atomically; X opens the archive, Enter restores it and keeps the box open", async (t) => {
 	const alpha = row("alpha").file;
 	const h = harness(t, { store: { value: { pinned: [alpha], archived: [] } } });
 	await h.panel.load();
@@ -141,168 +189,283 @@ test("x archives atomically with unpin, follows the next row, and X/x brings it 
 	assert.deepEqual(h.changes, [{ type: "archive", files: [alpha] }]);
 	assert.equal(h.panel.state.mode, "normal", "no confirmation dialog");
 	assert.equal(h.cursorFile(), row("beta").file);
-	assert.match(h.text(), /body beta/);
 	assert.doesNotMatch(h.text(), /body alpha/);
-	assert.match(h.footer(), /session archived.*X view archive/);
+	assert.match(h.footer(), /session archived.*X open archive/);
+
 	await h.press("X");
-	assert.equal(h.panel.state.sessionView, "archived");
-	assert.deepEqual(h.shown().map((r) => r.file), [alpha]);
-	assert.match(h.text(), /\[1\] ARCHIVED/);
-	assert.doesNotMatch(h.text(), /PINNED/);
-	assert.match(h.footer(), /X Back to sessions.*x Unarchive/);
-	await h.press("x");
-	assert.deepEqual(h.store.value, { pinned: [], archived: [] });
-	assert.equal(h.panel.state.contentHighlight, undefined);
-	assert.match(h.text(), /No sessions/);
-	assert.doesNotMatch(h.text(), /body alpha/);
-	await h.press("X");
-	assert.equal(h.shown().length, 3);
-	assert.equal(h.cursorFile(), row("beta").file, "return to the ordinary view's remembered session");
+	assert.equal(h.panel.state.mode, "archive");
+	assert.equal(h.archiveLoads(), 1, "opening reads the archive once");
+	assert.deepEqual(h.archivedShown().map((r) => r.id), ["alpha"]);
+	assert.match(h.text(), /ARCHIVE/);
+	assert.match(h.footer(), /Enter restore.*D delete all/);
+	assert.doesNotMatch(h.footer(), /Esc\/q\/X/, "X is not offered as a close key");
+
+	await h.press("\r");
+	assert.equal(h.panel.state.mode, "archive", "restoring leaves the dialog open");
+	assert.deepEqual(h.changes.at(-1), { type: "unarchive", files: [alpha] });
+	assert.deepEqual(h.store.value.archived, []);
+	assert.match(h.text(), /0\/0/);
+	assert.equal(h.archiveLoads(), 1, "restoring drops the row locally instead of rescanning every directory");
+	assert.ok(h.shown().some((r) => r.id === "alpha"), "restored row is back in SESSIONS");
+	assert.match(h.footer(), /session unarchived/);
 });
 
-test("archive visibility and C/A scope are independent; switching either clears selection", async (t) => {
-	const rows = [row("a"), row("b"), row("c", "other"), row("d", "other")];
-	const h = harness(t, { rows, store: { value: { pinned: [], archived: [rows[1]!.file, rows[3]!.file] } } });
+test("X works from any pane and opens on the current project; p reaches every directory", async (t) => {
+	const alpha = row("alpha");
+	const other = row("other", "/tmp/opencode/other");
+	const rows = [alpha, row("beta"), row("gamma"), other];
+	const h = harness(t, { rows, store: { value: { pinned: [], archived: [alpha.file, other.file] } }, currentProjectCwd: "/tmp/opencode/project" });
 	await h.panel.load();
-	assert.deepEqual(h.shown().map((r) => r.id), ["a"]);
-	await h.press(" ");
+	assert.deepEqual(h.shown().map((r) => r.id), ["beta", "gamma"], "current-folder scope hides the other directory");
+	await h.press("2");
 	await h.press("X");
-	assert.equal(h.panel.state.selectedSessionFiles.size, 0);
-	assert.deepEqual(h.shown().map((r) => r.id), ["b"]);
-	await h.press(" ");
-	await h.press("A");
-	assert.equal(h.panel.state.selectedSessionFiles.size, 0);
-	assert.equal(h.panel.state.sessionView, "archived");
-	assert.deepEqual(h.shown().map((r) => r.id), ["b", "d"]);
+	assert.equal(h.panel.state.mode, "archive");
+	assert.equal(h.panel.state.focus, "tree");
+	assert.deepEqual(h.archivedShown().map((r) => r.id).sort(), ["alpha", "other"], "the adapter still loads every directory");
+	assert.match(h.text(), /Current project/);
+	assert.doesNotMatch(h.text(), /tmp\/opencode\/other/, "the box opens scoped to the current project");
+	await h.press("p");
+	await h.press("j");
+	await h.press("\r");
+	assert.match(h.text(), /All projects/);
+	assert.match(h.text(), /tmp\/opencode\/other/);
 	await h.press("X");
-	assert.deepEqual(h.shown().map((r) => r.id), ["a", "c"]);
-	await h.press("C");
-	assert.deepEqual(h.shown().map((r) => r.id), ["a"]);
+	assert.equal(h.panel.state.mode, "archive", "X no longer closes the box");
+	await h.press("\x1b");
+	assert.equal(h.panel.state.mode, "normal");
+	assert.equal(h.panel.state.focus, "tree");
 });
 
-test("the current session can be archived; reopening warns, and Enter or TREE resume does not unarchive", async (t) => {
+test("archive search filters live; Enter leaves the search row, the next Enter restores", async (t) => {
+	const archived = [row("alpha").file, row("beta").file, row("gamma").file];
+	const h = harness(t, { store: { value: { pinned: [], archived } } });
+	await h.panel.load();
+	await h.press("X");
+	await h.press("/");
+	h.panel.handleInput("bet");
+	await flush();
+	assert.match(h.text(), /beta/);
+	assert.doesNotMatch(h.text(), /alpha/);
+	await h.press("\r");
+	assert.deepEqual(h.store.value.archived, archived, "Enter in the search row only leaves the input");
+	assert.equal(h.panel.state.mode, "archive");
+	await h.press("\r");
+	assert.deepEqual(h.store.value.archived, [row("alpha").file, row("gamma").file]);
+	assert.match(h.footer(), /session unarchived/);
+});
+
+test("R restores every visible row in one write and leaves the filtered-out rows archived", async (t) => {
+	const alpha = row("alpha").file;
+	const beta = row("beta").file;
+	const other = row("other", "/tmp/opencode/other").file;
+	const h = harness(t, {
+		rows: [row("alpha"), row("beta"), row("other", "/tmp/opencode/other")],
+		store: { value: { pinned: [], archived: [alpha, beta, other] } },
+		// 和行的 cwd 同一个目录名：项目筛选按 resolve 后的路径比较。
+		currentProjectCwd: "project",
+	});
+	await h.panel.load();
+	await h.press("X");
+	assert.match(h.footer(), /R restore all/, "the footer names the batch restore key");
+	assert.doesNotMatch(h.text(), /tmp\/opencode\/other/, "the box starts scoped to the current project");
+
+	await h.press("R");
+	assert.equal(h.panel.state.mode, "archive", "restoring leaves the dialog open");
+	assert.equal(h.changes.length, 1, "the whole group is one metadata write");
+	assert.equal(h.changes[0]!.type, "unarchive");
+	assert.deepEqual([...h.changes[0]!.files].sort(), [alpha, beta].sort());
+	assert.deepEqual(h.store.value.archived, [other], "the filtered-out project stays archived");
+	assert.match(h.text(), /0\/0/);
+	assert.equal(h.archiveLoads(), 1, "restoring drops the rows locally instead of rescanning every directory");
+	assert.ok(h.shown().some((r) => r.id === "alpha") && h.shown().some((r) => r.id === "beta"), "the rows are back in SESSIONS");
+	assert.match(h.footer(), /2 sessions unarchived/);
+});
+
+test("R on an empty / fully filtered archive writes nothing", async (t) => {
+	const archived = [row("alpha").file];
+	const h = harness(t, { store: { value: { pinned: [], archived } } });
+	await h.panel.load();
+	await h.press("X");
+	await h.press("/");
+	h.panel.handleInput("zzz");
+	await flush();
+	await h.press("\r");
+	await h.press("R");
+	assert.deepEqual(h.changes, [], "nothing visible, nothing restored");
+	assert.deepEqual(h.store.value.archived, archived);
+	assert.equal(h.panel.state.mode, "archive");
+});
+
+test("s cycles updated / created / title and keeps the cursor on its row", async (t) => {
+	const old = { ...row("z-old"), updatedAt: 100, createdAt: 100 };
+	const recent = { ...row("a-recent"), updatedAt: 300, createdAt: 50 };
+	const created = { ...row("m-created"), updatedAt: 200, createdAt: 400 };
+	const h = harness(t, { rows: [old, recent, created], store: { value: { pinned: [], archived: [old.file, recent.file, created.file] } } });
+	await h.panel.load();
+	await h.press("X");
+	assert.deepEqual(rowOrder(h.text(), ["a-recent", "z-old", "m-created"]), ["a-recent", "m-created", "z-old"]);
+	await h.press("s");
+	assert.match(h.text(), /Created/);
+	assert.deepEqual(rowOrder(h.text(), ["a-recent", "z-old", "m-created"]), ["m-created", "z-old", "a-recent"]);
+	await h.press("s");
+	assert.match(h.text(), /Title/);
+	assert.deepEqual(rowOrder(h.text(), ["a-recent", "z-old", "m-created"]), ["a-recent", "m-created", "z-old"]);
+	await h.press("s");
+	assert.match(h.text(), /Updated/);
+});
+
+test("the box opens on the current project; p switches to all / other projects", async (t) => {
+	const project = "/tmp/opencode/project";
+	const other = "/tmp/opencode/other";
+	const h = harness(t, {
+		rows: [row("a", project), row("b", other)],
+		store: { value: { pinned: [], archived: [row("a", project).file, row("b", other).file] } },
+		currentProjectCwd: project,
+	});
+	await h.panel.load();
+	await h.press("X");
+	assert.match(h.text(), /Current project/);
+	assert.match(h.text(), /\/tmp\/opencode\/project/);
+	assert.doesNotMatch(h.text(), /\/tmp\/opencode\/other/, "another project's archive stays hidden by default");
+	assert.deepEqual(h.archivedShown().map((r) => r.id), ["a", "b"], "adapter rows are unfiltered; the dialog filters the view");
+	await h.press("p");
+	assert.equal(h.panel.state.mode, "archive");
+	assert.match(h.text(), /Scope/);
+	assert.match(h.text(), /All projects/);
+	assert.match(h.text(), /Current project \(~?\/tmp\/opencode\/project\)/);
+	await h.press("j");
+	await h.press("\r");
+	assert.match(h.text(), /All projects/);
+	assert.match(h.text(), /\/tmp\/opencode\/other/);
+	await h.press("p");
+	await h.press("k");
+	await h.press("\r");
+	assert.match(h.text(), /Current project/);
+	assert.doesNotMatch(h.text(), /\/tmp\/opencode\/other/);
+	await h.press("p");
+	await h.press("j");
+	await h.press("j");
+	await h.press("\r");
+	assert.match(h.text(), /\/tmp\/opencode\/other/);
+	assert.doesNotMatch(h.text(), /\/tmp\/opencode\/project/);
+});
+
+test("d refuses the current session; a confirmed archive delete removes the file and its metadata", async (t) => {
+	const alpha = row("alpha").file;
+	const beta = row("beta").file;
+	const h = harness(t, { store: { value: { pinned: [], archived: [alpha, beta] } }, current: alpha });
+	await h.panel.load();
+	await h.press("X");
+	assert.equal(h.panel.state.mode, "archive");
+	await h.press("d");
+	assert.equal(h.panel.state.mode, "confirm");
+	assert.match(h.text(), /Can't delete the active session/);
+	assert.deepEqual(h.deletes, []);
+	await h.press("\x1b");
+	assert.equal(h.panel.state.mode, "archive");
+	await h.press("j");
+	await h.press("d");
+	await h.press("\r");
+	assert.deepEqual(h.deletes, [], "default No leaves the archived file alone");
+	assert.equal(h.panel.state.mode, "archive");
+	await h.press("d");
+	await h.press("y");
+	assert.deepEqual(h.deletes, [beta]);
+	assert.deepEqual(h.store.value.archived, [alpha]);
+	assert.match(h.text(), /1\/1/);
+	assert.equal(h.archiveLoads(), 1, "deleting drops the row locally instead of rescanning every directory");
+	assert.match(h.footer(), /moved to trash/);
+});
+
+test("D deletes only the rows visible after search and project filtering", async (t) => {
+	const archived = [row("alpha").file, row("beta").file, row("gamma").file];
+	const h = harness(t, { store: { value: { pinned: [], archived } } });
+	await h.panel.load();
+	await h.press("X");
+	await h.press("/");
+	h.panel.handleInput("alpha");
+	await h.press("\r");
+	await h.press("D");
+	assert.equal(h.panel.state.mode, "confirm");
+	assert.match(h.text(), /Delete session\?/);
+	await h.press("y");
+	assert.deepEqual(h.deletes, [row("alpha").file]);
+	assert.deepEqual(h.store.value.archived, [row("beta").file, row("gamma").file]);
+	assert.match(h.footer(), /session moved to trash/);
+});
+
+test("a failed single archive delete reports the error and keeps the row", async (t) => {
+	const alpha = row("alpha").file;
+	const h = harness(t, {
+		store: { value: { pinned: [], archived: [alpha] } },
+		actions: {
+			deleteSession: async () => {
+				throw new Error("permission denied");
+			},
+		},
+	});
+	await h.panel.load();
+	await h.press("X");
+	await h.press("d");
+	await h.press("y");
+	assert.deepEqual(h.store.value.archived, [alpha]);
+	assert.match(h.text(), /1\/1/);
+	assert.match(h.footer(), /delete failed: .*permission denied/);
+});
+
+test("metadata cleanup failure after an archive delete is reported without claiming the file survived", async (t) => {
+	const alpha = row("alpha").file;
+	const h = harness(t, {
+		store: { value: { pinned: [], archived: [alpha] } },
+		actions: {
+			updateSessionState: async (change) => {
+				if (change.type === "delete") throw new Error("disk full");
+				return changeFiles(h.store.value, change);
+			},
+		},
+	});
+	await h.panel.load();
+	await h.press("X");
+	await h.press("d");
+	await h.press("y");
+	assert.deepEqual(h.deletes, [alpha]);
+	assert.match(h.text(), /0\/0/);
+	assert.match(h.footer(), /moved to trash.*metadata cleanup failed: disk full/);
+});
+
+test("current-session warning names the new X key and the current session can be restored", async (t) => {
 	const alpha = row("alpha").file;
 	const h = harness(t, { current: alpha });
 	await h.panel.load();
 	await h.press("x");
-	assert.equal(h.closed(), false);
-	const reopened = harness(t, { store: h.store, current: alpha });
+	const reopened = harness(t, { store: h.store, current: alpha, currentProjectCwd: "project" });
 	await reopened.panel.load();
-	assert.equal(reopened.panel.state.sessionView, "normal");
 	assert.equal(reopened.cursorFile(), row("beta").file);
-	assert.match(reopened.footer(), /current session is archived.*X view archive/);
+	assert.match(reopened.footer(), /current session is archived.*X open archive/);
 	await reopened.press("X");
+	assert.deepEqual(reopened.archivedShown().map((r) => r.id), ["alpha"]);
 	await reopened.press("\r");
-	assert.deepEqual(reopened.entered, [alpha]);
-	assert.deepEqual(h.store.value.archived, [alpha]);
-	assert.equal(reopened.closed(), true);
-
-	const tree = harness(t, { store: h.store, current: alpha });
-	await tree.panel.load();
-	await tree.press("X");
-	await tree.press("2");
-	await tree.press("y");
-	assert.deepEqual(tree.copied, [alpha]);
-	await tree.press("\r");
-	assert.deepEqual(tree.entered, [alpha]);
-	assert.deepEqual(h.store.value.archived, [alpha]);
-});
-
-test("p refuses archived rows and d still confirms; successful deletion clears archive metadata", async (t) => {
-	const alpha = row("alpha").file;
-	const h = harness(t, { store: { value: { pinned: [], archived: [alpha] } } });
-	await h.panel.load();
-	await h.press("X");
-	await h.press("p");
-	assert.match(h.footer(), /unarchive.*before pinning/);
-	assert.deepEqual(h.changes, []);
-	await h.press("d");
-	assert.equal(h.panel.state.mode, "confirm");
-	await h.press("\r");
-	assert.deepEqual(h.deletes, [], "default No leaves archived file alone");
-	await h.press("d");
-	await h.press("y");
-	assert.deepEqual(h.deletes, [alpha]);
 	assert.deepEqual(h.store.value.archived, []);
-	assert.equal(h.shown().length, 0);
+	assert.ok(reopened.shown().some((r) => r.id === "alpha"));
 });
 
-test("batch archive follows the nearest surviving neighbour, clears selection and empties TREE/CONTENT when done", async (t) => {
-	const h = harness(t, { rows: [row("a"), row("b"), row("c"), row("d"), row("e")] });
+test("a failed archive load leaves the normal list, mode and selection intact", async (t) => {
+	const h = harness(t, { data: { listArchivedSessions: async () => {
+		throw new Error("unreadable archive");
+	} } });
 	await h.panel.load();
-	for (const name of ["a", "c"]) h.panel.state.selectedSessionFiles.add(row(name).file);
-	h.panel.state.cursor.sessions = 2;
-	await h.press("x");
-	assert.deepEqual(h.changes[0]?.files, [row("a").file, row("c").file]);
-	assert.equal(h.cursorFile(), row("d").file, "not e after the row before the cursor disappeared");
-	assert.equal(h.panel.state.selectedSessionFiles.size, 0);
-	for (const r of h.shown()) h.panel.state.selectedSessionFiles.add(r.file);
-	await h.press("x");
-	assert.equal(h.shown().length, 0);
-	assert.equal(h.panel.state.contentHighlight, undefined);
-	assert.match(h.text(), /No sessions/);
-	assert.doesNotMatch(h.text().split("\n").slice(0, -1).join("\n"), /X view archive/);
-	assert.doesNotMatch(h.text(), /body /);
-	await h.press("X");
-	for (const r of h.shown()) h.panel.state.selectedSessionFiles.add(r.file);
-	await h.press("x");
-	assert.deepEqual(h.store.value.archived, []);
-	assert.equal(h.shown().length, 0);
-});
-
-test("each view remembers its query, file identity and wheel offset; matches are recalculated", async (t) => {
-	const rows = Array.from({ length: 20 }, (_, i) => row(`s${String(i).padStart(2, "0")}`));
-	const h = harness(t, { rows, store: { value: { pinned: [], archived: rows.slice(10).map((r) => r.file) } } });
-	await h.panel.load();
-	search(h.panel, "s07");
-	h.panel.state.listScroll.sessions = 3;
-	const normalFile = h.cursorFile();
-	await h.press("X");
-	assert.equal(Boolean(h.panel.state.search.sessions), false);
-	search(h.panel, "s15");
-	h.panel.state.listScroll.sessions = 7;
-	const archivedFile = h.cursorFile();
-	h.rows.shift(); // External deletion changes numeric row positions.
-	await h.press("X");
-	assert.equal(h.cursorFile(), normalFile);
-	assert.equal(h.panel.state.search.sessions?.query, "s07");
-	assert.deepEqual(h.panel.state.search.sessions?.matches, [6]);
-	assert.equal(h.panel.state.listScroll.sessions, 3);
-	await h.press("X");
-	assert.equal(h.cursorFile(), archivedFile);
-	assert.equal(h.panel.state.search.sessions?.query, "s15");
-	assert.deepEqual(h.panel.state.search.sessions?.matches, [5]);
-	assert.equal(h.panel.state.listScroll.sessions, 7);
-});
-
-test("Esc clears pending keys, then search, selection, archive view, and finally closes; q closes directly", async (t) => {
-	const h = harness(t, { store: { value: { pinned: [], archived: [row("alpha").file] } } });
-	await h.panel.load();
-	await h.press("X");
-	search(h.panel, "alpha");
+	search(h.panel, "beta");
 	await h.press(" ");
-	await h.press("g");
-	await h.press("\x1b");
-	assert.ok(h.panel.state.search.sessions);
-	await h.press("\x1b");
-	assert.equal(Boolean(h.panel.state.search.sessions), false);
+	await h.press("X");
+	assert.equal(h.panel.state.mode, "normal");
+	assert.equal(h.panel.state.search.sessions?.query, "beta");
 	assert.equal(h.panel.state.selectedSessionFiles.size, 1);
-	await h.press("\x1b");
-	assert.equal(h.panel.state.selectedSessionFiles.size, 0);
-	assert.equal(h.panel.state.sessionView, "archived");
-	await h.press("\x1b");
-	assert.equal(h.panel.state.sessionView, "normal");
-	assert.equal(h.closed(), false);
-	await h.press("\x1b");
-	assert.equal(h.closed(), true);
-	const other = harness(t);
-	await other.panel.load();
-	await other.press("X");
-	await other.press("q");
-	assert.equal(other.closed(), true);
+	assert.equal(h.shown().length, 3);
+	assert.match(h.footer(), /unreadable archive/);
+	assert.equal(h.panel.state.sessionStateBusy, false);
 });
 
-test("failed or pending saves preserve rows and pins, block repeated x and mouse input, and do not leak rejections", async (t) => {
+test("a pending archive save blocks repeated x / X and preserves rows after failure", async (t) => {
 	let reject!: (error: Error) => void;
 	let calls = 0;
 	const waiting = new Promise<SessionFileState>((_resolve, no) => {
@@ -322,12 +485,10 @@ test("failed or pending saves preserve rows and pins, block repeated x and mouse
 	h.panel.handleInput("x");
 	h.panel.handleInput("X");
 	h.panel.handleInput("j");
-	h.panel.handleMouse({ type: "wheel", x: 2, y: 2, screenX: 2, screenY: 2, width: 180, height: 30, wheelDelta: 3, button: "none", shift: false, alt: false, ctrl: false });
 	assert.equal(calls, 1);
-	assert.equal(h.panel.state.sessionView, "normal");
+	assert.equal(h.panel.state.mode, "normal");
 	assert.equal(h.cursorFile(), alpha);
-	assert.deepEqual(h.panel.state.pinnedFiles, [alpha]);
-	assert.equal(h.panel.state.listScroll.sessions, null);
+	assert.equal(h.panel.state.sessionStateBusy, true);
 	reject(new Error("disk full"));
 	await flush();
 	assert.match(h.footer(), /archive failed: disk full/);
@@ -336,79 +497,81 @@ test("failed or pending saves preserve rows and pins, block repeated x and mouse
 	assert.equal(h.panel.state.archivedFiles.size, 0);
 });
 
-test("view-load failure leaves the previous view, query, rows and selection intact", async (t) => {
-	let fail = false;
-	const h = harness(t, { data: { loadSessionState: async () => {
-		if (fail) throw new Error("corrupt metadata");
-		return { pinned: [], archived: [] };
-	} } });
-	await h.panel.load();
-	search(h.panel, "beta");
-	await h.press(" ");
-	fail = true;
-	await h.press("X");
-	assert.equal(h.panel.state.sessionView, "normal");
-	assert.equal(h.cursorFile(), row("beta").file);
-	assert.equal(h.panel.state.search.sessions?.query, "beta");
-	assert.equal(h.panel.state.selectedSessionFiles.size, 1);
-	assert.match(h.footer(), /corrupt metadata/);
-	assert.equal(h.panel.state.sessionStateBusy, false);
-});
-
-test("other windows' organization changes are seen on relist without losing unrelated pins", async (t) => {
-	const h = harness(t);
-	await h.panel.load();
-	h.store.value = { archived: [row("beta").file], pinned: [row("gamma").file] };
-	await h.press("x");
-	assert.deepEqual(h.store.value.archived, [row("beta").file, row("alpha").file]);
-	assert.deepEqual(h.panel.state.pinnedFiles, [row("gamma").file]);
-	assert.deepEqual(h.shown().map((r) => r.id), ["gamma"]);
-	await h.press("X");
-	assert.deepEqual(h.shown().map((r) => r.id), ["alpha", "beta"]);
-});
-
-test("new copies do not inherit archive membership, and archived parents do not hide separately forked files", async (t) => {
-	const parent = row("parent");
-	const child = { ...row("child"), parentFile: parent.file };
-	const h = harness(t, { rows: [parent, child], store: { value: { pinned: [], archived: [parent.file] } } });
-	h.panel.state.sort = "threaded";
-	await h.panel.load();
-	assert.deepEqual(h.shown().map((r) => [r.id, r.threadDepth]), [["child", 0]]);
-	h.rows.push({ ...parent, file: row("clone").file });
-	await h.panel.load();
-	assert.equal(h.shown().length, 2, "identity is the file, not a reused imported session UUID");
-	await h.press("X");
-	assert.deepEqual(h.shown().map((r) => [r.id, r.threadDepth]), [["parent", 0]]);
-});
-
-test("archive actions use custom multi-key bindings and help execution, and cannot execute in other panes", async (t) => {
+test("archive-open is a global action: custom bindings, help execution and dispatch all open the box", async (t) => {
 	const warnings: string[] = [];
-	const keymap = mergeKeymap(DEFAULT_KEYMAP, { sessions: { "session-archive": "zx", "session-archive-view": "zX" } }, warnings);
+	const keymap = mergeKeymap(DEFAULT_KEYMAP, { global: { "archive-open": "zx" }, sessions: { "session-archive": "ax" } }, warnings);
+	assert.deepEqual(warnings, []);
 	const h = harness(t, { keymap });
 	await h.panel.load();
 	await h.press("x");
-	await h.press("X");
 	assert.equal(h.changes.length, 0);
 	await h.press("z");
 	await h.press("x");
-	assert.equal(h.changes.length, 1);
-	assert.match(h.footer(), /zX view archive/);
+	assert.equal(h.panel.state.mode, "archive");
+	await h.press("q");
+	assert.equal(h.panel.state.mode, "normal");
 	await h.press("?");
 	const lines = buildHelpLines(keymap, "sessions").filter((line) => line.kind === "binding");
-	const target = lines.findIndex((line) => line.action === "session-archive-view");
+	const target = lines.findIndex((line) => line.action === "archive-open");
 	assert.ok(target >= 0);
 	for (let i = 0; i < target; i++) h.panel.handleInput("j");
 	await h.press("\r");
-	assert.equal(h.panel.state.sessionView, "archived");
+	assert.equal(h.panel.state.mode, "archive");
 	assert.equal(h.panel.state.helpOpen, false);
-	await h.press("2");
-	h.panel.dispatch("session-archive");
-	h.panel.dispatch("session-archive-view");
-	assert.equal(h.panel.state.sessionView, "archived");
-	assert.equal(h.changes.length, 1);
+	await h.press("q");
+	h.panel.dispatch("archive-open");
+	await flush();
+	assert.equal(h.panel.state.mode, "archive");
 });
 
-test("empty session views are concise and localized, with distinguishable titles at narrow widths", async (t) => {
+test("archive mouse: a click selects, the wheel moves the cursor, a double-click restores", async (t) => {
+	const archived = [row("alpha").file, row("beta").file, row("gamma").file];
+	const h = harness(t, { store: { value: { pinned: [], archived } } });
+	await h.panel.load();
+	await h.press("X");
+	assert.equal(h.panel.state.mode, "archive");
+	assert.match(h.text(), /1\/3/);
+
+	const beta = cellOn(h, "beta");
+	assert.deepEqual(h.panel.handleMouse(mouseEvent("click", beta.x, beta.y)), { handled: true });
+	assert.match(h.text(), /2\/3/, "a single click only moves the cursor");
+	assert.deepEqual(h.store.value.archived, archived, "and does not restore");
+
+	assert.deepEqual(h.panel.handleMouse(mouseEvent("wheel", beta.x, beta.y, { wheelDelta: 1 })), { handled: true });
+	assert.match(h.text(), /3\/3/, "the wheel moves the cursor without restoring");
+
+	assert.deepEqual(h.panel.handleMouse(mouseEvent("click", beta.x, beta.y, { clickCount: 2 })), { handled: true });
+	await flush();
+	assert.equal(h.panel.state.mode, "archive", "restoring keeps the box open");
+	assert.deepEqual(h.store.value.archived, [row("alpha").file, row("gamma").file]);
+	assert.match(h.text(), /2\/2/);
+	assert.equal(h.archiveLoads(), 1);
+});
+
+test("archive mouse: the search row takes the click, and clicks outside the box are swallowed", async (t) => {
+	const archived = [row("alpha").file, row("beta").file];
+	const h = harness(t, { store: { value: { pinned: [], archived } } });
+	await h.panel.load();
+	await h.press("X");
+	assert.match(h.text(), /1\/2/);
+
+	// 框外（x 在弹窗左边）：事件被吞掉，框不关，光标不动。
+	assert.deepEqual(h.panel.handleMouse(mouseEvent("click", 2, 3)), { handled: true });
+	assert.equal(h.panel.state.mode, "archive", "an outside click never closes the box");
+	assert.match(h.text(), /1\/2/);
+
+	// 搜索行：点击后拿到按键，实时过滤。
+	const search = cellOn(h, "Search");
+	h.panel.handleMouse(mouseEvent("click", search.x, search.y));
+	h.panel.handleInput("bet");
+	await flush();
+	assert.match(h.text(), /1\/1/);
+	assert.match(h.text(), /beta/);
+	assert.doesNotMatch(h.text(), /alpha/);
+	assert.equal(h.panel.state.mode, "archive");
+});
+
+test("empty archive boxes render at every width and in both locales", async (t) => {
 	const h = harness(t, { rows: [] });
 	await h.panel.load();
 	await h.press("X");
@@ -417,137 +580,9 @@ test("empty session views are concise and localized, with distinguishable titles
 		for (const width of [60, 80, 160]) {
 			const lines = h.panel.render(width);
 			assert.ok(lines.every((line) => visibleWidth(line) === width));
-			assert.ok(stripTerminalSequences(lines[0]!).includes(translate("pane.archivedSessionsTitle")));
+			assert.ok(lines.some((line) => stripTerminalSequences(line).includes(translate("archive.title"))));
 		}
-		assert.ok(h.text().includes(translate("pane.sessionsEmpty")));
-		await h.press("X");
-		const normal = h.text().split("\n").slice(0, -1).join("\n");
-		assert.ok(normal.includes(translate("pane.sessionsEmpty")));
-		// Current 范围为空时顺带提示怎么切到全部目录（键位来自 keymap，默认 A）。
-		assert.ok(normal.includes(translate("pane.sessionsEmptyCurrent", { key: "A" })));
-		assert.doesNotMatch(normal, /view archive|查看归档|未归档/);
-		await h.press("X");
+		assert.ok(h.text().includes(translate("archive.empty")));
 	}
 	initI18n("en");
-});
-
-test("successful save with an unlock warning publishes the committed state instead of pretending to roll back", async (t) => {
-	const store = { value: { pinned: [row("alpha").file], archived: [] } as SessionFileState };
-	const h = harness(t, { store, actions: { updateSessionState: async (change) => {
-		store.value = changeFiles(store.value, change);
-		return { ...store.value, warning: "unlock failed" };
-	} } });
-	await h.panel.load();
-	await h.press("x");
-	assert.equal(h.shown().length, 2);
-	assert.deepEqual(h.panel.state.pinnedFiles, []);
-	assert.deepEqual([...h.panel.state.archivedFiles], [row("alpha").file]);
-	assert.match(h.footer(), /state saved.*unlock failed/);
-	assert.doesNotMatch(h.footer(), /archive failed/);
-});
-
-test("metadata cleanup failure after deletion is reported without claiming the file survived", async (t) => {
-	const alpha = row("alpha").file;
-	const h = harness(t, {
-		store: { value: { pinned: [], archived: [alpha] } },
-		actions: { updateSessionState: async () => { throw new Error("disk full"); } },
-	});
-	await h.panel.load();
-	await h.press("X");
-	await h.press("d");
-	await h.press("y");
-	assert.deepEqual(h.deletes, [alpha]);
-	assert.equal(h.shown().length, 0);
-	assert.match(h.footer(), /moved to trash.*metadata cleanup failed: disk full/);
-});
-
-test("an old list response cannot overwrite a newer archive view", async (t) => {
-	let finish!: (rows: SessionRow[]) => void;
-	let call = 0;
-	const pending = new Promise<SessionRow[]>((done) => {
-		finish = done;
-	});
-	const h = harness(t, { data: { listSessions: async () => {
-		call++;
-		return call === 1 ? pending : [];
-	} } });
-	const loading = h.panel.load();
-	await flush();
-	await h.press("X");
-	assert.equal(h.panel.state.sessionView, "archived");
-	finish([row("alpha")]);
-	await loading;
-	assert.match(h.text(), /No sessions/);
-	assert.doesNotMatch(h.text(), /body alpha/);
-});
-
-test("completion after the panel is disposed does not change its UI snapshot", async (t) => {
-	let finish!: (state: SessionFileState) => void;
-	const pending = new Promise<SessionFileState>((done) => {
-		finish = done;
-	});
-	const h = harness(t, { actions: { updateSessionState: async () => pending } });
-	await h.panel.load();
-	h.panel.handleInput("x");
-	h.panel.dispose();
-	finish({ pinned: [], archived: [row("alpha").file] });
-	await flush();
-	assert.equal(h.panel.state.archivedFiles.size, 0);
-	assert.equal(h.shown().length, 3);
-});
-
-test("ordinary search cannot hit an archived row, and archived search does not include ordinary rows", async (t) => {
-	const h = harness(t, { store: { value: { pinned: [], archived: [row("alpha").file] } } });
-	await h.panel.load();
-	search(h.panel, "alpha");
-	assert.equal(h.panel.state.search.sessions?.matches.length, 0);
-	await h.press("X");
-	search(h.panel, "beta");
-	assert.equal(h.panel.state.search.sessions?.matches.length, 0);
-	await h.press("\x1b");
-	search(h.panel, "alpha");
-	assert.deepEqual(h.panel.state.search.sessions?.matches, [0]);
-});
-
-test("failed scope loading preserves the previous scope and cursor in the archive view", async (t) => {
-	let fail = false;
-	const h = harness(t, { data: { loadSessionState: async () => {
-		if (fail) throw new Error("unreadable state");
-		return { pinned: [], archived: [row("alpha").file, row("beta").file] };
-	} } });
-	await h.panel.load();
-	await h.press("X");
-	await h.press("j");
-	await h.press(" ");
-	fail = true;
-	await h.press("A");
-	assert.equal(h.panel.state.scope, "current-folder");
-	assert.equal(h.panel.state.sessionView, "archived");
-	assert.equal(h.cursorFile(), row("beta").file);
-	assert.equal(h.panel.state.selectedSessionFiles.size, 1);
-	assert.match(h.footer(), /unreadable state/);
-});
-
-test("a late failure opening the old session cannot erase the new archive view's content", async (t) => {
-	let reject!: (error: Error) => void;
-	const pending = new Promise<never>((_resolve, no) => {
-		reject = no;
-	});
-	const beta = row("beta").file;
-	const h = harness(t, {
-		store: { value: { pinned: [], archived: [beta] } },
-		data: { loadTree: async (file) => {
-			if (file === row("alpha").file) return pending;
-			return [{ entryId: file, kind: "message", role: "user", text: `body ${basename(file)}`, timestamp: 0, onActiveBranch: true, isLeaf: true }];
-		} },
-	});
-	const loading = h.panel.load();
-	await flush();
-	await h.press("X");
-	assert.match(h.text(), /body beta/);
-	reject(new Error("old file vanished"));
-	await loading;
-	assert.match(h.text(), /body beta/);
-	assert.equal(h.panel.state.contentHighlight, beta);
-	assert.doesNotMatch(h.footer(), /old file vanished/);
 });
