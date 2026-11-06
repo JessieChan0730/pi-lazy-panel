@@ -394,6 +394,115 @@ test("D deletes only the rows visible after search and project filtering", async
 	assert.match(h.footer(), /session moved to trash/);
 });
 
+for (const key of ["d", "D"]) {
+	test(`${key} blocks keyboard and mouse operations until deletion and metadata cleanup finish`, async (t) => {
+		const alpha = row("alpha").file;
+		const beta = row("beta").file;
+		let finishDelete!: () => void;
+		let finishCleanup!: () => void;
+		const deletion = new Promise<void>((done) => {
+			finishDelete = done;
+		});
+		const cleanup = new Promise<void>((done) => {
+			finishCleanup = done;
+		});
+		const calls: string[] = [];
+		const h = harness(t, {
+			store: { value: { pinned: [], archived: [alpha, beta] } },
+			actions: {
+				deleteSession: async (file) => {
+					calls.push(file);
+					await deletion;
+					return "trash";
+				},
+				updateSessionState: async (change) => {
+					h.changes.push(change);
+					await cleanup;
+					h.store.value = changeFiles(h.store.value, change);
+					return structuredClone(h.store.value);
+				},
+			},
+		});
+		await h.panel.load();
+		await h.press("X");
+		const betaCell = cellOn(h, "beta");
+		await h.press(key);
+		await h.press("y");
+		assert.equal(h.panel.state.sessionStateBusy, true);
+		assert.deepEqual(calls, [alpha]);
+		for (const input of ["d", "y", "D", "y", "R", "\r", "j", "p", "q", "\x1b"]) h.panel.handleInput(input);
+		h.panel.handleMouse(mouseEvent("click", betaCell.x, betaCell.y, { clickCount: 2 }));
+		h.panel.handleMouse(mouseEvent("wheel", betaCell.x, betaCell.y, { wheelDelta: 1 }));
+		assert.equal(h.panel.state.mode, "archive");
+		assert.deepEqual(calls, [alpha], "repeated confirmations cannot start another delete");
+		assert.deepEqual(h.changes, [], "restoring cannot race the pending delete");
+		assert.match(h.text(), /1\/2/, "input cannot change the cursor");
+
+		finishDelete();
+		await flush();
+		assert.deepEqual(calls, key === "D" ? [alpha, beta] : [alpha]);
+		assert.equal(h.panel.state.sessionStateBusy, true, "the lock covers metadata cleanup too");
+		assert.deepEqual(h.changes, [{ type: "delete", files: key === "D" ? [alpha, beta] : [alpha] }]);
+		h.panel.handleInput("R");
+		assert.equal(h.changes.length, 1);
+		finishCleanup();
+		await flush();
+		assert.equal(h.panel.state.sessionStateBusy, false);
+		assert.deepEqual(h.store.value.archived, key === "D" ? [] : [beta]);
+		await h.press("q");
+		assert.equal(h.panel.state.mode, "normal", "input resumes after cleanup");
+	});
+}
+
+test("a partial archive delete unlocks the dialog and leaves failed rows available for restore", async (t) => {
+	const alpha = row("alpha").file;
+	const beta = row("beta").file;
+	const h = harness(t, {
+		store: { value: { pinned: [], archived: [alpha, beta] } },
+		actions: { deleteSession: async (file) => {
+			if (file === beta) throw new Error("permission denied");
+			return "trash";
+		} },
+	});
+	await h.panel.load();
+	await h.press("X");
+	await h.press("D");
+	await h.press("y");
+	assert.equal(h.panel.state.sessionStateBusy, false);
+	assert.deepEqual(h.store.value.archived, [beta]);
+	assert.match(h.footer(), /deleted 1, 1 failed.*permission denied/);
+	await h.press("R");
+	assert.deepEqual(h.store.value.archived, []);
+});
+
+test("disposing during an archive delete stops the batch, cleans completed deletions and releases the lock", async (t) => {
+	const alpha = row("alpha").file;
+	const beta = row("beta").file;
+	let finish!: () => void;
+	const waiting = new Promise<void>((done) => {
+		finish = done;
+	});
+	const calls: string[] = [];
+	const h = harness(t, {
+		store: { value: { pinned: [], archived: [alpha, beta] } },
+		actions: { deleteSession: async (file) => {
+			calls.push(file);
+			await waiting;
+			return "trash";
+		} },
+	});
+	await h.panel.load();
+	await h.press("X");
+	await h.press("D");
+	await h.press("y");
+	h.panel.dispose();
+	finish();
+	await flush();
+	assert.deepEqual(calls, [alpha], "a disposed panel must not delete the next file");
+	assert.deepEqual(h.store.value.archived, [beta], "the completed deletion still needs metadata cleanup");
+	assert.equal(h.panel.state.sessionStateBusy, false);
+});
+
 test("a failed single archive delete reports the error and keeps the row", async (t) => {
 	const alpha = row("alpha").file;
 	const h = harness(t, {
@@ -411,6 +520,7 @@ test("a failed single archive delete reports the error and keeps the row", async
 	assert.deepEqual(h.store.value.archived, [alpha]);
 	assert.match(h.text(), /1\/1/);
 	assert.match(h.footer(), /delete failed: .*permission denied/);
+	assert.equal(h.panel.state.sessionStateBusy, false);
 });
 
 test("metadata cleanup failure after an archive delete is reported without claiming the file survived", async (t) => {
@@ -431,6 +541,7 @@ test("metadata cleanup failure after an archive delete is reported without claim
 	assert.deepEqual(h.deletes, [alpha]);
 	assert.match(h.text(), /0\/0/);
 	assert.match(h.footer(), /moved to trash.*metadata cleanup failed: disk full/);
+	assert.equal(h.panel.state.sessionStateBusy, false);
 });
 
 test("current-session warning names the new X key and the current session can be restored", async (t) => {
