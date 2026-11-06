@@ -9,6 +9,7 @@ import { filterArchivedSessions, filterSessions, sortSessions } from "../../src/
 import { initI18n, t as translate } from "../../src/i18n/index.ts";
 import type { Keymap, SessionFileChange, SessionFileState, SessionRow } from "../../src/types.ts";
 import { LazyPanel } from "../../src/ui/app.ts";
+import { PENDING_TIMEOUT_MS } from "../../src/ui/key-sequencer.ts";
 import type { ActionSource, DataSource } from "../../src/ui/ports.ts";
 import { buildHelpLines } from "../../src/ui/widgets/help-overlay.ts";
 
@@ -252,6 +253,143 @@ test("archive search filters live; Enter leaves the search row, the next Enter r
 	await h.press("\r");
 	assert.deepEqual(h.store.value.archived, [row("alpha").file, row("gamma").file]);
 	assert.match(h.footer(), /session unarchived/);
+});
+
+for (const [binding, keys, label] of [
+	["zx", ["z", "x"], "zx"],
+	["ctrl+w h", ["\x17", "h"], "Ctrl+w h"],
+] as const) {
+	test(`archive search supports the configured ${binding} sequence`, async (t) => {
+		const archived = [row("alpha").file, row("beta").file];
+		const keymap = mergeKeymap(DEFAULT_KEYMAP, { global: { search: binding } }, []);
+		const h = harness(t, { keymap, store: { value: { pinned: [], archived } } });
+		await h.panel.load();
+		await h.press("X");
+		assert.ok(h.footer().includes(`${label} search`));
+		h.panel.handleInput(keys[0]);
+		assert.match(h.footer(), /pending:/);
+		h.panel.handleInput(keys[1]);
+		h.panel.handleInput("bet");
+		assert.match(h.text(), /beta/);
+		assert.doesNotMatch(h.text(), /alpha/);
+		assert.doesNotMatch(h.footer(), /pending:/);
+		assert.deepEqual(h.changes, []);
+		await h.press("\r");
+		assert.deepEqual(h.store.value.archived, archived, "Enter only leaves the search field");
+		await h.press("\r");
+		assert.deepEqual(h.store.value.archived, [row("alpha").file]);
+	});
+}
+
+test("archive search consumes a destructive list-key prefix without deleting", async (t) => {
+	const alpha = row("alpha").file;
+	const keymap = mergeKeymap(DEFAULT_KEYMAP, { global: { search: "d s" } }, []);
+	const h = harness(t, { keymap, store: { value: { pinned: [], archived: [alpha] } } });
+	await h.panel.load();
+	await h.press("X");
+	h.panel.handleInput("d");
+	assert.equal(h.panel.state.mode, "archive", "the search prefix must not open deletion confirmation");
+	assert.match(h.footer(), /pending: d/);
+	h.panel.handleInput("s");
+	h.panel.handleInput("alpha");
+	assert.match(h.text(), /Search: alpha/);
+	assert.deepEqual(h.deletes, []);
+	assert.deepEqual(h.changes, []);
+});
+
+for (const key of ["?", "q"]) {
+	test(`archive search keeps supporting the custom single-key ${key} binding`, async (t) => {
+		const keymap = mergeKeymap(DEFAULT_KEYMAP, { global: { search: key } }, []);
+		const h = harness(t, { keymap, store: { value: { pinned: [], archived: [row("beta").file] } } });
+		await h.panel.load();
+		await h.press("X");
+		h.panel.handleInput(key);
+		h.panel.handleInput("bet");
+		assert.match(h.text(), /Search: bet/);
+		assert.equal(h.panel.state.mode, "archive");
+		assert.deepEqual(h.changes, []);
+	});
+}
+
+test("archive search times out unfinished sequences without triggering list actions", async (t) => {
+	const alpha = row("alpha").file;
+	const keymap = mergeKeymap(DEFAULT_KEYMAP, { global: { search: "zd" } }, []);
+	const h = harness(t, { keymap, store: { value: { pinned: [], archived: [alpha] } } });
+	await h.panel.load();
+	await h.press("X");
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	h.panel.handleInput("z");
+	assert.match(h.footer(), /pending: z/);
+	t.mock.timers.tick(PENDING_TIMEOUT_MS - 1);
+	assert.match(h.footer(), /pending: z/);
+	t.mock.timers.tick(1);
+	assert.doesNotMatch(h.footer(), /pending:/);
+	h.panel.handleInput("z");
+	h.panel.handleInput("D");
+	assert.equal(h.panel.state.mode, "archive", "an invalid continuation must not trigger batch deletion");
+	assert.doesNotMatch(h.footer(), /pending:/);
+	h.panel.handleInput("d");
+	assert.equal(h.panel.state.mode, "confirm", "a fresh key after the dropped sequence works normally");
+	assert.deepEqual(h.deletes, []);
+	h.panel.handleInput("\x1b");
+	h.panel.handleInput("z");
+	assert.match(h.footer(), /pending: z/);
+	h.panel.dispose();
+	t.mock.timers.tick(PENDING_TIMEOUT_MS);
+	assert.doesNotMatch(h.footer(), /pending:/, "disposal clears the buffer and its timer");
+});
+
+for (const closeKey of ["q", "\x1b"]) {
+	test(`closing the archive with ${JSON.stringify(closeKey)} clears a pending search sequence`, async (t) => {
+		const keymap = mergeKeymap(DEFAULT_KEYMAP, { global: { search: "zx" } }, []);
+		const h = harness(t, { keymap });
+		await h.panel.load();
+		await h.press("X");
+		h.panel.handleInput("z");
+		await h.press(closeKey);
+		assert.equal(h.panel.state.mode, "normal");
+		assert.doesNotMatch(h.footer(), /pending:/);
+		await h.press("X");
+		h.panel.handleInput("x");
+		assert.match(h.footer(), /zx search/, "the stale prefix must not focus search after reopening");
+		h.panel.handleInput("z");
+		h.panel.handleInput("x");
+		assert.ok(h.footer().includes(translate("hint.backToList")));
+	});
+}
+
+test("archive search does not let unrelated global sequences capture fixed list controls", async (t) => {
+	const archived = [row("alpha").file, row("beta").file];
+	const keymap = mergeKeymap(DEFAULT_KEYMAP, { global: { search: "zx", "focus-next": "j k" } }, []);
+	const h = harness(t, { keymap, store: { value: { pinned: [], archived } } });
+	await h.panel.load();
+	await h.press("X");
+	await h.press("j");
+	assert.match(h.text(), /2\/2/);
+	assert.doesNotMatch(h.footer(), /pending:/);
+	await h.press("g");
+	assert.match(h.text(), /1\/2/);
+});
+
+test("archive mouse focus changes clear an unfinished search sequence", async (t) => {
+	const archived = [row("alpha").file, row("beta").file];
+	const keymap = mergeKeymap(DEFAULT_KEYMAP, { global: { search: "zx" } }, []);
+	const h = harness(t, { keymap, store: { value: { pinned: [], archived } } });
+	await h.panel.load();
+	await h.press("X");
+	const searchCell = cellOn(h, "Search");
+	h.panel.handleInput("z");
+	h.panel.handleMouse(mouseEvent("click", searchCell.x, searchCell.y));
+	assert.doesNotMatch(h.footer(), /pending:/);
+	await h.press("\r");
+	h.panel.handleInput("x");
+	assert.match(h.footer(), /zx search/, "typing cannot complete the prefix from before the mouse click");
+	h.panel.handleInput("z");
+	const betaCell = cellOn(h, "beta");
+	h.panel.handleMouse(mouseEvent("click", betaCell.x, betaCell.y));
+	h.panel.handleInput("x");
+	assert.match(h.footer(), /zx search/);
+	assert.match(h.text(), /2\/2/);
 });
 
 test("R restores every visible row in one write and leaves the filtered-out rows archived", async (t) => {

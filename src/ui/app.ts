@@ -245,6 +245,8 @@ export class LazyPanel implements Component, Focusable {
 	private entering = false;
 	/** Keys of an unfinished multi-key sequence such as "gg" (panes and tree dialog alike). */
 	private keys: KeySequencer;
+	/** Only global search bindings are active alongside the archive's fixed list keys. */
+	private archiveSearchKeys: KeySequencer;
 	private _focused = false;
 	/** Debounced reload of tree + content after the sessions cursor moved. */
 	private sessionLoadTimer: ReturnType<typeof setTimeout> | undefined;
@@ -267,6 +269,7 @@ export class LazyPanel implements Component, Focusable {
 		this.keymap = o.keymap ?? DEFAULT_KEYMAP;
 		this.bindings = compileKeymap(this.keymap);
 		this.keys = new KeySequencer(this.bindings, () => this.o.requestRender());
+		this.archiveSearchKeys = this.createArchiveSearchKeys();
 		this.treeView = new TreeView(this.state);
 		this.contentViewport = new ContentViewport({ theme: o.theme, state: this.state, onChange: () => this.o.requestRender() });
 		this.ratio = o.leftColumnRatio ?? LEFT_COLUMN_RATIO;
@@ -409,9 +412,12 @@ export class LazyPanel implements Component, Focusable {
 			refreshSettings: () => this.o.requestRender(),
 			refreshConfig: (config) => {
 				// 重建键位让编辑过的快捷键立即生效（未完成的多键序列被丢弃）。
+				this.keys.clear();
+				this.archiveSearchKeys.clear();
 				this.keymap = config.keymap;
 				this.bindings = compileKeymap(this.keymap);
 				this.keys = new KeySequencer(this.bindings, () => this.o.requestRender());
+				this.archiveSearchKeys = this.createArchiveSearchKeys();
 				this.ratio = config.leftColumnRatio;
 				// 正文排版含角色等本地化标题，但 ContentViewport 把当前语言算进了排版缓存的键里：
 				// 换语言下次渲染会自己重排；这里不再无条件清缓存，否则改键位、保存任意一项都会
@@ -1364,6 +1370,7 @@ export class LazyPanel implements Component, Focusable {
 			return;
 		}
 		this.keys.clear();
+		this.archiveSearchKeys.clear();
 		this.state.sessionStateBusy = true;
 		this.setStatus(t("status.loadingSessions"));
 		try {
@@ -1395,23 +1402,38 @@ export class LazyPanel implements Component, Focusable {
 	}
 
 	private closeArchiveDialog(): void {
+		this.archiveSearchKeys.clear();
 		this.archiveDialog.close();
 		this.archiveDialog.focused = false;
 		this.state.mode = this.baseMode();
 		this.o.requestRender();
 	}
 
-	/** Keys while the archive dialog is open: its search row first, then the global search, then the list (Esc / q close it). */
+	private createArchiveSearchKeys(): KeySequencer {
+		return new KeySequencer(
+			this.bindings.filter((binding) => binding.scope === "global" && binding.action === "search"),
+			() => this.o.requestRender(),
+		);
+	}
+
+	/** The search field owns text input; otherwise buffer search sequences before trying fixed list keys. */
 	private handleArchiveInput(data: string): void {
 		if (this.archiveDialog.searchFocused) {
 			this.archiveDialog.handleSearchInput(data);
 			return;
 		}
-		if (this.isAction(data, "global", "search")) {
+		if (matchesKeyId(data, "escape")) {
+			this.archiveDialog.handleInput(data);
+			return;
+		}
+		const pending = this.archiveSearchKeys.hasPending;
+		const result = this.archiveSearchKeys.feed("global", data);
+		if (result.kind === "action") {
 			this.archiveDialog.focusSearch();
 			return;
 		}
-		this.archiveDialog.handleInput(data);
+		// Never replay an invalid sequence's last key as a restore or delete.
+		if (result.kind === "none" && (!pending || matchesKeyId(data, "q"))) this.archiveDialog.handleInput(data);
 	}
 
 	/** Archive dialog mouse: click a search row / list row, double-click restores, wheel moves. */
@@ -1421,11 +1443,12 @@ export class LazyPanel implements Component, Focusable {
 			() => this.archiveDialog.wheel(event.x, event.y, event.wheelDelta ?? 0),
 			(double) => {
 				const hit = this.archiveDialog.indexAt(event.x, event.y);
+				if (hit === undefined) return;
+				this.archiveSearchKeys.clear();
 				if (hit === "search") {
 					this.archiveDialog.focusSearch();
 					return;
 				}
-				if (hit === undefined) return;
 				this.archiveDialog.leaveSearch();
 				this.archiveDialog.moveTo(hit);
 				if (double) {
@@ -2208,6 +2231,7 @@ export class LazyPanel implements Component, Focusable {
 		this.cancelPending();
 		this.settingsDialog.dispose();
 		this.keys.clear();
+		this.archiveSearchKeys.clear();
 		this.clearSessionLoad();
 		this.o.onClose();
 	}
@@ -2218,6 +2242,7 @@ export class LazyPanel implements Component, Focusable {
 		this.settingsDialog.dispose();
 		this.stopChangelogSpinner();
 		this.keys.clear();
+		this.archiveSearchKeys.clear();
 		this.clearSessionLoad();
 	}
 
@@ -2336,7 +2361,8 @@ export class LazyPanel implements Component, Focusable {
 			// 版本号常驻在 footer 最右侧（搜索状态行除外）。
 			...(this.o.version ? { version: this.o.version } : {}),
 		};
-		const pendingHint = this.keys.hasPending ? t("status.pending", { keys: this.keys.pendingKeys }) : undefined;
+		const keys = this.archiveDialog.isOpen ? this.archiveSearchKeys : this.keys;
+		const pendingHint = keys.hasPending ? t("status.pending", { keys: keys.pendingKeys }) : undefined;
 		const status = pendingHint ?? this.status;
 		// 和按键分发使用同一个最上层弹窗；不能退回显示当前不可用的面板按键。
 		const overlay = this.overlays.find((ov) => ov.isOpen());
