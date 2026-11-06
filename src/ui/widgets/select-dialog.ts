@@ -21,7 +21,7 @@
  */
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth } from "@earendil-works/pi-tui";
+import { truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { matchesKeyId } from "../../config/keys.ts";
 import type { KeyHint } from "../../types.ts";
 import { clamp } from "../../utils/indices.ts";
@@ -31,6 +31,8 @@ import { boxCell, boxContains, centeredRect, dialogWidth, fit, frame, metaBudget
 export interface SelectDialogSpec {
 	/** Title on the top border, e.g. "Summarize branch?". */
 	title: string;
+	/** Optional explanatory text above the entries; wraps without becoming selectable. */
+	message?: string;
 	/** Menu entries, top to bottom. */
 	items: string[];
 	/** Cursor position when the menu opens (clamped into `items`). */
@@ -79,6 +81,8 @@ export class SelectDialog {
 	private scroll = 0;
 	/** 上一次绘制时这个菜单在屏幕上的位置（`overlay()` 里记）；鼠标命中只认这一份，没画过就点不到。 */
 	private boxRect: BoxRect | undefined;
+	/** Message rows and their separator are not menu entries. */
+	private itemRowOffset = 0;
 
 	constructor(private readonly o: SelectDialogOptions) {}
 
@@ -103,6 +107,7 @@ export class SelectDialog {
 		this.index = clamp(spec.initialIndex ?? 0, 0, spec.items.length - 1);
 		this.scroll = 0;
 		this.boxRect = undefined;
+		this.itemRowOffset = 0;
 		this.ensureVisible();
 	}
 
@@ -110,6 +115,7 @@ export class SelectDialog {
 	close(): void {
 		this.spec = undefined;
 		this.boxRect = undefined;
+		this.itemRowOffset = 0;
 	}
 
 	handleInput(data: string): void {
@@ -180,7 +186,9 @@ export class SelectDialog {
 	indexAt(x: number, y: number): number | undefined {
 		const cell = this.boxRect ? boxCell(this.boxRect, x, y) : undefined;
 		if (!cell) return undefined;
-		const index = this.scroll + cell.row;
+		const row = cell.row - this.itemRowOffset;
+		if (row < 0) return undefined;
+		const index = this.scroll + row;
 		return index < (this.spec?.items.length ?? 0) ? index : undefined;
 	}
 
@@ -209,7 +217,7 @@ export class SelectDialog {
 		this.scroll = Math.max(0, Math.min(this.scroll, count - rows));
 	}
 
-	/** Render the box itself: one row per visible entry plus the borders, every line exactly `width` columns. */
+	/** Render the explanation, visible entries and borders, every line exactly `width` columns. */
 	render(width: number): string[] {
 		const { theme } = this.o;
 		const title = this.spec?.title ?? "";
@@ -219,6 +227,11 @@ export class SelectDialog {
 		// tone 覆盖强调色（警告框传 "error"：红色的边框 / 标题 / 选中项），默认沿用 accent。
 		const accentColor = this.spec?.tone ?? "accent";
 		const borderColor = this.spec?.tone ?? "borderAccent";
+		const message = this.spec?.message;
+		const messageRows = message
+			? [...wrapTextWithAnsi(message, Math.max(1, inner - 2)).map((line) => theme.fg("text", ` ${line}`)), ""]
+			: [];
+		this.itemRowOffset = messageRows.length;
 		const body = items.slice(this.scroll, this.scroll + rows).map((item, k) => {
 			const i = this.scroll + k;
 			const selected = i === this.index;
@@ -228,9 +241,9 @@ export class SelectDialog {
 			return selected ? theme.bg("selectedBg", fit(line, inner)) : line;
 		});
 		const meta = truncateToWidth(this.spec?.subject ?? "", metaBudget(width, title) - 3, "…", false);
-		return frame(body, {
+		return frame([...messageRows, ...body], {
 			width,
-			height: rows + 2,
+			height: messageRows.length + rows + 2,
 			title,
 			...(meta ? { meta } : {}),
 			border: (s) => theme.fg(borderColor, s),

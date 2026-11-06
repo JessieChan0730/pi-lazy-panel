@@ -366,7 +366,9 @@
     "fork": "Fork session?",
     "import": "Import and switch to it?",
     "overwrite": "Overwrite file?",
-    "radiusSignOut": "Sign out of Radius?"
+    "radiusSignOut": "Sign out of Radius?",
+    "switchRunning": "Switch session?",
+    "switchRunningMessage": "A conversation is currently running. Switching to another session may interrupt it. Continue?"
   },
   "info": {
     "name": "Name",

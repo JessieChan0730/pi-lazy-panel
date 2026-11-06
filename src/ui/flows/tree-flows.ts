@@ -23,6 +23,7 @@ import {
 } from "../widgets/restore-dialog.ts";
 import { treeFilterDialogSpec } from "../widgets/tree-filter-dialog.ts";
 import type { FlowHost } from "./host.ts";
+import { confirmSessionSwitch } from "./session-switch.ts";
 
 /** A tree row plus the session it belongs to: what y / L / Enter act on (the pane's cursor row, or the dialog's). */
 export interface TreeTarget {
@@ -189,9 +190,11 @@ function submitCustomPrompt(host: FlowHost, target: RestoreTarget, value: string
 async function runRestore(host: FlowHost, target: RestoreTarget, options: RestoreOptions): Promise<void> {
 	const actions = host.actions;
 	if (!actions) return;
-	await host.enter(
+	const enter = () => host.enter(
 		"restore",
 		() => actions.restoreNode(target.file, target.entryId, options),
 		options.summarize ? t("status.summarizing") : undefined,
 	);
+	if (confirmSessionSwitch(host, target.file, target.subject, enter)) return;
+	await enter();
 }

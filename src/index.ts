@@ -96,6 +96,7 @@ async function openPanel(pi: ExtensionAPI, ctx: ExtensionCommandContext, args: s
 	// treeFilterMode 是内置 /tree 的默认过滤，面板的 TREE 也从它开始。
 	const piSettings = loadPiSettings(ctx.cwd, getAgentDir(), ctx.isProjectTrusted());
 	const data: DataSource = {
+		isAgentIdle: () => ctx.isIdle(),
 		loadSessionState: async () => loadSessionFileState(getAgentDir()),
 		listSessions: async (scope, sort, pinned, filter) => sortSessions(filterSessions(await listSessions({ cwd: ctx.cwd, scope }), filter), sort, pinned),
 		// 归档框读取所有目录的归档行（不受 C/A 范围限制），打开时默认只看当前项目，`p` 可切到所有项目。

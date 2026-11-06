@@ -2196,6 +2196,31 @@ test("SelectDialog scrolls a long list within maxRows, keeping the cursor visibl
 	assert.ok(!lines.some((l) => l.includes("item4")), "earlier items scrolled off");
 });
 
+test("SelectDialog wraps explanations without treating them as mouse-selectable entries", () => {
+	const dlg = new SelectDialog({ theme: fakeTheme, onChange: () => {} });
+	const message = t("confirm.switchRunningMessage");
+	dlg.open({ title: "Switch?", message, items: ["Yes", "No"], initialIndex: 1, hints: [], onSelect: () => {}, onCancel: () => {} });
+	for (const width of [32, 60, 100]) {
+		const out = dlg.overlay(Array.from({ length: 24 }, () => " ".repeat(width)), width);
+		assert.ok(out.every((line) => visibleWidth(line) === width));
+		const plain = out.map(stripTerminalSequences);
+		const yes = plain.findIndex((line) => line.includes("  Yes"));
+		const no = plain.findIndex((line) => line.includes("› No"));
+		const top = plain.findIndex((line) => line.includes("┌─ Switch?"));
+		const x = plain[yes]!.indexOf("Yes");
+		const explanation = plain.slice(top + 1, yes - 1).map((line) => line.slice(line.indexOf("│") + 1, line.lastIndexOf("│")).trim()).join(" ");
+		assert.equal(explanation, message, `the full warning is visible at width ${width}`);
+		for (let y = top; y < yes; y++) assert.equal(dlg.indexAt(x, y), undefined, "warning and separator are not choices");
+		assert.equal(dlg.indexAt(x, yes), 0);
+		assert.equal(dlg.indexAt(x, no), 1);
+	}
+	dlg.close();
+	dlg.open({ title: "Plain", items: ["Yes", "No"], hints: [], onSelect: () => {}, onCancel: () => {} });
+	const plain = dlg.overlay(Array.from({ length: 24 }, () => " ".repeat(60)), 60).map(stripTerminalSequences);
+	const yes = plain.findIndex((line) => line.includes("Yes"));
+	assert.equal(dlg.indexAt(plain[yes]!.indexOf("Yes"), yes), 0, "opening a normal menu clears the message offset");
+});
+
 test("the sessions cursor starts on pi's current session and stays put when it is not listed", async () => {
 	const make = (currentSessionFile?: string) => {
 		const data: DataSource = {
@@ -2746,6 +2771,85 @@ function dialogAt(lines: string[], title: string): { top: number; title: string;
 	for (let i = top + 1; i < lines.length && lines[i]!.charAt(col) !== "└"; i++) body.push(lines[i]!);
 	return { top, title: lines[top]!, body };
 }
+
+test("Enter into another running session shows a confirmation; cancelling keeps the panel and response intact", async () => {
+	const resumed: string[] = [];
+	const h = makeSessionActionPanel({
+		currentSessionFile: "/tmp/s1.jsonl",
+		data: { isAgentIdle: () => false },
+		actions: {
+			resumeSession: async (file) => {
+				resumed.push(file);
+				return "switched";
+			},
+		},
+	});
+	try {
+		await h.panel.load();
+		h.panel.handleInput("j");
+		await settle();
+		assert.equal(h.panel.state.cursor.sessions, 1);
+		for (const cancel of ["n", "\x1b", "\r"]) {
+			h.panel.handleInput("\r");
+			assert.equal(h.panel.state.mode, "confirm");
+			const dlg = dialogAt(h.text(), t("confirm.switchRunning"));
+			assert.ok(dlg);
+			assert.ok(dlg.title.includes("beta"));
+			assert.ok(dlg.body.some((line) => line.includes("may interrupt it")));
+			assert.ok(dlg.body.at(-1)!.includes("› No"));
+			assert.deepEqual(h.hidden, [], "pi retains control of the running response until consent");
+			assert.deepEqual(resumed, []);
+			h.panel.handleInput(cancel);
+			await flush();
+			assert.equal(h.panel.state.mode, "normal");
+			assert.equal(h.panel.state.cursor.sessions, 1);
+			assert.equal(h.closed(), false);
+		}
+		h.panel.handleInput("\r");
+		h.panel.handleInput("k");
+		h.panel.handleInput("\r");
+		await flush();
+		assert.deepEqual(resumed, ["/tmp/s2.jsonl"]);
+		assert.deepEqual(h.hidden, [true]);
+		assert.equal(h.closed(), true);
+	} finally {
+		h.panel.dispose();
+	}
+});
+
+test("double-clicking another session uses the same confirmation and warning text cannot confirm it", async () => {
+	const resumed: string[] = [];
+	const h = makeSessionActionPanel({
+		currentSessionFile: "/tmp/s1.jsonl",
+		data: { isAgentIdle: () => false },
+		actions: {
+			resumeSession: async (file) => {
+				resumed.push(file);
+				return "switched";
+			},
+		},
+	});
+	try {
+		await h.panel.load();
+		h.text(120);
+		h.panel.handleMouse(mouseEvent("click", 2, 3, { clickCount: 2, height: 24, width: 120 }));
+		assert.equal(h.panel.state.mode, "confirm");
+		const lines = h.text(120);
+		const dlg = dialogAt(lines, t("confirm.switchRunning"));
+		assert.ok(dlg);
+		const x = lines[dlg.top]!.indexOf("┌─") + 4;
+		h.panel.handleMouse(mouseEvent("click", x, dlg.top + 1, { clickCount: 2, height: 24, width: 120 }));
+		assert.equal(h.panel.state.mode, "confirm");
+		assert.deepEqual(resumed, []);
+		const yes = lines.findIndex((line) => line.includes("  Yes"));
+		h.panel.handleMouse(mouseEvent("click", x, yes, { clickCount: 2, height: 24, width: 120 }));
+		await flush();
+		assert.deepEqual(resumed, ["/tmp/s2.jsonl"]);
+		assert.equal(h.closed(), true);
+	} finally {
+		h.panel.dispose();
+	}
+});
 
 test("d asks Delete session? in a centered Yes / No box starting on No; n / Esc / Enter-on-No cancel without deleting", async () => {
 	const h = makeSessionActionPanel();
