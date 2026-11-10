@@ -91,6 +91,7 @@ import { applySessionFileState, createInitialState, type PanelState } from "./st
 import { TreeView } from "./tree-view.ts";
 import { ArchiveDialog } from "./widgets/archive-dialog.ts";
 import { ChangelogDialog } from "./widgets/changelog-dialog.ts";
+import { ConfirmDialog, type ConfirmDialogSpec } from "./widgets/confirm-dialog.ts";
 import { ContextUsageDialog } from "./widgets/context-usage-dialog.ts";
 
 import { renderFooter } from "./widgets/footer.ts";
@@ -208,8 +209,10 @@ export class LazyPanel implements Component, Focusable {
 	private readonly searchBar: SearchBar;
 	/** Shared centered text prompt: labelling a node, the custom summary instructions, renaming a session. */
 	private readonly inputDialog: InputDialog;
-	/** Shared centered menu: the "Summarize branch?" choice and the delete confirmation. */
+	/** Shared centered list menu: summary choices, sort pickers and alerts. */
 	private readonly selectDialog: SelectDialog;
+	/** Reusable confirmation with Yes and No fixed on the same row. */
+	private readonly confirmDialog: ConfirmDialog;
 	/** Centered read-only notice: Radius sign-in URL / device code. */
 	private readonly noticeDialog: NoticeDialog;
 	/** Full tree in a big box (`a` in the tree pane) with its own cursor, live search and the filter keys. */
@@ -291,6 +294,10 @@ export class LazyPanel implements Component, Focusable {
 			theme: o.theme,
 			onChange: () => this.o.requestRender(),
 		});
+		this.confirmDialog = new ConfirmDialog({
+			theme: o.theme,
+			onChange: () => this.o.requestRender(),
+		});
 		this.noticeDialog = new NoticeDialog({ theme: o.theme });
 		this.treeDialog = new TreeDialog({
 			theme: o.theme,
@@ -326,7 +333,8 @@ export class LazyPanel implements Component, Focusable {
 		});
 		this.overlays = [
 			widgetOverlay(this.inputDialog),
-			{ ...widgetOverlay(this.selectDialog), handleMouse: (event) => this.selectDialogMouse(event) },
+			{ ...widgetOverlay(this.confirmDialog), handleMouse: (event) => this.choiceDialogMouse(event, this.confirmDialog) },
+			{ ...widgetOverlay(this.selectDialog), handleMouse: (event) => this.choiceDialogMouse(event, this.selectDialog) },
 			widgetOverlay(this.noticeDialog),
 			widgetOverlay(this.infoDialog),
 			{ ...widgetOverlay(this.usageDialog), handleMouse: (event) => this.usageMouse(event) },
@@ -390,6 +398,7 @@ export class LazyPanel implements Component, Focusable {
 			currentSessionRow: () => this.currentSessionRow(),
 			openPrompt: (mode, spec) => this.openPrompt(mode, spec),
 			openMenu: (mode, spec) => this.openMenu(mode, spec),
+			openConfirm: (mode, spec) => this.openConfirm(mode, spec),
 			openNotice: (mode, spec) => this.openNotice(mode, spec),
 			setPendingCancel: (cancel) => {
 				this.pendingCancel = cancel;
@@ -797,6 +806,7 @@ export class LazyPanel implements Component, Focusable {
 	 */
 	private openPrompt(mode: PanelMode, spec: InputDialogSpec): void {
 		this.selectDialog.close();
+		this.confirmDialog.close();
 		this.noticeDialog.close();
 		this.clearStatus();
 		this.state.mode = mode;
@@ -805,8 +815,9 @@ export class LazyPanel implements Component, Focusable {
 		this.o.requestRender();
 	}
 
-	/** Show the menu of a flow (a picker, a confirmation, an alert) in `mode`; the text prompt (if any) closes first. */
+	/** Show a list menu or alert; other child dialogs close first. */
 	private openMenu(mode: PanelMode, spec: SelectDialogSpec): void {
+		this.confirmDialog.close();
 		this.inputDialog.close();
 		this.inputDialog.focused = false;
 		this.noticeDialog.close();
@@ -816,9 +827,22 @@ export class LazyPanel implements Component, Focusable {
 		this.o.requestRender();
 	}
 
+	/** Confirmation has its own component and spec; it never falls back to a list menu. */
+	private openConfirm(mode: PanelMode, spec: ConfirmDialogSpec): void {
+		this.selectDialog.close();
+		this.inputDialog.close();
+		this.inputDialog.focused = false;
+		this.noticeDialog.close();
+		this.clearStatus();
+		this.state.mode = mode;
+		this.confirmDialog.open(spec);
+		this.o.requestRender();
+	}
+
 	/** Show a read-only notice (Radius sign-in URL / device code); the prompt and menu (if any) close first. */
 	private openNotice(mode: PanelMode, spec: NoticeDialogSpec): void {
 		this.selectDialog.close();
+		this.confirmDialog.close();
 		this.inputDialog.close();
 		this.inputDialog.focused = false;
 		this.clearStatus();
@@ -836,6 +860,7 @@ export class LazyPanel implements Component, Focusable {
 	private closeDialogs(): void {
 		this.state.mode = this.baseMode();
 		this.selectDialog.close();
+		this.confirmDialog.close();
 		this.inputDialog.close();
 		this.inputDialog.focused = false;
 		this.noticeDialog.close();
@@ -996,15 +1021,15 @@ export class LazyPanel implements Component, Focusable {
 	}
 
 	/** 确认框 / 警告框 / 恢复菜单 / fork 选择器 / TREE 过滤：单击选中，双击 = Enter，滚轮移动光标。 */
-	private selectDialogMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+	private choiceDialogMouse(event: TuiMouseEvent, dialog: SelectDialog | ConfirmDialog): TuiMouseEventResult | undefined {
 		return this.overlayMouse(
 			event,
-			() => this.selectDialog.wheel(event.x, event.y, event.wheelDelta ?? 0),
+			() => dialog.wheel(event.x, event.y, event.wheelDelta ?? 0),
 			(double) => {
-				const index = this.selectDialog.indexAt(event.x, event.y);
+				const index = dialog.indexAt(event.x, event.y);
 				if (index === undefined) return;
-				this.selectDialog.moveTo(index);
-				if (double) this.selectDialog.activate();
+				dialog.moveTo(index);
+				if (double) dialog.activate();
 			},
 		);
 	}

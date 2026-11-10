@@ -11,7 +11,7 @@
  *
  * Generic like ./input-dialog.ts: title, items, initial cursor, subject and
  * the callbacks arrive with `open(spec)`, so the same widget serves the
- * summary menu now and delete confirmations, sort pickers and so on later.
+ * summary menu, sort pickers and filter menus.
  * Keys: j / k / ↑ / ↓ move, Enter confirms, Esc cancels (plus q when the spec
  * asks for it); everything else is swallowed. Key hints go to the footer (see
  * `hints`).

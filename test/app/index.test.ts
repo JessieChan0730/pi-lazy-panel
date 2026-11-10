@@ -230,7 +230,7 @@ test("the entry point checks live pi activity before switching and cancellation 
 					assert.equal(idleQueries, 0, "activity is not cached when the panel opens");
 					panel.handleInput("\r");
 					assert.equal(panel.state.mode, "confirm");
-					assert.match(panel.render(120).join("\n"), /A conversation is currently running/);
+					assert.match(panel.render(120).join("\n"), /The current conversation is running/);
 					assert.deepEqual(switched, []);
 					panel.handleInput("n");
 					assert.equal(panel.state.mode, "normal");

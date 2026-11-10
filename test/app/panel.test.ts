@@ -2794,9 +2794,11 @@ test("Enter into another running session shows a confirmation; cancelling keeps 
 			assert.equal(h.panel.state.mode, "confirm");
 			const dlg = dialogAt(h.text(), t("confirm.switchRunning"));
 			assert.ok(dlg);
-			assert.ok(dlg.title.includes("beta"));
-			assert.ok(dlg.body.some((line) => line.includes("may interrupt it")));
-			assert.ok(dlg.body.at(-1)!.includes("› No"));
+			assert.ok(dlg.body.some((line) => line.includes(t("confirm.switchRunningTarget")) && line.includes("beta")));
+			assert.ok(dlg.body.some((line) => line.includes(t("confirm.switchRunningWarning"))));
+			assert.ok(dlg.body.some((line) => line.includes(t("confirm.switchRunningMessage"))));
+			assert.ok(dlg.body.at(-1)!.includes(`› [ ${t("confirm.no")} ]`));
+			assert.ok(dlg.body.at(-1)!.includes(`[ ${t("confirm.yes")} ]`));
 			assert.deepEqual(h.hidden, [], "pi retains control of the running response until consent");
 			assert.deepEqual(resumed, []);
 			h.panel.handleInput(cancel);
@@ -2806,7 +2808,7 @@ test("Enter into another running session shows a confirmation; cancelling keeps 
 			assert.equal(h.closed(), false);
 		}
 		h.panel.handleInput("\r");
-		h.panel.handleInput("k");
+		h.panel.handleInput("\x1b[D");
 		h.panel.handleInput("\r");
 		await flush();
 		assert.deepEqual(resumed, ["/tmp/s2.jsonl"]);
@@ -2841,8 +2843,10 @@ test("double-clicking another session uses the same confirmation and warning tex
 		h.panel.handleMouse(mouseEvent("click", x, dlg.top + 1, { clickCount: 2, height: 24, width: 120 }));
 		assert.equal(h.panel.state.mode, "confirm");
 		assert.deepEqual(resumed, []);
-		const yes = lines.findIndex((line) => line.includes("  Yes"));
-		h.panel.handleMouse(mouseEvent("click", x, yes, { clickCount: 2, height: 24, width: 120 }));
+		const yes = `[ ${t("confirm.yes")} ]`;
+		const switchRow = lines.findIndex((line) => line.includes(yes));
+		const switchX = visibleWidth(lines[switchRow]!.slice(0, lines[switchRow]!.indexOf(yes)));
+		h.panel.handleMouse(mouseEvent("click", switchX, switchRow, { clickCount: 2, height: 24, width: 120 }));
 		await flush();
 		assert.deepEqual(resumed, ["/tmp/s2.jsonl"]);
 		assert.equal(h.closed(), true);
@@ -2851,7 +2855,7 @@ test("double-clicking another session uses the same confirmation and warning tex
 	}
 });
 
-test("d asks Delete session? in a centered Yes / No box starting on No; n / Esc / Enter-on-No cancel without deleting", async () => {
+test("d asks Delete session? with horizontal Yes / No buttons; n / Esc / Enter-on-No cancel without deleting", async () => {
 	const h = makeSessionActionPanel();
 	await h.panel.load();
 	h.panel.handleInput("j");
@@ -2865,9 +2869,9 @@ test("d asks Delete session? in a centered Yes / No box starting on No; n / Esc 
 	assert.ok(dlg, "the confirmation should be drawn");
 	assert.ok(dlg.top > 2 && dlg.top < lines.length - 6, `dialog row ${dlg.top} of ${lines.length}`);
 	assert.ok(dlg.title.includes("beta") && !dlg.title.includes("second words"), `subject = name · date, not the preview: ${dlg.title}`);
-	assert.equal(dlg.body.length, 2);
-	assert.ok(dlg.body[0]!.includes("  Yes") && !dlg.body[0]!.includes("›"), dlg.body[0]);
-	assert.ok(dlg.body[1]!.includes("› No"), dlg.body[1]);
+	assert.equal(dlg.body.length, 1);
+	assert.ok(dlg.body[0]!.includes("[ Yes ]") && dlg.body[0]!.includes("› [ No ]"), dlg.body[0]);
+	assert.ok(dlg.body[0]!.indexOf("[ Yes ]") < dlg.body[0]!.indexOf("[ No ]"));
 	assert.ok(h.footer().includes("CONFIRM") && h.footer().includes("y/n choose") && h.footer().includes("Esc cancel"), h.footer());
 	for (const l of h.panel.render(120)) assert.equal(visibleWidth(l), 120);
 
@@ -3486,7 +3490,7 @@ test("o lists the user messages to fork before (last selected), confirms, then f
 	const confirm = dialogAt(h.text(), FORK_SESSION_TITLE);
 	assert.ok(confirm, "the confirmation is drawn");
 	assert.ok(confirm.title.includes("#2/2") && !confirm.title.includes("second question"), `the subject is the picked position, not the text: ${confirm.title}`);
-	assert.ok(confirm.body[1]!.includes("› No"), "the cursor starts on No");
+	assert.ok(confirm.body[0]!.includes("› [ No ]"), "the cursor starts on No");
 	assert.deepEqual(h.forks, [], "nothing is forked until confirmed");
 
 	// y confirms → fork before that entry (pi fills the fork's editor with it), panel closes
@@ -3541,7 +3545,7 @@ test("y asks Clone session? and only clones once confirmed; n / Esc cancel", asy
 	assert.equal(h.panel.state.mode, "clone");
 	const dlg = dialogAt(h.text(), CLONE_SESSION_TITLE);
 	assert.ok(dlg && dlg.title.includes("alpha") && !dlg.title.includes("first words"), `subject = name · date: ${dlg?.title}`);
-	assert.ok(dlg!.body[1]!.includes("› No"), "cursor starts on No");
+	assert.ok(dlg!.body[0]!.includes("› [ No ]"), "cursor starts on No");
 	assert.ok(h.footer().includes("CLONE"), h.footer());
 	h.panel.handleInput("n");
 	assert.equal(h.panel.state.mode, "normal");
@@ -3670,7 +3674,7 @@ test("e: an existing file asks Overwrite file? first; No returns to the prompt w
 	h.panel.handleInput("\r");
 	const confirm = dialogAt(h.text(), OVERWRITE_FILE_TITLE);
 	assert.ok(confirm && confirm.title.includes("/work/taken.html"), confirm?.title);
-	assert.ok(confirm.body[1]!.includes("› No"), "cursor starts on No");
+	assert.ok(confirm.body[0]!.includes("› [ No ]"), "cursor starts on No");
 	assert.deepEqual(h.exports, []);
 
 	// n → back on the prompt, the typed path kept
@@ -3718,7 +3722,7 @@ test("I: type a path, confirm, then import and close; Esc on the confirmation ke
 	h.panel.handleInput("\r");
 	const confirm = dialogAt(h.text(), IMPORT_SESSION_TITLE);
 	assert.ok(confirm && confirm.title.includes("~/backup.jsonl"), confirm?.title);
-	assert.ok(confirm.body[1]!.includes("› No"), "cursor starts on No");
+	assert.ok(confirm.body[0]!.includes("› [ No ]"), "cursor starts on No");
 
 	// Esc → back on the prompt with the path kept
 	h.panel.handleInput("\x1b");
@@ -4543,7 +4547,7 @@ test("dialogs with no list keep swallowing the mouse; no dialog leaks a click to
 	h.panel.dispose();
 });
 
-test("a confirmation menu: a single click selects the entry, a double-click is Enter", async () => {
+test("a confirmation dialog: a single click selects the button, a double-click is Enter", async () => {
 	const h = makeSessionActionPanel();
 	await h.panel.load();
 	await settle();
@@ -4553,7 +4557,7 @@ test("a confirmation menu: a single click selects the entry, a double-click is E
 	const yes = dialogCell(h, t("confirm.yes"));
 	h.panel.handleMouse(mouseEvent("click", yes.x, yes.y, { height: 24, clickCount: 1 }));
 	assert.equal(h.panel.state.mode, "confirm", "single click only selects");
-	assert.match(h.text(100)[yes.y]!, /› Yes/, "the cursor moved onto Yes");
+	assert.match(h.text(100)[yes.y]!, /› \[ Yes \]/, "the cursor moved onto Yes");
 	assert.deepEqual(h.deletes, [], "nothing was deleted");
 
 	h.panel.handleMouse(mouseEvent("click", yes.x, yes.y, { height: 24, clickCount: 2 }));

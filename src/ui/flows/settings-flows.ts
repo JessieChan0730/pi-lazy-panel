@@ -88,7 +88,7 @@ export function reloadSettings(h: SettingsFlowHost): void {
 		void readSettings(h);
 		return;
 	}
-	h.openMenu("settings", confirmDialogSpec({
+	h.openConfirm("settings", confirmDialogSpec({
 		title: t("settings.reloadConfirm"),
 		onConfirm: () => {
 			h.closeDialogs();
@@ -492,7 +492,7 @@ export function restoreSettingsDefaults(h: SettingsFlowHost): void {
 	if (s.category === "theme") {
 		if (s.themeDraft === undefined) return;
 		const generation = s.generation;
-		h.openMenu("settings", confirmDialogSpec({
+		h.openConfirm("settings", confirmDialogSpec({
 			title: t("settings.restoreThemeConfirm"),
 			onConfirm: () => {
 				h.closeDialogs();
@@ -514,7 +514,7 @@ export function restoreSettingsDefaults(h: SettingsFlowHost): void {
 	if (!fields || !s.baseline || s.loading || s.saving)
 		return;
 	const generation = s.generation;
-	h.openMenu("settings", confirmDialogSpec({
+	h.openConfirm("settings", confirmDialogSpec({
 		title: t(s.category === "layout" ? "settings.restoreLayoutConfirm" : "settings.restoreConfirm"),
 		onConfirm: () => {
 			h.closeDialogs();
@@ -537,7 +537,7 @@ function restoreScopeBindings(h: SettingsFlowHost): void {
 	const generation = s.generation;
 	const userScope = (s.baseline.raw.keymap as Record<string, Record<string, unknown>> | undefined)?.[scope];
 	const actions = new Set([...Object.keys(userScope ?? {}), ...Object.keys(s.patch.keymap?.[scope] ?? {}), ...Object.keys(DEFAULT_KEYMAP[scope])]);
-	h.openMenu("settings", confirmDialogSpec({
+	h.openConfirm("settings", confirmDialogSpec({
 		title: t("settings.restoreScopeConfirm", { scope: scopeTitle(scope) }),
 		onConfirm: () => {
 			h.closeDialogs();
@@ -569,7 +569,7 @@ export function exitSettings(h: SettingsFlowHost): void {
 			if (index === 1)
 				void saveSettings(h, true);
 			if (index === 2)
-				h.openMenu("settings", confirmDialogSpec({
+				h.openConfirm("settings", confirmDialogSpec({
 					title: t("settings.discardConfirm"),
 					onConfirm: () => {
 						h.closeDialogs();

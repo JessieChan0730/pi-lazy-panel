@@ -195,6 +195,6 @@ async function runRestore(host: FlowHost, target: RestoreTarget, options: Restor
 		() => actions.restoreNode(target.file, target.entryId, options),
 		options.summarize ? t("status.summarizing") : undefined,
 	);
-	if (confirmSessionSwitch(host, target.file, target.subject, enter)) return;
+	if (confirmSessionSwitch(host, target.file, enter)) return;
 	await enter();
 }
