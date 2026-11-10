@@ -10,7 +10,6 @@ import type { SettingsSource } from "../../../src/ui/ports.ts";
 import { keymapActionDirty, keymapDraftChords, setKeymapDraft, setSettingsDraft, settingsDirtyCount, settingsDraft, settingsRetryKind } from "../../../src/ui/settings-state.ts";
 import { createInitialState } from "../../../src/ui/state.ts";
 import type { InputDialogSpec } from "../../../src/ui/widgets/input-dialog.ts";
-import type { ConfirmDialogSpec } from "../../../src/ui/widgets/confirm-dialog.ts";
 import type { SelectDialogSpec } from "../../../src/ui/widgets/select-dialog.ts";
 initI18n("en");
 /**
@@ -56,7 +55,6 @@ function fixture(raw: Record<string, unknown> = {}, overrides: Partial<SettingsS
 	state.settings.phase = "open";
 	let snapshot: ConfigSnapshot = { raw, fingerprint: "baseline" };
 	let menu: SelectDialogSpec | undefined;
-	let confirmation: ConfirmDialogSpec | undefined;
 	let prompt: InputDialogSpec | undefined;
 	let disposed = false;
 	let writes = 0;
@@ -97,22 +95,14 @@ function fixture(raw: Record<string, unknown> = {}, overrides: Partial<SettingsS
 		isDisposed: () => disposed,
 		openMenu: (_mode: string, spec: SelectDialogSpec) => {
 			menu = spec;
-			confirmation = undefined;
-			prompt = undefined;
-		},
-		openConfirm: (_mode: string, spec: ConfirmDialogSpec) => {
-			confirmation = spec;
-			menu = undefined;
 			prompt = undefined;
 		},
 		openPrompt: (_mode: string, spec: InputDialogSpec) => {
 			prompt = spec;
 			menu = undefined;
-			confirmation = undefined;
 		},
 		closeDialogs: () => {
 			menu = undefined;
-			confirmation = undefined;
 			prompt = undefined;
 		},
 		closeSettings: () => {
@@ -122,7 +112,7 @@ function fixture(raw: Record<string, unknown> = {}, overrides: Partial<SettingsS
 		refreshSettings: () => { refreshes++; },
 		refreshConfig: () => { localeRefreshes++; },
 	} as unknown as SettingsFlowHost;
-	return { host, state: state.settings, source, themes, menu: () => menu, confirm: () => confirmation, prompt: () => prompt, dispose: () => {
+	return { host, state: state.settings, source, themes, menu: () => menu, prompt: () => prompt, dispose: () => {
 		disposed = true;
 	}, writes: () => writes, applies: () => applies, refreshes: () => refreshes, localeRefreshes: () => localeRefreshes };
 }
@@ -224,12 +214,12 @@ test("restore defaults confirms, marks only existing overrides for deletion, pre
 	const h = fixture({ locale: "zh", defaultScope: "all", unknown: { future: true } });
 	await readSettings(h.host);
 	restoreSettingsDefaults(h.host);
-	assert.ok(h.confirm());
-	h.confirm()!.onCancel();
+	assert.equal(h.menu()?.initialIndex, 1);
+	h.menu()!.onSelect(1);
 	assert.equal(settingsDirtyCount(h.state), 0);
 	assert.equal(h.writes(), 0);
 	restoreSettingsDefaults(h.host);
-	h.confirm()!.onConfirm();
+	h.menu()!.onSelect(0);
 	// 确认即落盘：两个覆盖都被删掉，没写过的未知字段原样保留。
 	await settle();
 	assert.equal(h.writes(), 1);
@@ -253,12 +243,12 @@ test("dirty exit defaults continue, discard requires second confirmation, clean 
 	assert.equal(h.state.phase, "open");
 	exitSettings(h.host);
 	h.menu()!.onSelect(2);
-	assert.ok(h.confirm());
-	h.confirm()!.onCancel();
+	assert.equal(h.menu()?.initialIndex, 1);
+	h.menu()!.onSelect(1);
 	assert.equal(h.state.phase, "open");
 	exitSettings(h.host);
 	h.menu()!.onSelect(2);
-	h.confirm()!.onConfirm();
+	h.menu()!.onSelect(0);
 	assert.equal(h.state.phase, "closed");
 	assert.equal(h.writes(), 0);
 	const clean = fixture();
@@ -380,10 +370,10 @@ test("bad read is readonly with error, reload recovers, dirty reload requires co
 	await readSettings(h.host);
 	setSettingsDraft(h.state, "locale", "zh");
 	reloadSettings(h.host);
-	h.confirm()!.onCancel();
+	h.menu()!.onCancel();
 	assert.deepEqual(h.state.patch, { locale: "zh" });
 	reloadSettings(h.host);
-	h.confirm()!.onConfirm();
+	h.menu()!.onSelect(0);
 	await Promise.resolve();
 	assert.deepEqual(h.state.patch, {});
 	assert.equal((h.state.baseline as ConfigSnapshot | undefined)?.fingerprint, "fixed");
@@ -541,7 +531,7 @@ test("restore defaults in a keybinding scope resets every overridden action", as
 	h.state.category = "keybindings";
 	h.state.keyScope = "tree";
 	restoreSettingsDefaults(h.host);
-	h.confirm()!.onConfirm();
+	h.menu()!.onSelect(0); // confirm
 	await settle();
 	assert.deepEqual(keymapDraftChords(h.state, "tree", "tree-copy"), ["y"]);
 	assert.deepEqual(keymapDraftChords(h.state, "tree", "tree-fold"), ["z"]);
@@ -713,10 +703,10 @@ test("d on the theme page gives up on a failed switch, and does nothing without 
 	assert.equal(h.state.themeDraft, "nord");
 	assert.match(h.state.error ?? "", /invalid theme/);
 	restoreSettingsDefaults(h.host);
-	h.confirm()!.onCancel();
+	h.menu()!.onCancel();
 	assert.equal(h.state.themeDraft, "nord");
 	restoreSettingsDefaults(h.host);
-	h.confirm()!.onConfirm();
+	h.menu()!.onSelect(0);
 	assert.equal(h.state.themeDraft, undefined);
 	assert.equal(h.state.error, undefined);
 	assert.equal(h.state.activeTheme, "dark");
@@ -782,7 +772,7 @@ test("reloading settings drops a pending failed theme switch", async () => {
 	h.menu()!.onSelect(1);
 	assert.equal(h.state.themeDraft, "nord");
 	reloadSettings(h.host);
-	h.confirm()!.onConfirm();
+	h.menu()!.onSelect(0);
 	await settle();
 	assert.equal(h.state.themeDraft, undefined);
 	assert.equal(h.state.error, undefined);

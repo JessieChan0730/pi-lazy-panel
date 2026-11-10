@@ -91,7 +91,6 @@ import { applySessionFileState, createInitialState, type PanelState } from "./st
 import { TreeView } from "./tree-view.ts";
 import { ArchiveDialog } from "./widgets/archive-dialog.ts";
 import { ChangelogDialog } from "./widgets/changelog-dialog.ts";
-import { ConfirmDialog, type ConfirmDialogSpec } from "./widgets/confirm-dialog.ts";
 import { ContextUsageDialog } from "./widgets/context-usage-dialog.ts";
 
 import { renderFooter } from "./widgets/footer.ts";
@@ -103,6 +102,7 @@ import { renderSearchStatus, SearchBar } from "./widgets/search-bar.ts";
 import { SelectDialog, type SelectDialogSpec } from "./widgets/select-dialog.ts";
 import { SessionInfoDialog } from "./widgets/session-info-dialog.ts";
 import { SettingsDialog } from "./widgets/settings-dialog.ts";
+import { SwitchSessionDialog, type SwitchSessionDialogSpec } from "./widgets/switch-session-dialog.ts";
 import { TreeDialog } from "./widgets/tree-dialog.ts";
 
 export interface LazyPanelOptions {
@@ -215,10 +215,10 @@ export class LazyPanel implements Component, Focusable {
 	private readonly searchBar: SearchBar;
 	/** Shared centered text prompt: labelling a node, the custom summary instructions, renaming a session. */
 	private readonly inputDialog: InputDialog;
-	/** Shared centered list menu: summary choices, sort pickers and alerts. */
+	/** Shared centered menu: the "Summarize branch?" choice and the delete confirmation. */
 	private readonly selectDialog: SelectDialog;
-	/** Reusable confirmation with Yes and No fixed on the same row. */
-	private readonly confirmDialog: ConfirmDialog;
+	/** Warning before leaving a running conversation: Yes and No side by side. */
+	private readonly switchDialog: SwitchSessionDialog;
 	/** Centered read-only notice: Radius sign-in URL / device code. */
 	private readonly noticeDialog: NoticeDialog;
 	/** Full tree in a big box (`a` in the tree pane) with its own cursor, live search and the filter keys. */
@@ -300,7 +300,7 @@ export class LazyPanel implements Component, Focusable {
 			theme: o.theme,
 			onChange: () => this.o.requestRender(),
 		});
-		this.confirmDialog = new ConfirmDialog({
+		this.switchDialog = new SwitchSessionDialog({
 			theme: o.theme,
 			onChange: () => this.o.requestRender(),
 		});
@@ -339,7 +339,7 @@ export class LazyPanel implements Component, Focusable {
 		});
 		this.overlays = [
 			widgetOverlay(this.inputDialog),
-			{ ...widgetOverlay(this.confirmDialog), handleMouse: (event) => this.choiceDialogMouse(event, this.confirmDialog) },
+			{ ...widgetOverlay(this.switchDialog), handleMouse: (event) => this.choiceDialogMouse(event, this.switchDialog) },
 			{ ...widgetOverlay(this.selectDialog), handleMouse: (event) => this.choiceDialogMouse(event, this.selectDialog) },
 			widgetOverlay(this.noticeDialog),
 			widgetOverlay(this.infoDialog),
@@ -404,7 +404,7 @@ export class LazyPanel implements Component, Focusable {
 			currentSessionRow: () => this.currentSessionRow(),
 			openPrompt: (mode, spec) => this.openPrompt(mode, spec),
 			openMenu: (mode, spec) => this.openMenu(mode, spec),
-			openConfirm: (mode, spec) => this.openConfirm(mode, spec),
+			openSwitchSession: (spec) => this.openSwitchSession(spec),
 			openNotice: (mode, spec) => this.openNotice(mode, spec),
 			setPendingCancel: (cancel) => {
 				this.pendingCancel = cancel;
@@ -812,7 +812,7 @@ export class LazyPanel implements Component, Focusable {
 	 */
 	private openPrompt(mode: PanelMode, spec: InputDialogSpec): void {
 		this.selectDialog.close();
-		this.confirmDialog.close();
+		this.switchDialog.close();
 		this.noticeDialog.close();
 		this.clearStatus();
 		this.state.mode = mode;
@@ -821,9 +821,9 @@ export class LazyPanel implements Component, Focusable {
 		this.o.requestRender();
 	}
 
-	/** Show a list menu or alert; other child dialogs close first. */
+	/** Show the menu of a flow (a picker, a confirmation, an alert) in `mode`; the text prompt (if any) closes first. */
 	private openMenu(mode: PanelMode, spec: SelectDialogSpec): void {
-		this.confirmDialog.close();
+		this.switchDialog.close();
 		this.inputDialog.close();
 		this.inputDialog.focused = false;
 		this.noticeDialog.close();
@@ -833,22 +833,22 @@ export class LazyPanel implements Component, Focusable {
 		this.o.requestRender();
 	}
 
-	/** Confirmation has its own component and spec; it never falls back to a list menu. */
-	private openConfirm(mode: PanelMode, spec: ConfirmDialogSpec): void {
+	/** The running-conversation warning has its own component; the other dialogs close first. */
+	private openSwitchSession(spec: SwitchSessionDialogSpec): void {
 		this.selectDialog.close();
 		this.inputDialog.close();
 		this.inputDialog.focused = false;
 		this.noticeDialog.close();
 		this.clearStatus();
-		this.state.mode = mode;
-		this.confirmDialog.open(spec);
+		this.state.mode = "confirm";
+		this.switchDialog.open(spec);
 		this.o.requestRender();
 	}
 
 	/** Show a read-only notice (Radius sign-in URL / device code); the prompt and menu (if any) close first. */
 	private openNotice(mode: PanelMode, spec: NoticeDialogSpec): void {
 		this.selectDialog.close();
-		this.confirmDialog.close();
+		this.switchDialog.close();
 		this.inputDialog.close();
 		this.inputDialog.focused = false;
 		this.clearStatus();
@@ -866,7 +866,7 @@ export class LazyPanel implements Component, Focusable {
 	private closeDialogs(): void {
 		this.state.mode = this.baseMode();
 		this.selectDialog.close();
-		this.confirmDialog.close();
+		this.switchDialog.close();
 		this.inputDialog.close();
 		this.inputDialog.focused = false;
 		this.noticeDialog.close();
@@ -1027,7 +1027,7 @@ export class LazyPanel implements Component, Focusable {
 	}
 
 	/** 确认框 / 警告框 / 恢复菜单 / fork 选择器 / TREE 过滤：单击选中，双击 = Enter，滚轮移动光标。 */
-	private choiceDialogMouse(event: TuiMouseEvent, dialog: SelectDialog | ConfirmDialog): TuiMouseEventResult | undefined {
+	private choiceDialogMouse(event: TuiMouseEvent, dialog: SelectDialog | SwitchSessionDialog): TuiMouseEventResult | undefined {
 		return this.overlayMouse(
 			event,
 			() => dialog.wheel(event.x, event.y, event.wheelDelta ?? 0),

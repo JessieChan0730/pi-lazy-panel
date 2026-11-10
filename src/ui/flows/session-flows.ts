@@ -111,7 +111,7 @@ export function confirmDeleteSession(host: FlowHost): void {
 		openCannotDeleteAlert(host, row);
 		return;
 	}
-	host.openConfirm(
+	host.openMenu(
 		"confirm",
 		confirmDialogSpec({
 			title: deleteSessionTitle(),
@@ -145,7 +145,7 @@ function confirmDeleteSelected(host: FlowHost): void {
 	const skipped = rows.length - targets.length;
 	// 当前打开的会话被跳过：它不会被删，也不该继续留在选中里。
 	for (const r of rows) if (!targets.includes(r)) host.state.selectedSessionFiles.delete(r.file);
-	host.openConfirm(
+	host.openMenu(
 		"confirm",
 		confirmDialogSpec({
 			title: deleteSessionsTitle(targets.length),
@@ -364,7 +364,7 @@ function confirmFork(host: FlowHost, target: ForkTarget, index: number): void {
 		host.closeDialogs();
 		return;
 	}
-	host.openConfirm(
+	host.openMenu(
 		"fork",
 		confirmDialogSpec({
 			title: forkSessionTitle(),
@@ -394,7 +394,7 @@ export function confirmCloneSession(host: FlowHost): void {
 		host.setStatus(t("status.cloneUnavailable"));
 		return;
 	}
-	host.openConfirm(
+	host.openMenu(
 		"clone",
 		confirmDialogSpec({
 			title: cloneSessionTitle(),
@@ -491,7 +491,7 @@ function submitExportPath(host: FlowHost, job: ExportJob, format: ExportFormat, 
 		return;
 	}
 	// 覆盖已有文件是破坏性操作，先确认（CLAUDE.md 第 7 条）；No / Esc 退回路径输入框，保留刚才输入的内容。
-	host.openConfirm(
+	host.openMenu(
 		"export",
 		confirmDialogSpec({
 			title: overwriteFileTitle(),
@@ -542,7 +542,7 @@ function confirmImport(host: FlowHost, value: string): void {
 		host.setStatus(t("status.importNoFile"));
 		return;
 	}
-	host.openConfirm(
+	host.openMenu(
 		"import",
 		confirmDialogSpec({
 			title: importSessionTitle(),
@@ -610,7 +610,7 @@ function confirmRadiusSignOut(host: FlowHost, row: SessionRow): void {
 		host.setStatus(t("status.radiusSignOutUnavailable"));
 		return;
 	}
-	host.openConfirm(
+	host.openMenu(
 		"share",
 		confirmDialogSpec({
 			title: radiusSignOutTitle(),

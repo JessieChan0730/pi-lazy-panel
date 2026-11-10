@@ -3,7 +3,8 @@ import { test } from "node:test";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { initI18n, t } from "../../../src/i18n/index.ts";
-import { CONFIRM_NO_INDEX, CONFIRM_YES_INDEX, ConfirmDialog, confirmDialogSpec, runningSessionSwitchSpec } from "../../../src/ui/widgets/confirm-dialog.ts";
+import { CONFIRM_NO_INDEX, CONFIRM_YES_INDEX } from "../../../src/ui/widgets/confirm-dialog.ts";
+import { SwitchSessionDialog, type SwitchSessionDialogSpec } from "../../../src/ui/widgets/switch-session-dialog.ts";
 
 const WARNING = "\x1b[33m";
 const BORDER = "\x1b[96m";
@@ -15,6 +16,10 @@ const theme = {
 	bold: (text: string) => `\x1b[1m${text}\x1b[22m`,
 } as unknown as Theme;
 
+function switchSpec(target: string, onConfirm: () => void, onCancel: () => void): SwitchSessionDialogSpec {
+	return { target, onConfirm, onCancel };
+}
+
 /** Coordinates of a visible label in terminal columns, including wide characters. */
 function position(lines: string[], label: string): { x: number; y: number } {
 	const y = lines.findIndex((line) => line.includes(label));
@@ -24,28 +29,25 @@ function position(lines: string[], label: string): { x: number; y: number } {
 }
 
 for (const locale of ["en", "zh"] as const) {
-	test(`ConfirmDialog keeps Yes on the left and No on the right at every dialog width (${locale})`, () => {
+	test(`SwitchSessionDialog keeps Yes on the left and No on the right at every dialog width (${locale})`, () => {
 		initI18n(locale);
 		try {
 			let confirmed = 0;
 			let cancelled = 0;
-			const dialog = new ConfirmDialog({ theme, onChange: () => {} });
-			const spec = runningSessionSwitchSpec("PiLazyPanel · 11/07", () => confirmed++, () => cancelled++);
-			const simple = confirmDialogSpec({ title: t("confirm.delete"), onConfirm: () => confirmed++, onCancel: () => cancelled++ });
-			for (const configuration of [simple, spec]) {
-				for (const width of [24, 32, 60, 100]) {
-					dialog.open(configuration);
-					const raw = dialog.render(width);
-					const lines = raw.map(stripTerminalSequences);
-					const yes = position(lines, `[ ${t("confirm.yes")} ]`);
-					const no = position(lines, `[ ${t("confirm.no")} ]`);
-					assert.ok(raw.every((line) => visibleWidth(line) === width));
-					assert.equal(yes.y, no.y, "buttons always share one row, including narrow windows");
-					assert.ok(yes.x < no.x);
-					assert.ok(lines[no.y]!.includes(`› [ ${t("confirm.no")} ]`));
-					assert.equal(dialog.selectedIndex, CONFIRM_NO_INDEX);
-					assert.equal(raw[no.y]!.split(SELECTED).length - 1, 1, "only No has the selected background");
-				}
+			const dialog = new SwitchSessionDialog({ theme, onChange: () => {} });
+			const spec = switchSpec("PiLazyPanel · 11/07", () => confirmed++, () => cancelled++);
+			for (const width of [24, 32, 60, 100]) {
+				dialog.open(spec);
+				const raw = dialog.render(width);
+				const lines = raw.map(stripTerminalSequences);
+				const yes = position(lines, `[ ${t("confirm.yes")} ]`);
+				const no = position(lines, `[ ${t("confirm.no")} ]`);
+				assert.ok(raw.every((line) => visibleWidth(line) === width));
+				assert.equal(yes.y, no.y, "buttons always share one row, including narrow windows");
+				assert.ok(yes.x < no.x);
+				assert.ok(lines[no.y]!.includes(`› [ ${t("confirm.no")} ]`));
+				assert.equal(dialog.selectedIndex, CONFIRM_NO_INDEX);
+				assert.equal(raw[no.y]!.split(SELECTED).length - 1, 1, "only No has the selected background");
 			}
 			dialog.open(spec);
 			const raw = dialog.render(60);
@@ -88,9 +90,9 @@ test("confirmation mouse hits follow both horizontal buttons without selecting w
 	for (const locale of ["en", "zh"] as const) {
 		initI18n(locale);
 		try {
-			const dialog = new ConfirmDialog({ theme, onChange: () => {} });
+			const dialog = new SwitchSessionDialog({ theme, onChange: () => {} });
 			const target = "很长的会话名称".repeat(4) + " · 11/07";
-			dialog.open(runningSessionSwitchSpec(target, () => {}, () => {}));
+			dialog.open(switchSpec(target, () => {}, () => {}));
 			for (const width of [24, 32, 60, 100]) {
 				const raw = dialog.overlay(Array.from({ length: 64 }, () => " ".repeat(width)), width);
 				const lines = raw.map(stripTerminalSequences);
@@ -122,8 +124,8 @@ test("long targets and short viewports keep both actions visible and clickable",
 	for (const locale of ["en", "zh"] as const) {
 		initI18n(locale);
 		try {
-			const dialog = new ConfirmDialog({ theme, onChange: () => {} });
-			dialog.open(runningSessionSwitchSpec("很长的会话名称".repeat(100), () => {}, () => {}));
+			const dialog = new SwitchSessionDialog({ theme, onChange: () => {} });
+			dialog.open(switchSpec("很长的会话名称".repeat(100), () => {}, () => {}));
 			for (const width of [24, 60]) {
 				for (const height of [6, 8, 23]) {
 					const lines = dialog.overlay(Array.from({ length: height }, () => " ".repeat(width)), width).map(stripTerminalSequences);
@@ -144,11 +146,11 @@ test("long targets and short viewports keep both actions visible and clickable",
 	}
 });
 
-test("closing and reopening a confirmation clears its mouse regions and restores the safe default", () => {
+test("closing and reopening the dialog clears its mouse regions and restores the safe default", () => {
 	initI18n("en");
 	let confirmed = 0;
-	const dialog = new ConfirmDialog({ theme, onChange: () => {} });
-	const spec = runningSessionSwitchSpec("PiLazyPanel", () => confirmed++, () => {});
+	const dialog = new SwitchSessionDialog({ theme, onChange: () => {} });
+	const spec = switchSpec("PiLazyPanel", () => confirmed++, () => {});
 	dialog.open(spec);
 	const lines = dialog.overlay(Array.from({ length: 30 }, () => " ".repeat(60)), 60).map(stripTerminalSequences);
 	const yes = position(lines, "[ Yes ]");

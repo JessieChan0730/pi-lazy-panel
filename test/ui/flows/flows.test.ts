@@ -15,13 +15,13 @@ import { confirmDeleteSession, confirmShareSession, copyLastReply, openContextUs
 import { openTreeFilterMenu, restoreTreeNode, type TreeTarget } from "../../../src/ui/flows/tree-flows.ts";
 import type { ActionSource, DataSource } from "../../../src/ui/ports.ts";
 import { createInitialState } from "../../../src/ui/state.ts";
-import { deleteSessionsTitle, overwriteFileTitle } from "../../../src/ui/widgets/confirm-dialog.ts";
-import type { ConfirmDialogSpec } from "../../../src/ui/widgets/confirm-dialog.ts";
+import { CONFIRM_NO_INDEX, CONFIRM_YES_INDEX, deleteSessionsTitle, overwriteFileTitle } from "../../../src/ui/widgets/confirm-dialog.ts";
 import { nodeSubject, sessionSubject } from "../../../src/ui/widgets/dialog-subject.ts";
 import type { InputDialogSpec } from "../../../src/ui/widgets/input-dialog.ts";
 import type { NoticeDialogSpec } from "../../../src/ui/widgets/notice-dialog.ts";
 import { CUSTOM_PROMPT_INDEX } from "../../../src/ui/widgets/restore-dialog.ts";
 import type { SelectDialogSpec } from "../../../src/ui/widgets/select-dialog.ts";
+import type { SwitchSessionDialogSpec } from "../../../src/ui/widgets/switch-session-dialog.ts";
 
 initI18n("en");
 
@@ -45,10 +45,10 @@ interface FakeHostOptions {
 function fakeHost(opts: FakeHostOptions = {}) {
 	const state = createInitialState();
 	const rows = opts.rows ?? [row(1), row(2), row(3)];
-	const dialogs: { prompt: InputDialogSpec | undefined; menu: SelectDialogSpec | undefined; confirm: ConfirmDialogSpec | undefined; notice: NoticeDialogSpec | undefined } = {
+	const dialogs: { prompt: InputDialogSpec | undefined; menu: SelectDialogSpec | undefined; switchSession: SwitchSessionDialogSpec | undefined; notice: NoticeDialogSpec | undefined } = {
 		prompt: undefined,
 		menu: undefined,
-		confirm: undefined,
+		switchSession: undefined,
 		notice: undefined,
 	};
 	const statuses: string[] = [];
@@ -79,19 +79,19 @@ function fakeHost(opts: FakeHostOptions = {}) {
 			state.mode = mode;
 			dialogs.prompt = spec;
 			dialogs.menu = undefined;
-			dialogs.confirm = undefined;
 			dialogs.notice = undefined;
+			dialogs.switchSession = undefined;
 		},
 		openMenu: (mode, spec) => {
 			state.mode = mode;
 			dialogs.menu = spec;
-			dialogs.confirm = undefined;
 			dialogs.prompt = undefined;
 			dialogs.notice = undefined;
+			dialogs.switchSession = undefined;
 		},
-		openConfirm: (mode, spec) => {
-			state.mode = mode;
-			dialogs.confirm = spec;
+		openSwitchSession: (spec) => {
+			state.mode = "confirm";
+			dialogs.switchSession = spec;
 			dialogs.menu = undefined;
 			dialogs.prompt = undefined;
 			dialogs.notice = undefined;
@@ -99,16 +99,16 @@ function fakeHost(opts: FakeHostOptions = {}) {
 		openNotice: (mode, spec) => {
 			state.mode = mode;
 			dialogs.notice = spec;
+			dialogs.switchSession = undefined;
 			dialogs.menu = undefined;
-			dialogs.confirm = undefined;
 			dialogs.prompt = undefined;
 		},
 		closeDialogs: () => {
 			state.mode = "normal";
 			dialogs.prompt = undefined;
 			dialogs.menu = undefined;
-			dialogs.confirm = undefined;
 			dialogs.notice = undefined;
+			dialogs.switchSession = undefined;
 		},
 		setPendingCancel: (cancel) => {
 			pendingCancel = cancel;
@@ -133,13 +133,13 @@ function fakeHost(opts: FakeHostOptions = {}) {
 		state,
 		statuses,
 		entered,
+		switchSession: (): SwitchSessionDialogSpec => {
+			assert.ok(dialogs.switchSession, "the switch-session warning is open");
+			return dialogs.switchSession;
+		},
 		menu: (): SelectDialogSpec => {
 			assert.ok(dialogs.menu, "a menu is open");
 			return dialogs.menu;
-		},
-		confirm: (): ConfirmDialogSpec => {
-			assert.ok(dialogs.confirm, "a confirmation is open");
-			return dialogs.confirm;
 		},
 		prompt: (): InputDialogSpec => {
 			assert.ok(dialogs.prompt, "a prompt is open");
@@ -149,13 +149,13 @@ function fakeHost(opts: FakeHostOptions = {}) {
 			assert.ok(dialogs.notice, "a notice is open");
 			return dialogs.notice;
 		},
-		anyOpen: () => dialogs.menu !== undefined || dialogs.confirm !== undefined || dialogs.prompt !== undefined || dialogs.notice !== undefined,
+		anyOpen: () => dialogs.menu !== undefined || dialogs.switchSession !== undefined || dialogs.prompt !== undefined || dialogs.notice !== undefined,
 		pendingCancel: () => pendingCancel,
 		usageOpened: () => usageOpened,
 	};
 }
 
-test("resume: switching away from a running session confirms first; cancellation leaves it untouched", async () => {
+test("resume: switching away from a running session confirms first; cancelling leaves it untouched", async () => {
 	const resumed: string[] = [];
 	const h = fakeHost({
 		currentSessionFile: "/tmp/s2.jsonl",
@@ -167,21 +167,16 @@ test("resume: switching away from a running session confirms first; cancellation
 			},
 		},
 	});
-	for (let attempt = 0; attempt < 2; attempt++) {
-		await resumeSession(h.host);
-		assert.equal(h.state.mode, "confirm");
-		assert.equal(h.confirm().title, t("confirm.switchRunning"));
-		assert.equal(h.confirm().warning, t("confirm.switchRunningWarning"));
-		assert.equal(h.confirm().message, t("confirm.switchRunningMessage"));
-		assert.equal(h.confirm().detail?.value, sessionSubject(row(1)));
-		assert.deepEqual(h.entered, [], "pi is not entered or hidden before consent");
-		h.confirm().onCancel();
-		assert.equal(h.anyOpen(), false);
-		assert.deepEqual(resumed, []);
-	}
+	await resumeSession(h.host);
+	assert.equal(h.state.mode, "confirm");
+	assert.equal(h.switchSession().target, sessionSubject(row(1)));
+	assert.deepEqual(h.entered, [], "pi is not entered or hidden before consent");
+	h.switchSession().onCancel();
+	assert.equal(h.anyOpen(), false);
+	assert.deepEqual(resumed, []);
 	await resumeSession(h.host);
 	h.state.cursor.sessions = 2;
-	h.confirm().onConfirm();
+	h.switchSession().onConfirm();
 	await flush();
 	assert.deepEqual(resumed, ["/tmp/s1.jsonl"], "consent applies to the original target");
 	assert.deepEqual(h.entered, ["resume"]);
@@ -214,7 +209,7 @@ test("resume: confirmation callbacks cannot enter pi after the panel is disposed
 	const h = fakeHost({ data: { isAgentIdle: () => false }, disposed: () => disposed });
 	await resumeSession(h.host);
 	disposed = true;
-	h.confirm().onConfirm();
+	h.switchSession().onConfirm();
 	await flush();
 	assert.deepEqual(h.entered, []);
 });
@@ -234,12 +229,12 @@ test("restore: cross-session Enter confirms before switching, including leaves a
 	const target: TreeTarget = { file: "/tmp/s1.jsonl", row: { entryId: "e1", role: "user", kind: "message", text: "hi", timestamp: 0, onActiveBranch: true, isLeaf: true } };
 	restoreTreeNode(h.host, target);
 	assert.equal(h.state.mode, "confirm");
-	assert.equal(h.confirm().detail?.value, sessionSubject(row(1)), "the target is the session, not the restored node's role and time");
+	assert.equal(h.switchSession().target, sessionSubject(row(1)), "the target is the session, not the restored node's role and time");
 	assert.deepEqual(restores, []);
-	h.confirm().onCancel();
+	h.switchSession().onCancel();
 	assert.equal(h.anyOpen(), false);
 	restoreTreeNode(h.host, target);
-	h.confirm().onConfirm();
+	h.switchSession().onConfirm();
 	await flush();
 	assert.deepEqual(restores, [{ summarize: false }]);
 	const earlier = { ...target, row: { ...target.row, isLeaf: false } };
@@ -248,7 +243,7 @@ test("restore: cross-session Enter confirms before switching, including leaves a
 	h.menu().onSelect(1);
 	assert.equal(h.state.mode, "confirm");
 	assert.equal(restores.length, 1);
-	h.confirm().onConfirm();
+	h.switchSession().onConfirm();
 	await flush();
 	assert.deepEqual(restores.at(-1), { summarize: true });
 	const current = fakeHost({ currentSessionFile: target.file, data: { isAgentIdle: () => false } });
@@ -305,13 +300,13 @@ test("export: format menu → path prompt → overwrite confirmation, each Esc /
 	h.menu().onSelect(1);
 	// an existing file asks first; No → back to the prompt with the typed path kept
 	h.prompt().onSubmit("/work/taken.jsonl");
-	assert.equal(h.confirm().title, overwriteFileTitle());
-	h.confirm().onCancel();
+	assert.equal(h.menu().title, overwriteFileTitle());
+	h.menu().onSelect(CONFIRM_NO_INDEX);
 	assert.equal(h.prompt().value, "/work/taken.jsonl", "the typed path is kept");
 	assert.deepEqual(written, [], "nothing is written before Yes");
 	// Enter again, Yes → written, every dialog closed, the footer says where
 	h.prompt().onSubmit("/work/taken.jsonl");
-	h.confirm().onConfirm();
+	h.menu().onSelect(CONFIRM_YES_INDEX);
 	await flush();
 	assert.deepEqual(written, ["jsonl:/work/taken.jsonl"]);
 	assert.equal(h.state.mode, "normal");
@@ -341,11 +336,11 @@ test("fork: the selector starts on the last user message; No on the confirmation
 	assert.equal(h.menu().initialIndex, 2, "like pi's /fork: the last user message");
 	assert.equal(h.menu().maxRows, 10, "a long list scrolls within the host's limit");
 	h.menu().onSelect(0);
-	assert.equal(h.confirm().subject, "#1/3", "the confirmation names the picked position, not the message text");
-	h.confirm().onCancel();
+	assert.equal(h.menu().subject, "#1/3", "the confirmation names the picked position, not the message text");
+	h.menu().onSelect(CONFIRM_NO_INDEX);
 	assert.equal(h.menu().initialIndex, 0, "back on the message just picked");
 	h.menu().onSelect(0);
-	h.confirm().onConfirm();
+	h.menu().onSelect(CONFIRM_YES_INDEX);
 	await flush();
 	assert.deepEqual(forks, ["/tmp/s1.jsonl#u1"]);
 	assert.deepEqual(h.entered, ["fork"]);
@@ -401,10 +396,10 @@ test("batch delete: one confirmation, the open session is left out, a failure st
 	for (const r of rows) h.state.selectedSessionFiles.add(r.file);
 	confirmDeleteSession(h.host);
 	assert.equal(h.state.mode, "confirm");
-	assert.equal(h.confirm().title, deleteSessionsTitle(2), "the open session is not counted");
-	assert.equal(h.confirm().subject, t("confirm.deleteSkipped"), "only the skip notice, no joined titles");
+	assert.equal(h.menu().title, deleteSessionsTitle(2), "the open session is not counted");
+	assert.equal(h.menu().subject, t("confirm.deleteSkipped"), "only the skip notice, no joined titles");
 	assert.deepEqual([...h.state.selectedSessionFiles].sort(), ["/tmp/s2.jsonl", "/tmp/s3.jsonl"], "…and no longer selected");
-	h.confirm().onConfirm();
+	h.menu().onSelect(CONFIRM_YES_INDEX);
 	await flush();
 	assert.deepEqual(deleted, ["/tmp/s2.jsonl"]);
 	assert.deepEqual([...h.state.selectedSessionFiles], ["/tmp/s3.jsonl"], "the failed one stays selected");
@@ -792,13 +787,13 @@ test("share Radius: a signed-in account asks Share / Sign out; sign-out confirms
 	h.menu().onSelect(2);
 	await flush();
 	h.menu().onSelect(1);
-	assert.equal(h.confirm().title, t("confirm.radiusSignOut"));
-	h.confirm().onCancel();
+	assert.equal(h.menu().title, t("confirm.radiusSignOut"));
+	h.menu().onSelect(CONFIRM_NO_INDEX);
 	assert.equal(h.menu().title, t("dialog.radiusAccountTitle"));
 	assert.equal(logouts, 0);
 
 	h.menu().onSelect(1);
-	h.confirm().onConfirm();
+	h.menu().onSelect(CONFIRM_YES_INDEX);
 	await flush();
 	assert.equal(logouts, 1);
 	assert.equal(h.anyOpen(), false);
@@ -818,7 +813,7 @@ test("share Radius: a signed-in account asks Share / Sign out; sign-out confirms
 	failing.menu().onSelect(2);
 	await flush();
 	failing.menu().onSelect(1);
-	failing.confirm().onConfirm();
+	failing.menu().onSelect(CONFIRM_YES_INDEX);
 	await flush();
 	assert.ok(failing.statuses.at(-1)?.includes("credential store is read-only"), failing.statuses.join(","));
 

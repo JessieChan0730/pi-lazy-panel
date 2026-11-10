@@ -135,7 +135,7 @@ export function confirmDeleteArchivedSessions(host: FlowHost, rows: readonly Ses
 		return;
 	}
 	const skipped = rows.length - targets.length;
-	host.openConfirm(
+	host.openMenu(
 		"confirm",
 		confirmDialogSpec({
 			title: targets.length === 1 && rows.length === 1 ? deleteSessionTitle() : deleteSessionsTitle(targets.length),
