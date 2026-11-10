@@ -58,7 +58,7 @@ npm run ci             # CI 入口（.github/workflows/ci.yml 调用）：跑和
 
 ```
 src/
-├── index.ts                  # 入口：registerCommand("/lazy-panel")（命令本体在 openPanel）用 ctx.ui.custom 打开全屏面板；同时 registerShortcut 注册 pi 全局快捷键（默认 alt+l，走 sendUserMessage 重新进入命令）
+├── index.ts                  # 入口：registerCommand("/lazy-panel")（命令本体在 openPanel）用 ctx.ui.custom 打开全屏面板；同时 registerShortcut 注册 pi 全局快捷键（默认 alt+l，走 sendUserMessage 重新进入命令）。pi 1.5 切换会话 / reload 时只 dispose 面板、不 resolve ctx.ui.custom，所以面板的 onDispose 也调 done()，否则命令不结束（防重入标记不复位、鼠标上报不关）
 ├── types.ts                  # 共享类型（只放类型，禁止运行时代码）
 ├── constants.ts              # 常量：扩展 id、命令名、pi 级快捷键默认值（DEFAULT_OPEN_SHORTCUT = alt+l）、布局比例、面板 id、排序循环顺序（SESSION_SORT_MODES）、键位 scope（KEY_SCOPES = global + 面板 + tree-dialog）
 ├── ui/                       # 渲染层：pi-tui Component。不做 I/O，不调用 pi 会话 API
@@ -152,7 +152,7 @@ test/                        # 目录是 src 分层的镜像：一个模块的�
 │   ├── archive-panel.test.ts # X 归档框：跨目录扫描 / 项目筛选 / 实时搜索 / s 排序、Enter 恢复与 R 批量恢复（并保留弹窗）、d 拒绝当前会话、确认删除（文件 + 元数据）、加载失败、自定义多键
 │   ├── tree-filter.test.ts   # f 过滤菜单：五种模式 / 直选键 / 取消保留 / 面板与树对话框双向共享 / 清折叠 / 空结果恢复 / 失败回滚可重试 / 可配置与帮助 footer
 │   ├── label-time.test.ts    # T / L 与标签时间：可选的独立时间、宽度安全、选中背景与搜索高亮不断、跨树视图共享、清空同时移除、重新绑定 / 解绑 / 帮助执行
-│   ├── index.test.ts         # 扩展入口：带 settings 参数直开设置且不写配置、General 字段即时写入 / 语言即时生效 / scope·sort 下次打开生效、非 TUI 守卫
+│   ├── index.test.ts         # 扩展入口：带 settings 参数直开设置且不写配置、General 字段即时写入 / 语言即时生效 / scope·sort 下次打开生效、非 TUI 守卫、按 pi 1.5 切换会话只 dispose 不调 done 时命令仍结束（关鼠标上报、可再次打开）
 │   └── open-shortcut.test.ts # pi 级快捷键：loadConfigSync（默认 / 自定义 / null / 坏 JSON）和 registerOpenShortcut（注册键位、description、重新发 /lazy-panel、null 不注册）
 ├── actions/                  # 副作用层：临时会话文件 + 假外部命令
 │   ├── session-actions.test.ts # 临时会话文件上验证 isEffectiveLeaf / resumeSession / restoreNode 的分流与摘要选项透传、deleteSession（当前会话拒绝、trash → unlink 回退）、renameSession 的分流、new / fork / clone、export（默认路径 / JSONL 链 / 假 pi）/ import（复制 / 重名 / 清理副本）/ share（假 gh、假 Radius fetch、auto 的 Gist 优先与 Radius 回退、radius 不回落、pi.share entry）/ radiusAuthenticated / loginRadius、utils/paths
