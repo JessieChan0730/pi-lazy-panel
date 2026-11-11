@@ -76,6 +76,12 @@ function activeToolSchemas(pi: ExtensionAPI): Array<{ name: string; description:
 let panelOpen = false;
 
 /**
+ * 当前打开的面板。pi 的事件订阅取消不了（`pi.on` 没有返回值），所以只在扩展工厂里注册一次，
+ * 事件来了再转发给它；面板关掉后置空。
+ */
+let activePanel: LazyPanel | undefined;
+
+/**
  * Open the full-screen panel — the body of the `/lazy-panel` command.
  *
  * Kept outside the command registration because the global shortcut re-enters
@@ -238,6 +244,7 @@ async function openPanel(pi: ExtensionAPI, ctx: ExtensionCommandContext, args: s
 			// 由 attachMouse 自己开 SGR 上报并解析（fullscreen 下是 no-op）。
 			disableMouse = attachMouse(tui, panel);
 			disableKeyLog = attachKeyLog(tui);
+			activePanel = panel;
 			if (args.trim() === "settings") panel.openSettings();
 			void panel.load();
 			return panel;
@@ -250,6 +257,7 @@ async function openPanel(pi: ExtensionAPI, ctx: ExtensionCommandContext, args: s
 			onHandle: (handle) => onOverlayHandle?.(handle),
 		},
 	);
+	activePanel = undefined;
 	// 面板关闭后恢复终端自己的滚动 / 选择。
 	disableMouse?.();
 	disableKeyLog?.();
@@ -303,6 +311,11 @@ export default function (pi: ExtensionAPI, entryPath = fileURLToPath(import.meta
 	initI18n();
 	// 快捷键必须在扩展工厂里同步注册；配置文件也只在这里同步读一次（改键后 /reload 生效）。
 	registerOpenShortcut(pi, loadConfigSync(getAgentDir()).openShortcut, entryPath);
+	// 面板开着时 agent 开始跑（排队的后续消息等）：让 SESSIONS 里当前会话那一行转起来。
+	// 结束不用订阅，面板的定时器自己会查 isAgentIdle 并停下。
+	pi.on("agent_start", () => {
+		activePanel?.syncActivity();
+	});
 	pi.registerCommand(COMMAND_NAME, {
 		description: t("command.description"),
 		handler: async (args, ctx) => {

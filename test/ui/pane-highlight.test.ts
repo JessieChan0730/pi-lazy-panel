@@ -35,13 +35,17 @@ function backgroundColumns(line: string): boolean[] {
 	return columns;
 }
 
-const cases: Array<{ label: string; row: Partial<SessionRow>; width?: number; current?: boolean; selected?: boolean; truncated?: boolean }> = [
+const cases: Array<{ label: string; row: Partial<SessionRow>; width?: number; current?: boolean; running?: boolean; selected?: boolean; truncated?: boolean }> = [
 	{ label: "short title", row: { name: "Short title" } },
 	{ label: "long title", row: { name: "Long title ".repeat(12) }, truncated: true },
 	{ label: "wide title", row: { name: "很长的会话标题".repeat(12) }, truncated: true },
 	{ label: "preview as title", row: { preview: "Long preview ".repeat(12) }, truncated: true },
 	{ label: "long details", row: { model: "long-model-name".repeat(12) }, truncated: true },
 	{ label: "current session", row: { name: "Long title ".repeat(12) }, current: true, truncated: true },
+	{ label: "running session", row: { name: "Long title ".repeat(12) }, current: true, running: true, truncated: true },
+	{ label: "running short title", row: { name: "Short" }, current: true, running: true },
+	{ label: "running multi-selected session", row: { name: "很长的会话标题".repeat(12) }, current: true, running: true, selected: true, truncated: true },
+	{ label: "narrow running row", row: { name: "Long title", threadDepth: 2 }, width: 16, current: true, running: true, truncated: true },
 	{ label: "multi-selected session", row: { name: "Long title ".repeat(12) }, selected: true, truncated: true },
 	{ label: "narrow threaded row", row: { name: "Long title", threadDepth: 2 }, width: 16, current: true, truncated: true },
 ];
@@ -68,6 +72,7 @@ for (const scenario of cases) {
 			sort: "recent",
 			selected: new Set(scenario.selected ? [row.file] : []),
 			...(scenario.current ? { currentFile: row.file } : {}),
+			...(scenario.running ? { runningFrame: 1 } : {}),
 			theme: theme as never,
 		}, width, 6);
 		if (scenario.truncated) assert.ok(lines.slice(1, 3).some((line) => stripTerminalSequences(line).includes("…")));
@@ -81,6 +86,70 @@ for (const scenario of cases) {
 		}
 	});
 }
+
+test("the running marker is an accent spinner + a plain muted word in the current tag's place; the title keeps its color", () => {
+	const row: SessionRow = { file: resolve("session.jsonl"), id: "session", name: "alpha", preview: "preview", cwd: "project", createdAt: 0, updatedAt: 0, messageCount: 1 };
+	for (const cursor of [0, 1]) {
+		for (const selected of [false, true]) {
+			const colored: Array<[string, string]> = [];
+			const bolded: string[] = [];
+			const recording = {
+				...theme,
+				fg: (color: string, text: string) => (colored.push([color, text]), theme.fg(color, text)),
+				bold: (text: string) => (bolded.push(stripTerminalSequences(text)), theme.bold(text)),
+			};
+			const props = {
+				rows: [row, { ...row, id: "other", file: resolve("other.jsonl"), name: "beta" }],
+				cursor,
+				focused: true,
+				scope: "current-folder" as const,
+				sort: "recent" as const,
+				selected: new Set(selected ? [row.file] : []),
+				currentFile: row.file,
+			};
+			const lines = renderSessionsPane({ ...props, runningFrame: 12, theme: recording as never }, 40, 6);
+			// 第 12 帧 = 10 帧里的第 3 个。转圈是 accent；文字是 muted，光标行的底色上提亮成 text
+			assert.deepEqual(colored.filter(([, text]) => text === "⠹"), [["accent", "⠹"]]);
+			assert.deepEqual(colored.filter(([, text]) => text === " running"), [[cursor === 0 ? "text" : "muted", " running"]]);
+			assert.ok(bolded.every((text) => !text.includes("running") && !text.includes("⠹")), "the marker is never bold, even on the bold cursor title");
+			assert.equal(colored.filter(([color]) => color === "warning").length, 0);
+			// 标题照旧：多选才是 accent，普通行是 text，光标行不另外着色
+			const titleColors = colored.filter(([, text]) => text.startsWith("alpha")).map(([color]) => color);
+			assert.deepEqual(titleColors, selected ? ["accent"] : cursor === 0 ? [] : ["text"]);
+			const plain = lines.map((line) => stripTerminalSequences(line));
+			assert.ok(plain[1]!.includes("alpha ⠹ running"), plain[1]);
+			assert.equal(plain.filter((line) => line.includes("(current)")).length, 0);
+			// 和空闲时的 (current) 行同宽，日期仍然右对齐在同一列
+			const idle = renderSessionsPane({ ...props, theme: theme as never }, 40, 6).map((line) => stripTerminalSequences(line));
+			assert.ok(idle[1]!.includes("alpha(current)"), idle[1]);
+			assert.equal(visibleWidth(lines[1]!), 40);
+			assert.equal(plain[1]!.slice(-13), idle[1]!.slice(-13));
+		}
+	}
+});
+
+test("a narrow pane keeps the title and shrinks the running marker to its spinner", () => {
+	const row: SessionRow = { file: resolve("session.jsonl"), id: "session", name: "A fairly long session title", preview: "preview", cwd: "project", createdAt: 0, updatedAt: 0, messageCount: 1 };
+	const render = (width: number, name = row.name!) => stripTerminalSequences(renderSessionsPane({
+		rows: [{ ...row, name }],
+		cursor: 0,
+		focused: true,
+		scope: "current-folder",
+		sort: "recent",
+		selected: new Set(),
+		currentFile: row.file,
+		runningFrame: 0,
+		theme: theme as never,
+	}, width, 4)[1]!);
+	// 宽：标题留得下 12 列，带文字
+	assert.match(render(50), /A fairly long session t… ⠋ running /);
+	// 窄：带文字的话标题只剩 4 列，退成只有方块，标题多留 8 列
+	assert.match(render(30), /A fairly lo… ⠋ /);
+	assert.doesNotMatch(render(30), /running/);
+	// 短标题本来就放得下，窄面板也带文字
+	assert.match(render(30, "Abc"), /Abc ⠋ running /);
+	for (const width of [16, 30, 50]) assert.equal(visibleWidth(render(width)), width);
+});
 
 const treeCases: Array<{ label: string; row: Partial<TreeRow>; width?: number; truncated?: boolean }> = [
 	{ label: "short text", row: { text: "Short text" } },

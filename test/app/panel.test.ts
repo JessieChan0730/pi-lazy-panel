@@ -3066,6 +3066,65 @@ test("the session pi has open is tagged '(current)' after its title, and only th
 	none.panel.dispose();
 });
 
+test("while pi is busy the current session's tag is a rotating 'running' marker, back to '(current)' once idle", async (ctx) => {
+	ctx.mock.timers.enable({ apis: ["setInterval"] });
+	let idle = false;
+	const h = makeSessionActionPanel({ currentSessionFile: "/tmp/s2.jsonl", data: { isAgentIdle: () => idle } });
+	ctx.after(() => h.panel.dispose());
+	await h.panel.load();
+	const running = () => h.text().filter((l) => /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] running/.test(l));
+	const current = () => h.text().filter((l) => l.includes("(current)"));
+	assert.equal(running().length, 1, "only the session pi has open can be running");
+	assert.ok(running()[0]!.includes("beta ⠋ running"), running()[0]);
+	assert.equal(current().length, 0, "the marker replaces the current tag instead of stacking on it");
+	// 和 pi 的 Working… 同一个节奏：每 80ms 转一帧
+	ctx.mock.timers.tick(79);
+	assert.ok(running()[0]!.includes("beta ⠋ running"), running()[0]);
+	ctx.mock.timers.tick(1);
+	assert.ok(running()[0]!.includes("beta ⠙ running"), running()[0]);
+	// agent 跑完：下一帧自己发现空闲，退回 (current) 并停表
+	idle = true;
+	ctx.mock.timers.tick(80);
+	assert.equal(running().length, 0);
+	assert.equal(current().length, 1);
+	// 空闲时不轮询：面板开着时 agent 又跑起来，要等入口转发的 agent_start（syncActivity）才转
+	idle = false;
+	ctx.mock.timers.tick(1200);
+	assert.equal(running().length, 0);
+	h.panel.syncActivity();
+	assert.equal(running().length, 1);
+	assert.equal(current().length, 0);
+});
+
+test("the running marker needs a current session and stops ticking once the panel is disposed", async (ctx) => {
+	ctx.mock.timers.enable({ apis: ["setInterval"] });
+	// 新会话还没有文件：没有哪一行是"当前会话"，就没有东西可标。
+	const unsaved = makeSessionActionPanel({ data: { isAgentIdle: () => false } });
+	await unsaved.panel.load();
+	assert.equal(unsaved.text().filter((l) => l.includes("running")).length, 0);
+	unsaved.panel.dispose();
+
+	let queries = 0;
+	const h = makeSessionActionPanel({
+		currentSessionFile: "/tmp/s2.jsonl",
+		data: {
+			isAgentIdle: () => {
+				queries++;
+				return false;
+			},
+		},
+	});
+	await h.panel.load();
+	ctx.mock.timers.tick(80);
+	const before = queries;
+	assert.ok(before > 0);
+	h.panel.dispose();
+	ctx.mock.timers.tick(1200);
+	h.panel.syncActivity();
+	ctx.mock.timers.tick(1200);
+	assert.equal(queries, before, "a disposed panel neither ticks nor restarts its spinner");
+});
+
 test("r opens a centered Rename box pre-filled with the name; Enter saves and the row shows it, empty removes, Esc cancels", async () => {
 	const h = makeSessionActionPanel();
 	await h.panel.load();

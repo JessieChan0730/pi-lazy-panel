@@ -24,6 +24,7 @@
 import { resolve } from "node:path";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { RUNNING_FRAMES } from "../../constants.ts";
 import { t } from "../../i18n/index.ts";
 import type { ListScope, SearchView, SessionRow, SessionSortMode } from "../../types.ts";
 import { formatShortDate, shortenPath } from "../../utils/format.ts";
@@ -44,6 +45,11 @@ export interface SessionsPaneProps {
 	pinnedCount?: number;
 	/** File pi currently has open, if any: that row's title gets a "current" tag (it is the one `d` refuses). */
 	currentFile?: string;
+	/**
+	 * Set while pi's agent is busy in `currentFile`: the "current" tag becomes a
+	 * braille spinner + "running", and this picks the spinner frame.
+	 */
+	runningFrame?: number;
 	/** Active `/` search of this pane: matching rows are highlighted, the header shows the count. */
 	search?: SearchView;
 	/** Shown instead of the default "no sessions" when the list is empty (e.g. how to widen the scope). */
@@ -174,6 +180,9 @@ export function renderSessionsPane(p: SessionsPaneProps, width: number, height: 
 	});
 }
 
+/** Columns the title keeps before the running marker drops its word and shows only the spinner. */
+const RUNNING_TITLE_MIN_WIDTH = 12;
+
 /** A dim group rule: `── PINNED ─────────` filling the pane width. */
 function renderGroupHeader(label: string, inner: number, theme: Theme): string {
 	const text = `── ${label} `;
@@ -190,16 +199,35 @@ function renderRow(row: SessionRow, inner: number, isCursor: boolean, isCurrent:
 	const date = formatShortDate(row.updatedAt);
 	const emptyTitle = t("pane.emptySession");
 	const title = row.name ?? row.preview ?? emptyTitle;
+	const rightW = visibleWidth(date) + 1;
 	// pi 当前打开的会话：标题后紧跟一个 (current) / （当前）标记，不特殊着色。
-	const currentTag = isCurrent ? t("pane.current") : "";
+	// agent 正在这个会话里跑时，标记换成「点阵转圈 + running」（pi 自己 Working… 的那个转圈）：
+	// 转圈着 accent 色，文字是不加粗的 muted，标题颜色不动。换掉而不是追加，窄面板里不多挤标题。
+	const running = isCurrent && p.runningFrame !== undefined;
+	const spinner = RUNNING_FRAMES[(p.runningFrame ?? 0) % RUNNING_FRAMES.length] ?? RUNNING_FRAMES[0];
+	const runningWord = ` ${t("pane.running")}`;
+	const runningTag = ` ${spinner}${runningWord}`;
+	// 面板窄到带上文字后标题剩不下几列时，只留旋转方块（它只会出现在当前会话上，含义不变）。
+	const roomW = inner - visibleWidth(marker) - visibleWidth(indent) - rightW;
+	const wordFits = roomW - visibleWidth(runningTag) >= Math.min(visibleWidth(title || emptyTitle), RUNNING_TITLE_MIN_WIDTH);
+	const showWord = running && wordFits;
+	const currentTag = running ? (showWord ? runningTag : ` ${spinner}`) : isCurrent ? t("pane.current") : "";
 	const tagW = visibleWidth(currentTag);
 
 	// line 1: marker + indent + title[(current)] ....... date
-	const rightW = visibleWidth(date) + 1;
-	const titleW = Math.max(1, inner - visibleWidth(marker) - visibleWidth(indent) - rightW - tagW);
+	const titleW = Math.max(1, roomW - tagW);
 	// 先不补齐地截断标题，紧跟上标记，再把整体补齐到 titleW + tagW——这样标记紧贴标题，右侧空白补齐后日期照旧右对齐。
 	const titleWithTag = truncateToWidth(title || emptyTitle, titleW, "…", false) + currentTag;
 	const titleText = truncateToWidth(titleWithTag, titleW + tagW, "…", true);
+	// 运行中的标记要和标题分开着色：标题、标记、补齐的空白各自成段，总宽度和上面的 titleText 一致。
+	const titleSpan = (style: (s: string) => string): string => {
+		if (!running) return style(titleText);
+		const head = truncateToWidth(title || emptyTitle, titleW, "…", false);
+		const pad = " ".repeat(Math.max(0, titleW - visibleWidth(head)));
+		// 光标行的底色上 muted 会糊，和日期 / 详情一样提亮一档。
+		const word = showWord ? theme.fg(cursorTone("muted", isCursor), runningWord) : "";
+		return `${style(head)} ${theme.fg("accent", spinner)}${word}${pad}`;
+	};
 
 	// line 2: model · cwd · N msgs
 	const details = [row.model ?? "", shortenPath(row.cwd), t("pane.msgs", { count: row.messageCount })].filter(Boolean).join(" · ");
@@ -210,16 +238,16 @@ function renderRow(row: SessionRow, inner: number, isCursor: boolean, isCurrent:
 		const hl = (s: string) => fit(s, inner).split("\x1b[0m").map((part) => theme.bg("selectedBg", part)).join("\x1b[0m");
 		// 光标行整行反白；被选中时标题额外着 accent 色。底色上的次级文字提亮一档（cursorTone），
 		// 否则 dim 的日期 / muted 的详情和 selectedBg 只差一点对比度，看着糊在一起。
-		const titleSpan = isSelected ? theme.bold(theme.fg("accent", titleText)) : theme.bold(titleText);
+		const cursorTitle = titleSpan(isSelected ? (s) => theme.bold(theme.fg("accent", s)) : (s) => theme.bold(s));
 		return [
-			hl(theme.bold(theme.fg("accent", marker[0]!)) + marker.slice(1) + indent + titleSpan + " " + theme.fg(cursorTone("dim", isCursor), date)),
+			hl(theme.bold(theme.fg("accent", marker[0]!)) + marker.slice(1) + indent + cursorTitle + " " + theme.fg(cursorTone("dim", isCursor), date)),
 			hl(theme.fg(cursorTone("muted", isCursor), line2Raw)),
 		];
 	}
 	// 选中行：标题用 accent 色，一眼能从列表里扫出来；未选中用普通 text 色。
 	const titleStyle = isSelected ? (s: string) => theme.fg("accent", s) : (s: string) => theme.fg("text", s);
 	return [
-		fit(marker + indent + titleStyle(titleText) + " " + theme.fg("dim", date), inner),
+		fit(marker + indent + titleSpan(titleStyle) + " " + theme.fg("dim", date), inner),
 		fit(theme.fg("muted", line2Raw), inner),
 	];
 }

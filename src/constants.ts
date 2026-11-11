@@ -73,3 +73,15 @@ export const SPINNER_FRAMES = ["◰", "◳", "◲", "◱"] as const;
 
 /** How fast the footer spinner advances one frame. */
 export const SPINNER_INTERVAL_MS = 120;
+
+/**
+ * Frames of the SESSIONS "running" marker: the braille spinner pi-tui's Loader
+ * draws next to pi's own "Working…", at the same pace, so the row reads as the
+ * same activity. (pi-tui does not export its frames, hence the copy.)
+ *
+ * 和 pi 主界面的运行指示同一套点阵转圈、同一个节奏，一眼看得出是同一件事。
+ */
+export const RUNNING_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
+
+/** How fast the running marker advances one frame (pi-tui Loader's default). */
+export const RUNNING_INTERVAL_MS = 80;

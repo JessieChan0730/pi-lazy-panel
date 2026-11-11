@@ -133,6 +133,7 @@
     "emptySession": "（空会话）",
     "msgs": "{{count}} 条消息",
     "current": "（当前）",
+    "running": "运行中",
     "selected": "已选 {{count}} 个",
     "pinnedGroup": "置顶",
     "othersGroup": "其他",
