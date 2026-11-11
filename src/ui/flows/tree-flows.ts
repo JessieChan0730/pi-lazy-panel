@@ -70,9 +70,9 @@ export async function copyEntryText(host: FlowHost, file: string, entryId: strin
 	try {
 		const copied = await host.actions.copyNodeText(file, entryId);
 		if (host.isDisposed()) return;
-		host.setStatus(copied ? t("status.copiedNode") : t("status.noTextToCopy"));
+		host.setStatus(copied ? t("status.copiedNode") : t("status.noTextToCopy"), copied ? "success" : "info");
 	} catch (err) {
-		host.setStatus(t("status.copyFailed", { error: (err as Error).message }));
+		host.setStatus(t("status.copyFailed", { error: (err as Error).message }), "error");
 	}
 }
 
@@ -103,9 +103,9 @@ async function submitLabel(host: FlowHost, file: string, entryId: string, value:
 	try {
 		await host.actions.setNodeLabel(file, entryId, label);
 		if (host.isDisposed()) return;
-		host.setStatus(label ? t("status.labelSet", { label }) : t("status.labelRemoved"));
+		host.setStatus(label ? t("status.labelSet", { label }) : t("status.labelRemoved"), "success");
 	} catch (err) {
-		host.setStatus(t("status.labelFailed", { error: (err as Error).message }));
+		host.setStatus(t("status.labelFailed", { error: (err as Error).message }), "error");
 		return;
 	}
 	await host.reloadTree(file, entryId);

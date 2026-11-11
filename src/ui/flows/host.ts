@@ -11,7 +11,7 @@
  */
 
 import type { ResolvedConfig } from "../../config/config.ts";
-import type { ContextUsageInfo, EnterOutcome, PanelMode, SessionInfo, SessionRow, TreeFilter } from "../../types.ts";
+import type { ContextUsageInfo, EnterOutcome, PanelMode, SessionInfo, SessionRow, StatusTone, TreeFilter } from "../../types.ts";
 import type { ActionSource, DataSource, SettingsSource, ThemeSource } from "../ports.ts";
 import type { PanelState } from "../state.ts";
 import type { InputDialogSpec } from "../widgets/input-dialog.ts";
@@ -43,8 +43,11 @@ export interface FlowHost {
 	archiveOpenHint(): string;
 	/** Drop restored / deleted rows from the open archive dialog, keeping filters and cursor; no-op while it is closed. */
 	removeArchivedRows(files: readonly string[]): void;
-	/** Footer status text (undefined clears it). */
-	setStatus(text: string | undefined): void;
+	/**
+	 * Footer status text (undefined clears it). `tone` picks the colour:
+	 * `success` for a finished operation, `error` for a failure, omitted for hints and progress.
+	 */
+	setStatus(text: string | undefined, tone?: StatusTone): void;
 	/** Listed sessions, in display order. */
 	sessionRows(): readonly SessionRow[];
 	/** Session under the cursor, or undefined with a footer hint. */

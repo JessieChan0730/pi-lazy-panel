@@ -57,6 +57,7 @@ import type {
 	SearchView,
 	SessionInfo,
 	SessionRow,
+	StatusTone,
 	TreeFilter,
 	TreeRow,
 } from "../types.ts";
@@ -202,6 +203,8 @@ export class LazyPanel implements Component, Focusable {
 	/** CONTENT pane: blocks of the branch on show, their layout, scrolling and the `/` matches. */
 	private readonly contentViewport: ContentViewport;
 	private status: string | undefined;
+	/** Tone of `status` (footer colour): reset to `info` whenever the text changes without one. */
+	private statusTone: StatusTone = "info";
 	private loadedSessionFile: string | undefined;
 	/** Request identity prevents an older filter load from replacing the latest choice. */
 	private pendingTreeFilter: { filter: TreeFilter } | undefined;
@@ -391,7 +394,7 @@ export class LazyPanel implements Component, Focusable {
 			isDisposed: () => this.disposed,
 			archiveOpenHint: () => this.archiveOpenHint(),
 			removeArchivedRows: (files) => this.archiveDialog.removeRows(files),
-			setStatus: (text) => this.setStatus(text),
+			setStatus: (text, tone) => this.setStatus(text, tone),
 			sessionRows: () => this.sessions,
 			currentSessionRow: () => this.currentSessionRow(),
 			openPrompt: (mode, spec) => this.openPrompt(mode, spec),
@@ -432,6 +435,7 @@ export class LazyPanel implements Component, Focusable {
 				// 这里是配置刚被重读后的警告，清掉等于"改任意一项设置，配置里的问题就不提示了"；
 				// 没有警告时仍然是 undefined，保存前的临时提示照旧被顶掉。
 				this.status = config.warnings[0];
+				this.statusTone = "info";
 				this.o.requestRender();
 			},
 		};
@@ -489,7 +493,7 @@ export class LazyPanel implements Component, Focusable {
 			this.sessions = rows;
 		} catch (err) {
 			if (this.disposed || request !== this.sessionListRequest) return false;
-			this.setStatus(t("status.listFailed", { error: (err as Error).message }));
+			this.setStatus(t("status.listFailed", { error: (err as Error).message }), "error");
 			return false;
 		}
 		// 多选里已经不在列表中的会话（被删掉、换了范围）一并去掉。
@@ -546,7 +550,7 @@ export class LazyPanel implements Component, Focusable {
 			this.setTree([], new Set());
 			this.contentViewport.setBlocks([], undefined);
 			this.contentViewport.highlight(undefined);
-			this.setStatus(t("status.openFailed", { error: (err as Error).message }));
+			this.setStatus(t("status.openFailed", { error: (err as Error).message }), "error");
 		}
 		this.o.requestRender();
 	}
@@ -607,7 +611,7 @@ export class LazyPanel implements Component, Focusable {
 				if (this.treeView.cursorRow()?.entryId !== node.entryId || this.loadedSessionFile !== file) return;
 				this.contentViewport.setBlocks(content, wantLeaf);
 			} catch (err) {
-				this.setStatus(t("status.loadBranchFailed", { error: (err as Error).message }));
+				this.setStatus(t("status.loadBranchFailed", { error: (err as Error).message }), "error");
 				return;
 			}
 		}
@@ -635,8 +639,10 @@ export class LazyPanel implements Component, Focusable {
 		this.setStatus(this.state.showLabelTimestamps ? t("status.labelTimesShown") : t("status.labelTimesHidden"));
 	}
 
-	private setStatus(s: string | undefined): void {
+	/** `tone` 决定 footer 里的颜色：完成 = success（绿），失败 = error（红），不传 = 提示 / 进度（warning）。 */
+	private setStatus(s: string | undefined, tone: StatusTone = "info"): void {
 		this.status = s;
+		this.statusTone = tone;
 		this.o.requestRender();
 	}
 
@@ -1399,7 +1405,7 @@ export class LazyPanel implements Component, Focusable {
 			this.archiveDialog.focused = this._focused;
 			this.o.requestRender();
 		} catch (err) {
-			if (!this.disposed) this.setStatus(t("status.listFailed", { error: (err as Error).message }));
+			if (!this.disposed) this.setStatus(t("status.listFailed", { error: (err as Error).message }), "error");
 		} finally {
 			this.state.sessionStateBusy = false;
 			this.o.requestRender();
@@ -1713,9 +1719,9 @@ export class LazyPanel implements Component, Focusable {
 		const out: KeyHint[] = [];
 		const next = labelsFor(this.keymap, "global", "search-next")[0];
 		const prev = labelsFor(this.keymap, "global", "search-prev")[0];
-		if (next) out.push([next, "next"]);
-		if (prev) out.push([prev, "prev"]);
-		out.push(["Esc", "clear"]);
+		if (next) out.push([next, t("hint.searchNext")]);
+		if (prev) out.push([prev, t("hint.searchPrev")]);
+		out.push(["Esc", t("hint.searchClear")]);
 		return out;
 	}
 
@@ -1749,7 +1755,7 @@ export class LazyPanel implements Component, Focusable {
 			if (this.treeDialog.isOpen) this.refreshTreeDialog(entryId);
 			await this.syncContentToTree();
 		} catch (err) {
-			this.setStatus(t("status.reloadTreeFailed", { error: (err as Error).message }));
+			this.setStatus(t("status.reloadTreeFailed", { error: (err as Error).message }), "error");
 		}
 		this.o.requestRender();
 	}
@@ -2043,7 +2049,7 @@ export class LazyPanel implements Component, Focusable {
 			this.o.requestRender();
 		} catch (err) {
 			if (this.disposed || this.loadedSessionFile !== file || this.pendingTreeFilter !== request) return;
-			this.setStatus(t("status.reloadTreeFailed", { error: (err as Error).message }));
+			this.setStatus(t("status.reloadTreeFailed", { error: (err as Error).message }), "error");
 		} finally {
 			if (this.pendingTreeFilter === request) this.pendingTreeFilter = undefined;
 		}
@@ -2113,7 +2119,7 @@ export class LazyPanel implements Component, Focusable {
 			if (this.disposed) return;
 			this.changelogDialog.close();
 			this.state.mode = this.baseMode();
-			this.setStatus(t("status.changelogFailed", { error: (err as Error).message }));
+			this.setStatus(t("status.changelogFailed", { error: (err as Error).message }), "error");
 			return;
 		}
 		// 先让"加载中"那一帧画出来，再做同步的重渲染（否则两次 requestRender 可能被合并，加载提示看不见）。
@@ -2220,7 +2226,7 @@ export class LazyPanel implements Component, Focusable {
 		} catch (err) {
 			if (this.disposed) return;
 			this.o.setHidden?.(false);
-			this.setStatus(t("status.workFailed", { what: verb, error: (err as Error).message }));
+			this.setStatus(t("status.workFailed", { what: verb, error: (err as Error).message }), "error");
 		} finally {
 			this.entering = false;
 		}
@@ -2370,6 +2376,8 @@ export class LazyPanel implements Component, Focusable {
 		const keys = this.archiveDialog.isOpen ? this.archiveSearchKeys : this.keys;
 		const pendingHint = keys.hasPending ? t("status.pending", { keys: keys.pendingKeys }) : undefined;
 		const status = pendingHint ?? this.status;
+		// 待续按键只是提示；其余沿用 setStatus 时给的语气。
+		const statusTone: StatusTone = pendingHint ? "info" : this.statusTone;
 		// 和按键分发使用同一个最上层弹窗；不能退回显示当前不可用的面板按键。
 		const overlay = this.overlays.find((ov) => ov.isOpen());
 		if (overlay) {
@@ -2378,7 +2386,7 @@ export class LazyPanel implements Component, Focusable {
 				modal: true,
 				hints: overlay.hints(),
 				...(this.state.helpOpen ? { modeLabel: t("help.titlePrefix") } : {}),
-				...(status ? { status } : {}),
+				...(status ? { status, statusTone } : {}),
 			}, width)[0]!;
 		}
 		// 当前面板有搜索生效：显示关键字、位置 / 数量和 n / N / Esc 提示（别的面板的搜索不显示）。
@@ -2386,13 +2394,13 @@ export class LazyPanel implements Component, Focusable {
 		const view = search ? this.searchView(this.state.focus) : undefined;
 		if (search && view) {
 			return renderSearchStatus(
-				{ query: search.query, position: view.position, total: view.total, hints: this.searchHints(), theme: this.o.theme, ...(status ? { status } : {}) },
+				{ query: search.query, position: view.position, total: view.total, hints: this.searchHints(), theme: this.o.theme, ...(status ? { status, statusTone } : {}) },
 				width,
 			);
 		}
 		return renderFooter({
 			...footer,
-			...(status ? { status } : {}),
+			...(status ? { status, statusTone } : {}),
 		}, width)[0]!;
 	}
 

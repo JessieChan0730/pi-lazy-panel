@@ -2392,6 +2392,24 @@ test("/ in SESSIONS jumps live to the first match from the cursor, Enter keeps i
 	h.panel.dispose();
 });
 
+test("the search status hints (next / prev / clear) are localised", async () => {
+	const h = makeSearchPanel();
+	await h.panel.load();
+	const footer = () => h.text().at(-1)!;
+	h.panel.handleInput("/");
+	for (const ch of "film") h.panel.handleInput(ch);
+	h.panel.handleInput("\r");
+	try {
+		// 中文界面：n / N / Esc 的说明跟着语言走，不能留英文。
+		initI18n("zh");
+		assert.ok(/n 下一个\s+N 上一个\s+Esc 清除/.test(footer()), footer());
+		assert.equal(/next|prev|clear/.test(footer()), false, footer());
+	} finally {
+		initI18n("en");
+	}
+	assert.ok(/n next\s+N prev\s+Esc clear/.test(footer()), footer());
+});
+
 test("SESSIONS search honours name: / model: / path: / after: / before: and paints the hits (current match inverse, cursor background kept)", async () => {
 	const h = makeSearchPanel({ theme: ansiTheme });
 	await h.panel.load();

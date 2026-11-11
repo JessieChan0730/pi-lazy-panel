@@ -16,8 +16,9 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { FOOTER_HINTS } from "../../config/keymap.ts";
 import { labelsForFocus } from "../../config/keys.ts";
 import { t } from "../../i18n/index.ts";
-import type { ActionId, KeyHint, Keymap, ListScope, PaneId, PanelMode } from "../../types.ts";
+import type { ActionId, KeyHint, Keymap, ListScope, PaneId, PanelMode, StatusTone } from "../../types.ts";
 import { fit } from "../frame.ts";
+import { statusColor } from "../status-tone.ts";
 
 export interface FooterProps {
 	mode: PanelMode;
@@ -28,6 +29,8 @@ export interface FooterProps {
 	scope?: ListScope;
 	/** Optional status text (e.g. "loading…" or an error). */
 	status?: string;
+	/** Tone of `status`: success (green) / info (the default, warning colour) / error (red). */
+	statusTone?: StatusTone;
 	/** Replace the keymap-derived hints, e.g. with a dialog's keys while it is open. */
 	hints?: KeyHint[];
 	/** Extension version, shown muted at the far right (e.g. "0.1.0" → "v0.1.0"). */
@@ -83,8 +86,9 @@ function footerLabel(action: ActionId): string {
 
 export function renderFooter(p: FooterProps, width: number): string[] {
 	const { theme } = p;
+	// 状态文字按语气配色：完成 = success，提示 = warning，失败 = error（见 status-tone.ts）。
 	const mode = theme.bold(theme.bg("selectedBg", ` ${p.modeLabel ?? t(`mode.${p.mode}`)} `));
-	const status = p.status ? `  ${theme.fg("warning", p.status)}` : "";
+	const status = p.status ? `  ${theme.fg(statusColor(p.statusTone), p.status)}` : "";
 	// 弹窗期间先保留操作提示，版本号只用剩余空间；普通浏览仍保持右侧常驻。
 	const version = p.version ? theme.fg(p.modal ? "dim" : "muted", `v${p.version}`) : "";
 	const versionBudget = version && !p.modal ? visibleWidth(version) + 2 : 0;
