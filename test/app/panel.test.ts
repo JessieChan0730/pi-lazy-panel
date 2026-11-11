@@ -42,6 +42,8 @@ import {
 	importSessionTitle,
 	overwriteFileTitle,
 	radiusSignOutTitle,
+	switchSessionLabels,
+	switchSessionTitle,
 } from "../../src/ui/widgets/confirm-dialog.ts";
 import { exportFormatTitle, exportPathSubject, exportPathTitle } from "../../src/ui/widgets/export-dialog.ts";
 import { forkDialogTitle } from "../../src/ui/widgets/fork-dialog.ts";
@@ -69,6 +71,8 @@ const IMPORT_SESSION_TITLE = importSessionTitle();
 const OVERWRITE_FILE_TITLE = overwriteFileTitle();
 const SHARE_SESSION_TITLE = shareTitle();
 const RADIUS_SIGN_OUT_TITLE = radiusSignOutTitle();
+const SWITCH_SESSION_TITLE = switchSessionTitle();
+const SWITCH_SESSION_LABELS = switchSessionLabels();
 const EXPORT_FORMAT_TITLE = exportFormatTitle();
 const EXPORT_PATH_TITLE = exportPathTitle();
 const EXPORT_PATH_SUBJECT = exportPathSubject();
@@ -2196,29 +2200,40 @@ test("SelectDialog scrolls a long list within maxRows, keeping the cursor visibl
 	assert.ok(!lines.some((l) => l.includes("item4")), "earlier items scrolled off");
 });
 
-test("SelectDialog wraps explanations without treating them as mouse-selectable entries", () => {
+test("SelectDialog.click: a double-click is Enter only when the click before it hit the same entry of the same menu", () => {
 	const dlg = new SelectDialog({ theme: fakeTheme, onChange: () => {} });
-	const message = t("confirm.switchRunningMessage");
-	dlg.open({ title: "Switch?", message, items: ["Yes", "No"], initialIndex: 1, hints: [], onSelect: () => {}, onCancel: () => {} });
-	for (const width of [32, 60, 100]) {
-		const out = dlg.overlay(Array.from({ length: 24 }, () => " ".repeat(width)), width);
-		assert.ok(out.every((line) => visibleWidth(line) === width));
-		const plain = out.map(stripTerminalSequences);
-		const yes = plain.findIndex((line) => line.includes("  Yes"));
-		const no = plain.findIndex((line) => line.includes("› No"));
-		const top = plain.findIndex((line) => line.includes("┌─ Switch?"));
-		const x = plain[yes]!.indexOf("Yes");
-		const explanation = plain.slice(top + 1, yes - 1).map((line) => line.slice(line.indexOf("│") + 1, line.lastIndexOf("│")).trim()).join(" ");
-		assert.equal(explanation, message, `the full warning is visible at width ${width}`);
-		for (let y = top; y < yes; y++) assert.equal(dlg.indexAt(x, y), undefined, "warning and separator are not choices");
-		assert.equal(dlg.indexAt(x, yes), 0);
-		assert.equal(dlg.indexAt(x, no), 1);
-	}
+	const picked: number[] = [];
+	const spec = { title: "Menu", items: ["one", "two"], hints: [], onSelect: (index: number) => void picked.push(index), onCancel: () => {} };
+
+	// 菜单在一次连击的中途弹出来：连击剩下的那一下（clickCount >= 2）只移动光标，不替用户回答。
+	dlg.open(spec);
+	dlg.click(1, true);
+	assert.equal(dlg.selectedIndex, 1);
+	assert.deepEqual(picked, [], "the tail of the multi-click that opened the menu does not answer it");
+	// 同一项上再来一下，才是这个菜单里的双击。
+	dlg.click(1, true);
+	assert.deepEqual(picked, [1]);
+
+	// 单击只选中；两下落在不同的项上也不算双击。
+	dlg.open(spec);
+	dlg.click(0, false);
+	assert.equal(dlg.selectedIndex, 0);
+	dlg.click(1, true);
+	assert.equal(dlg.selectedIndex, 1);
+	assert.deepEqual(picked, [1], "two clicks on different entries are not a double-click");
+	dlg.click(1, true);
+	assert.deepEqual(picked, [1, 1]);
+
+	// 同一个组件换了一份菜单（或关掉重开）：上一份菜单里的点击不算数。
+	dlg.open(spec);
+	dlg.click(0, false);
+	dlg.open(spec);
+	dlg.click(0, true);
+	assert.deepEqual(picked, [1, 1], "a click in the previous menu does not arm this one");
 	dlg.close();
-	dlg.open({ title: "Plain", items: ["Yes", "No"], hints: [], onSelect: () => {}, onCancel: () => {} });
-	const plain = dlg.overlay(Array.from({ length: 24 }, () => " ".repeat(60)), 60).map(stripTerminalSequences);
-	const yes = plain.findIndex((line) => line.includes("Yes"));
-	assert.equal(dlg.indexAt(plain[yes]!.indexOf("Yes"), yes), 0, "opening a normal menu clears the message offset");
+	dlg.open(spec);
+	dlg.click(0, true);
+	assert.deepEqual(picked, [1, 1]);
 });
 
 test("the sessions cursor starts on pi's current session and stays put when it is not listed", async () => {
@@ -2772,7 +2787,7 @@ function dialogAt(lines: string[], title: string): { top: number; title: string;
 	return { top, title: lines[top]!, body };
 }
 
-test("Enter into another running session shows a confirmation; cancelling keeps the panel and response intact", async () => {
+test("Enter into another running session asks in the usual two-entry confirmation; cancelling keeps the panel and response intact", async () => {
 	const resumed: string[] = [];
 	const h = makeSessionActionPanel({
 		currentSessionFile: "/tmp/s1.jsonl",
@@ -2789,26 +2804,29 @@ test("Enter into another running session shows a confirmation; cancelling keeps 
 		h.panel.handleInput("j");
 		await settle();
 		assert.equal(h.panel.state.cursor.sessions, 1);
-		for (const cancel of ["n", "\x1b", "\r"]) {
+		// n、Esc、默认项上的 Enter 都留在当前对话；← / → 不是菜单的键，按了再 Enter 仍然是默认项。
+		for (const cancel of [["n"], ["\x1b"], ["\r"], ["\x1b[D", "\r"], ["\x1b[C", "\r"]]) {
 			h.panel.handleInput("\r");
 			assert.equal(h.panel.state.mode, "confirm");
-			const dlg = dialogAt(h.text(), t("confirm.switchRunning"));
+			const dlg = dialogAt(h.text(), SWITCH_SESSION_TITLE);
 			assert.ok(dlg);
-			assert.ok(dlg.body.some((line) => line.includes(t("confirm.switchRunningTarget")) && line.includes("beta")));
-			assert.ok(dlg.body.some((line) => line.includes(t("confirm.switchRunningWarning"))));
-			assert.ok(dlg.body.some((line) => line.includes(t("confirm.switchRunningMessage"))));
-			assert.ok(dlg.body.at(-1)!.includes(`› [ ${t("confirm.no")} ]`));
-			assert.ok(dlg.body.at(-1)!.includes(`[ ${t("confirm.yes")} ]`));
+			// 和删除确认同一个样子：目标会话在标题栏右侧，正文只有两项，没有说明段落。
+			assert.ok(dlg.title.includes("beta") && !dlg.title.includes("second words"), `subject = the destination's name · date: ${dlg.title}`);
+			assert.equal(dlg.body.length, 2);
+			assert.ok(dlg.body[0]!.includes(`  ${SWITCH_SESSION_LABELS.confirm}`) && !dlg.body[0]!.includes("›"), dlg.body[0]);
+			assert.ok(dlg.body[1]!.includes(`› ${SWITCH_SESSION_LABELS.cancel}`), dlg.body[1]);
+			assert.ok(h.footer().includes("CONFIRM") && h.footer().includes("y/n choose") && h.footer().includes("Esc cancel"), h.footer());
 			assert.deepEqual(h.hidden, [], "pi retains control of the running response until consent");
 			assert.deepEqual(resumed, []);
-			h.panel.handleInput(cancel);
+			for (const key of cancel) h.panel.handleInput(key);
 			await flush();
-			assert.equal(h.panel.state.mode, "normal");
+			assert.equal(h.panel.state.mode, "normal", JSON.stringify(cancel));
 			assert.equal(h.panel.state.cursor.sessions, 1);
 			assert.equal(h.closed(), false);
+			assert.deepEqual(resumed, [], JSON.stringify(cancel));
 		}
 		h.panel.handleInput("\r");
-		h.panel.handleInput("\x1b[D");
+		h.panel.handleInput("k");
 		h.panel.handleInput("\r");
 		await flush();
 		assert.deepEqual(resumed, ["/tmp/s2.jsonl"]);
@@ -2819,7 +2837,7 @@ test("Enter into another running session shows a confirmation; cancelling keeps 
 	}
 });
 
-test("double-clicking another session uses the same confirmation and warning text cannot confirm it", async () => {
+test("double-clicking another session opens the same confirmation; the rest of that multi-click cannot answer it", async () => {
 	const resumed: string[] = [];
 	const h = makeSessionActionPanel({
 		currentSessionFile: "/tmp/s1.jsonl",
@@ -2831,22 +2849,49 @@ test("double-clicking another session uses the same confirmation and warning tex
 			},
 		},
 	});
+	const size = { height: 24, width: 120 };
 	try {
 		await h.panel.load();
 		h.text(120);
-		h.panel.handleMouse(mouseEvent("click", 2, 3, { clickCount: 2, height: 24, width: 120 }));
+		h.panel.handleMouse(mouseEvent("click", 2, 3, { ...size, clickCount: 2 }));
 		assert.equal(h.panel.state.mode, "confirm");
 		const lines = h.text(120);
-		const dlg = dialogAt(lines, t("confirm.switchRunning"));
+		const dlg = dialogAt(lines, SWITCH_SESSION_TITLE);
 		assert.ok(dlg);
-		const x = lines[dlg.top]!.indexOf("┌─") + 4;
-		h.panel.handleMouse(mouseEvent("click", x, dlg.top + 1, { clickCount: 2, height: 24, width: 120 }));
+		const cellOf = (label: string): { x: number; y: number } => {
+			const y = lines.findIndex((line) => line.includes(label));
+			return { x: visibleWidth(lines[y]!.slice(0, lines[y]!.indexOf(label))), y };
+		};
+		const interrupt = cellOf(SWITCH_SESSION_LABELS.confirm);
+		const stay = cellOf(SWITCH_SESSION_LABELS.cancel);
+		assert.deepEqual([interrupt.y, stay.y], [dlg.top + 1, dlg.top + 2]);
+
+		// 标题栏（边框）不是选项。
+		h.panel.handleMouse(mouseEvent("click", interrupt.x, dlg.top, { ...size, clickCount: 2 }));
 		assert.equal(h.panel.state.mode, "confirm");
+		// 确认框弹在指针下面时，打开它的那次连击的第三下落在“切换”上：只移动光标，不中断当前对话。
+		h.panel.handleMouse(mouseEvent("click", interrupt.x, interrupt.y, { ...size, clickCount: 3 }));
+		await flush();
+		assert.equal(h.panel.state.mode, "confirm");
+		assert.deepEqual(resumed, [], "a triple-click on a session never interrupts the running conversation");
+		assert.ok(h.text(120)[interrupt.y]!.includes(`› ${SWITCH_SESSION_LABELS.confirm}`), "it only moved the cursor");
+
+		// 双击“留在当前会话”= 取消。
+		h.panel.handleMouse(mouseEvent("click", stay.x, stay.y, { ...size, clickCount: 1 }));
+		h.panel.handleMouse(mouseEvent("click", stay.x, stay.y, { ...size, clickCount: 2 }));
+		await flush();
+		assert.equal(h.panel.state.mode, "normal");
 		assert.deepEqual(resumed, []);
-		const yes = `[ ${t("confirm.yes")} ]`;
-		const switchRow = lines.findIndex((line) => line.includes(yes));
-		const switchX = visibleWidth(lines[switchRow]!.slice(0, lines[switchRow]!.indexOf(yes)));
-		h.panel.handleMouse(mouseEvent("click", switchX, switchRow, { clickCount: 2, height: 24, width: 120 }));
+		assert.equal(h.closed(), false);
+
+		// 在确认框里对“切换”单击、再双击才是确认。
+		h.panel.handleMouse(mouseEvent("click", 2, 3, { ...size, clickCount: 2 }));
+		assert.equal(h.panel.state.mode, "confirm");
+		h.text(120);
+		h.panel.handleMouse(mouseEvent("click", interrupt.x, interrupt.y, { ...size, clickCount: 1 }));
+		assert.equal(h.panel.state.mode, "confirm", "a single click only selects");
+		assert.deepEqual(resumed, []);
+		h.panel.handleMouse(mouseEvent("click", interrupt.x, interrupt.y, { ...size, clickCount: 2 }));
 		await flush();
 		assert.deepEqual(resumed, ["/tmp/s2.jsonl"]);
 		assert.equal(h.closed(), true);

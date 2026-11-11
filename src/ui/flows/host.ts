@@ -17,7 +17,6 @@ import type { PanelState } from "../state.ts";
 import type { InputDialogSpec } from "../widgets/input-dialog.ts";
 import type { NoticeDialogSpec } from "../widgets/notice-dialog.ts";
 import type { SelectDialogSpec } from "../widgets/select-dialog.ts";
-import type { SwitchSessionDialogSpec } from "../widgets/switch-session-dialog.ts";
 
 export interface SettingsFlowHost extends FlowHost {
 	readonly settingsSource: SettingsSource | undefined;
@@ -54,8 +53,6 @@ export interface FlowHost {
 	openPrompt(mode: PanelMode, spec: InputDialogSpec): void;
 	/** Show the menu of a flow (a picker, a confirmation, an alert) in `mode` (the prompt, if up, closes first). */
 	openMenu(mode: PanelMode, spec: SelectDialogSpec): void;
-	/** Warn before leaving a running conversation (horizontal Yes / No, No by default); the mode becomes `confirm`. */
-	openSwitchSession(spec: SwitchSessionDialogSpec): void;
 	/** Show a read-only notice in `mode` (Radius device code / info); Esc / q calls its `onClose`. */
 	openNotice(mode: PanelMode, spec: NoticeDialogSpec): void;
 	/**

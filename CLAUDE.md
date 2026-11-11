@@ -90,13 +90,12 @@ src/
 │       ├── input-dialog.ts   # 通用的居中单行输入弹窗（包装 pi-tui Input，3 行高）：标题 / 预填值 / 提示 / 回调在 open 时传入
 │       ├── label-dialog.ts   # T 打标签：InputDialog 的预设（标题 + footer 提示）；给 session 起名等场景照此加预设
 │       ├── dialog-subject.ts # 弹窗标题栏右上角的“作用对象”：nodeSubject（树节点 角色 · 时间，打标签 / Enter 恢复共用）和 sessionSubject（会话 名字或模型 · 更新日期，永不用会被截断的首条消息预览）
-│       ├── select-dialog.ts  # 通用的居中选择菜单（j/k/方向键移动、Enter 确认、Esc 取消，高度 = 选项数 + 2；spec.shortcuts 让某个键直接选中某一项）：标题 / 选项 / 回调在 open 时传入
+│       ├── select-dialog.ts  # 通用的居中选择菜单（j/k/方向键移动、Enter 确认、Esc 取消，高度 = 选项数 + 2；spec.shortcuts 让某个键直接选中某一项）：标题 / 选项 / 回调在 open 时传入。鼠标走 click()：双击 = Enter 只在两下都点在这个菜单的同一项上时成立，打开菜单的那次连击不会顺手把它答了
 │       ├── restore-dialog.ts # TREE Enter 的预设：Summarize branch? 三选菜单的标题 / 选项 / 提示 + 自定义摘要指令输入框的标题 / 提示
 │       ├── fork-dialog.ts    # o 分叉：选择器（user 消息列表，可滚动）的标题 / 提示；确认框右上角只显示 #序号/总数
 │       ├── rename-dialog.ts  # r 给会话改名：InputDialog 的预设（标题 Rename + footer 提示，空值清除名字）
 │       ├── tree-dialog.ts    # a 打开的完整树对话框：顶部搜索行（PromptBar，实时搜索，Esc 退出搜索框但关键字保留、Enter 无含义；没焦点时只显示关键字或 `/ to search`）、中间画树线的树（和面板共用折叠状态，折叠的段头画 ⊞），几乎占满终端；快捷键只在面板底部 footer 显示（对话框里不做 ? 帮助）。只管画、搜索框和自己的光标；行的搜索 / 过滤 / 折叠由 app.ts 算好 setRows，按键也由 app.ts 按 tree-dialog scope 解析后调用它的方法
-│       ├── confirm-dialog.ts # 删除 / fork / clone / 导入 / 覆盖导出文件前的确认框：SelectDialog 的预设（confirmDialogSpec：Yes / No，默认停在 No，y / n 直接选，Enter 确认，Esc 取消）
-│       ├── switch-session-dialog.ts # 当前对话运行中、进入其他会话前的专用确认框（SwitchSessionDialog，FlowHost.openSwitchSession 打开）：文案固定，spec 只带目标会话和回调；是 / 否固定左右一行、默认否，←/→ 切换、y 确认、n / Esc 取消；只有它是左右按钮
+│       ├── confirm-dialog.ts # 删除 / fork / clone / 导入 / 覆盖导出文件前的确认框：SelectDialog 的预设（confirmDialogSpec：Yes / No，默认停在 No，y / n 直接选，Enter 确认，Esc 取消）。当前对话运行中、进入其他会话前的确认也是它：labels 把 是 / 否 换成写明后果的两项（切换并中断当前正在进行的对话! / 留在当前会话），目标会话在标题栏右侧，不另做组件
 │       ├── share-dialog.ts   # S 分享：目的地菜单（Auto / GitHub Gist / Radius）的标题 / 选项 / 提示；Auto 是 Gist 优先，初始光标来自 pi 的 sessionShareDestination
 │       ├── radius-account-dialog.ts # S → Radius 已登录时的账号菜单（分享到 Radius / 退出登录）的标题 / 选项 / 提示
 │       ├── radius-login-dialog.ts # S → Radius 未登录时接管 `/login radius`：账号 / API Key 菜单，以及 pi 浏览器 / 设备码选择菜单的标题 / 选项（i18n 后的文案）
@@ -184,7 +183,7 @@ test/                        # 目录是 src 分层的镜像：一个模块的�
     │   └── settings-flows.test.ts # 设置流程：General 选择即写 / 取消与撤销不写、回到隐式默认清掉覆盖、成功提示带值、scope 菜单、恢复默认只删已有覆盖、脏退出二次确认
     └── widgets/              # 弹窗组件级测试（构造组件、喂按键、看渲染）
         ├── modal.test.ts     # 弹窗外观与叠加：背景降级、嵌套不叠加样式、窄边距裁剪、统一边框与 footer 优先级
-        ├── switch-session-dialog.test.ts # 切换会话确认框：中英文各宽度下按钮同一行且是在左、默认否（Enter / n / Esc 不确认）、方向键只移动、鼠标只命中按钮、长目标完整换行、矮窗口压缩说明仍保留按钮、关闭后清掉命中区域
+        ├── confirm-dialog.test.ts # 确认框预设：运行中切换会话的确认和删除确认同高同键（中英文、各宽度下两项各占一行且行宽不变），默认停在“留在当前会话”，只有 y / 第一项上的 Enter 才切换
         ├── dialog-header.test.ts # 标题栏几何：Esc / 提示 / 主体在长标题下仍可见、窄宽度退让
         ├── help.test.ts      # ? 帮助：固定高度与小终端收缩、边框提示、条目保留 ActionId / alias / 绑定、跨语言换行
         ├── context-dialog.test.ts # u 上下文与 prompt 详情：分类导航夹取、Enter 与统计行、prompt 预览滚动 / 复制、footer 提示不重复、鼠标点选

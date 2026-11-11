@@ -12,7 +12,6 @@ import { overlayHelp } from "../../../src/ui/widgets/help-overlay.ts";
 import { InputDialog } from "../../../src/ui/widgets/input-dialog.ts";
 import { PromptDetailDialog } from "../../../src/ui/widgets/prompt-detail-dialog.ts";
 import { SelectDialog } from "../../../src/ui/widgets/select-dialog.ts";
-import { SwitchSessionDialog } from "../../../src/ui/widgets/switch-session-dialog.ts";
 import { SessionInfoDialog } from "../../../src/ui/widgets/session-info-dialog.ts";
 import { createSettingsState } from "../../../src/ui/settings-state.ts";
 import { DEFAULT_CONFIG } from "../../../src/config/config.ts";
@@ -105,8 +104,6 @@ test("every dialog uses the same subdued backdrop and keeps single-line accent b
 	input.open({ title: "Input", hints: [], value: "value", onSubmit: () => {}, onCancel: () => {} });
 	const select = new SelectDialog({ theme, onChange: () => {} });
 	select.open({ title: "Menu", items: ["Yes", "No"], hints: [], onSelect: () => {}, onCancel: () => {} });
-	const switchSession = new SwitchSessionDialog({ theme, onChange: () => {} });
-	switchSession.open({ target: "beta", onConfirm: () => {}, onCancel: () => {} });
 	const tree = new TreeDialog({ theme, onChange: () => {} });
 	tree.open({ rows: [], filter: "default" });
 	const info = new SessionInfoDialog({ theme });
@@ -120,7 +117,7 @@ test("every dialog uses the same subdued backdrop and keeps single-line accent b
 	const state = createSettingsState();
 	state.phase = "open";
 	const settings = new SettingsDialog({ state, config: DEFAULT_CONFIG, theme, onChange: () => {}, onClose: () => {} });
-	const widgets = [input, select, switchSession, tree, info, usage, detail, changelog, settings];
+	const widgets = [input, select, tree, info, usage, detail, changelog, settings];
 	const base = Array.from({ length: 26 }, () => `\x1b[31m${"x".repeat(100)}\x1b[39m`);
 	const renders = widgets.map((widget) => widget.overlay(base, 100));
 	renders.push(overlayHelp(base, { keymap: DEFAULT_KEYMAP, focus: "sessions", cursor: 0, scroll: 0, theme }, 100));

@@ -102,7 +102,6 @@ import { renderSearchStatus, SearchBar } from "./widgets/search-bar.ts";
 import { SelectDialog, type SelectDialogSpec } from "./widgets/select-dialog.ts";
 import { SessionInfoDialog } from "./widgets/session-info-dialog.ts";
 import { SettingsDialog } from "./widgets/settings-dialog.ts";
-import { SwitchSessionDialog, type SwitchSessionDialogSpec } from "./widgets/switch-session-dialog.ts";
 import { TreeDialog } from "./widgets/tree-dialog.ts";
 
 export interface LazyPanelOptions {
@@ -217,8 +216,6 @@ export class LazyPanel implements Component, Focusable {
 	private readonly inputDialog: InputDialog;
 	/** Shared centered menu: the "Summarize branch?" choice and the delete confirmation. */
 	private readonly selectDialog: SelectDialog;
-	/** Warning before leaving a running conversation: Yes and No side by side. */
-	private readonly switchDialog: SwitchSessionDialog;
 	/** Centered read-only notice: Radius sign-in URL / device code. */
 	private readonly noticeDialog: NoticeDialog;
 	/** Full tree in a big box (`a` in the tree pane) with its own cursor, live search and the filter keys. */
@@ -300,10 +297,6 @@ export class LazyPanel implements Component, Focusable {
 			theme: o.theme,
 			onChange: () => this.o.requestRender(),
 		});
-		this.switchDialog = new SwitchSessionDialog({
-			theme: o.theme,
-			onChange: () => this.o.requestRender(),
-		});
 		this.noticeDialog = new NoticeDialog({ theme: o.theme });
 		this.treeDialog = new TreeDialog({
 			theme: o.theme,
@@ -339,8 +332,7 @@ export class LazyPanel implements Component, Focusable {
 		});
 		this.overlays = [
 			widgetOverlay(this.inputDialog),
-			{ ...widgetOverlay(this.switchDialog), handleMouse: (event) => this.choiceDialogMouse(event, this.switchDialog) },
-			{ ...widgetOverlay(this.selectDialog), handleMouse: (event) => this.choiceDialogMouse(event, this.selectDialog) },
+			{ ...widgetOverlay(this.selectDialog), handleMouse: (event) => this.selectDialogMouse(event) },
 			widgetOverlay(this.noticeDialog),
 			widgetOverlay(this.infoDialog),
 			{ ...widgetOverlay(this.usageDialog), handleMouse: (event) => this.usageMouse(event) },
@@ -404,7 +396,6 @@ export class LazyPanel implements Component, Focusable {
 			currentSessionRow: () => this.currentSessionRow(),
 			openPrompt: (mode, spec) => this.openPrompt(mode, spec),
 			openMenu: (mode, spec) => this.openMenu(mode, spec),
-			openSwitchSession: (spec) => this.openSwitchSession(spec),
 			openNotice: (mode, spec) => this.openNotice(mode, spec),
 			setPendingCancel: (cancel) => {
 				this.pendingCancel = cancel;
@@ -812,7 +803,6 @@ export class LazyPanel implements Component, Focusable {
 	 */
 	private openPrompt(mode: PanelMode, spec: InputDialogSpec): void {
 		this.selectDialog.close();
-		this.switchDialog.close();
 		this.noticeDialog.close();
 		this.clearStatus();
 		this.state.mode = mode;
@@ -823,7 +813,6 @@ export class LazyPanel implements Component, Focusable {
 
 	/** Show the menu of a flow (a picker, a confirmation, an alert) in `mode`; the text prompt (if any) closes first. */
 	private openMenu(mode: PanelMode, spec: SelectDialogSpec): void {
-		this.switchDialog.close();
 		this.inputDialog.close();
 		this.inputDialog.focused = false;
 		this.noticeDialog.close();
@@ -833,22 +822,9 @@ export class LazyPanel implements Component, Focusable {
 		this.o.requestRender();
 	}
 
-	/** The running-conversation warning has its own component; the other dialogs close first. */
-	private openSwitchSession(spec: SwitchSessionDialogSpec): void {
-		this.selectDialog.close();
-		this.inputDialog.close();
-		this.inputDialog.focused = false;
-		this.noticeDialog.close();
-		this.clearStatus();
-		this.state.mode = "confirm";
-		this.switchDialog.open(spec);
-		this.o.requestRender();
-	}
-
 	/** Show a read-only notice (Radius sign-in URL / device code); the prompt and menu (if any) close first. */
 	private openNotice(mode: PanelMode, spec: NoticeDialogSpec): void {
 		this.selectDialog.close();
-		this.switchDialog.close();
 		this.inputDialog.close();
 		this.inputDialog.focused = false;
 		this.clearStatus();
@@ -866,7 +842,6 @@ export class LazyPanel implements Component, Focusable {
 	private closeDialogs(): void {
 		this.state.mode = this.baseMode();
 		this.selectDialog.close();
-		this.switchDialog.close();
 		this.inputDialog.close();
 		this.inputDialog.focused = false;
 		this.noticeDialog.close();
@@ -1027,15 +1002,14 @@ export class LazyPanel implements Component, Focusable {
 	}
 
 	/** 确认框 / 警告框 / 恢复菜单 / fork 选择器 / TREE 过滤：单击选中，双击 = Enter，滚轮移动光标。 */
-	private choiceDialogMouse(event: TuiMouseEvent, dialog: SelectDialog | SwitchSessionDialog): TuiMouseEventResult | undefined {
+	private selectDialogMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
 		return this.overlayMouse(
 			event,
-			() => dialog.wheel(event.x, event.y, event.wheelDelta ?? 0),
+			() => this.selectDialog.wheel(event.x, event.y, event.wheelDelta ?? 0),
 			(double) => {
-				const index = dialog.indexAt(event.x, event.y);
-				if (index === undefined) return;
-				dialog.moveTo(index);
-				if (double) dialog.activate();
+				const index = this.selectDialog.indexAt(event.x, event.y);
+				// 双击的两下都要点在同一项上才算 Enter（SelectDialog.click）：打开菜单的那次连击不会顺手把它答了。
+				if (index !== undefined) this.selectDialog.click(index, double);
 			},
 		);
 	}

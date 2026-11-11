@@ -21,7 +21,7 @@
  */
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { truncateToWidth } from "@earendil-works/pi-tui";
 import { matchesKeyId } from "../../config/keys.ts";
 import type { KeyHint } from "../../types.ts";
 import { clamp } from "../../utils/indices.ts";
@@ -31,8 +31,6 @@ import { boxCell, boxContains, centeredRect, dialogWidth, fit, frame, metaBudget
 export interface SelectDialogSpec {
 	/** Title on the top border, e.g. "Summarize branch?". */
 	title: string;
-	/** Optional explanatory text above the entries; wraps without becoming selectable. */
-	message?: string;
 	/** Menu entries, top to bottom. */
 	items: string[];
 	/** Cursor position when the menu opens (clamped into `items`). */
@@ -81,8 +79,8 @@ export class SelectDialog {
 	private scroll = 0;
 	/** 上一次绘制时这个菜单在屏幕上的位置（`overlay()` 里记）；鼠标命中只认这一份，没画过就点不到。 */
 	private boxRect: BoxRect | undefined;
-	/** Message rows and their separator are not menu entries. */
-	private itemRowOffset = 0;
+	/** Entry the previous click landed on since this menu opened (see `click`). */
+	private clickedIndex: number | undefined;
 
 	constructor(private readonly o: SelectDialogOptions) {}
 
@@ -107,7 +105,7 @@ export class SelectDialog {
 		this.index = clamp(spec.initialIndex ?? 0, 0, spec.items.length - 1);
 		this.scroll = 0;
 		this.boxRect = undefined;
-		this.itemRowOffset = 0;
+		this.clickedIndex = undefined;
 		this.ensureVisible();
 	}
 
@@ -115,7 +113,7 @@ export class SelectDialog {
 	close(): void {
 		this.spec = undefined;
 		this.boxRect = undefined;
-		this.itemRowOffset = 0;
+		this.clickedIndex = undefined;
 	}
 
 	handleInput(data: string): void {
@@ -178,6 +176,23 @@ export class SelectDialog {
 	}
 
 	/**
+	 * A click on entry `index`: the cursor goes there, and a double-click picks it
+	 * (same as Enter) — provided the click before it hit this entry of this menu
+	 * too. A menu can open under the pointer halfway through a multi-click
+	 * (double-clicking a session opens the switch confirmation); what is left of
+	 * that multi-click must not answer a question nobody has read yet.
+	 *
+	 * 双击 = Enter 只在“上一下也点在这个菜单的同一项”时成立：菜单可能在一次连击的中途
+	 * 弹出来（双击会话 → 运行中切换的确认框），连击剩下的那一下只选中、不确认。
+	 */
+	click(index: number, double: boolean): void {
+		const repeated = this.clickedIndex === index;
+		this.moveTo(index);
+		this.clickedIndex = index;
+		if (double && repeated) this.activate();
+	}
+
+	/**
 	 * Entry under the cell (x, y), using the box position of the last draw: undefined
 	 * on the border, outside the menu, or past the last entry.
 	 *
@@ -186,9 +201,7 @@ export class SelectDialog {
 	indexAt(x: number, y: number): number | undefined {
 		const cell = this.boxRect ? boxCell(this.boxRect, x, y) : undefined;
 		if (!cell) return undefined;
-		const row = cell.row - this.itemRowOffset;
-		if (row < 0) return undefined;
-		const index = this.scroll + row;
+		const index = this.scroll + cell.row;
 		return index < (this.spec?.items.length ?? 0) ? index : undefined;
 	}
 
@@ -217,7 +230,7 @@ export class SelectDialog {
 		this.scroll = Math.max(0, Math.min(this.scroll, count - rows));
 	}
 
-	/** Render the explanation, visible entries and borders, every line exactly `width` columns. */
+	/** Render the box itself: one row per visible entry plus the borders, every line exactly `width` columns. */
 	render(width: number): string[] {
 		const { theme } = this.o;
 		const title = this.spec?.title ?? "";
@@ -227,11 +240,6 @@ export class SelectDialog {
 		// tone 覆盖强调色（警告框传 "error"：红色的边框 / 标题 / 选中项），默认沿用 accent。
 		const accentColor = this.spec?.tone ?? "accent";
 		const borderColor = this.spec?.tone ?? "borderAccent";
-		const message = this.spec?.message;
-		const messageRows = message
-			? [...wrapTextWithAnsi(message, Math.max(1, inner - 2)).map((line) => theme.fg("text", ` ${line}`)), ""]
-			: [];
-		this.itemRowOffset = messageRows.length;
 		const body = items.slice(this.scroll, this.scroll + rows).map((item, k) => {
 			const i = this.scroll + k;
 			const selected = i === this.index;
@@ -241,9 +249,9 @@ export class SelectDialog {
 			return selected ? theme.bg("selectedBg", fit(line, inner)) : line;
 		});
 		const meta = truncateToWidth(this.spec?.subject ?? "", metaBudget(width, title) - 3, "…", false);
-		return frame([...messageRows, ...body], {
+		return frame(body, {
 			width,
-			height: messageRows.length + rows + 2,
+			height: rows + 2,
 			title,
 			...(meta ? { meta } : {}),
 			border: (s) => theme.fg(borderColor, s),

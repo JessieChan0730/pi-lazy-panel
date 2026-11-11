@@ -367,10 +367,9 @@
     "import": "Import and switch to it?",
     "overwrite": "Overwrite file?",
     "radiusSignOut": "Sign out of Radius?",
-    "switchRunning": "Switch session",
-    "switchRunningMessage": "Switching interrupts the task in progress.",
-    "switchRunningTarget": "Switch to",
-    "switchRunningWarning": "The current conversation is running"
+    "switchRunning": "Switch session?",
+    "switchRunningInterrupt": "Switch and interrupt the running conversation!",
+    "switchRunningStay": "Stay in the current session"
   },
   "info": {
     "name": "Name",
