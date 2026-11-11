@@ -200,6 +200,8 @@ test("settings writes General fields as soon as they are picked, applies languag
 });
 
 test("the entry point checks live pi activity before switching and cancellation never calls switchSession or abort", async (ctx) => {
+	// 隔离运行中动画的轮询，避免异步等待期间定时器额外调用 isIdle 干扰切换守卫的计数。
+	ctx.mock.timers.enable({ apis: ["setInterval"] });
 	const dir = await mkdtemp(join(tmpdir(), "lazy-panel-running-"));
 	const previous = process.env.PI_CODING_AGENT_DIR;
 	process.env.PI_CODING_AGENT_DIR = dir;
