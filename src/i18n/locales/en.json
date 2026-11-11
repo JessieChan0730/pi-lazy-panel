@@ -133,6 +133,7 @@
     "emptySession": "(empty session)",
     "msgs": "{{count}} msgs",
     "current": "(current)",
+    "running": "running",
     "selected": "{{count}} selected",
     "pinnedGroup": "PINNED",
     "othersGroup": "OTHERS",

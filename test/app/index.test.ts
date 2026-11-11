@@ -36,9 +36,14 @@ function fakeUi(overrides: Record<string, unknown> = {}): Record<string, unknown
 type Command = Parameters<ExtensionAPI["registerCommand"]>[1];
 type PanelFactory = (tui: unknown, theme: Theme, keybindings: unknown, done: () => void) => LazyPanel;
 
-function registeredCommand(): Command {
+type Listener = (event: unknown, ctx: unknown) => unknown;
+
+/** Load the extension into a fake pi: its command plus `emit` to fire the pi events it subscribed to. */
+function registeredExtension(): { command: Command; emit: (event: string) => void } {
 	const commands: Command[] = [];
-	const pi: Pick<ExtensionAPI, "registerCommand" | "registerShortcut" | "sendUserMessage"> = {
+	const listeners = new Map<string, Listener[]>();
+	const pi: Pick<ExtensionAPI, "registerCommand" | "registerShortcut" | "sendUserMessage"> & { on: (event: string, handler: Listener) => void } = {
+		on: (event, handler) => void listeners.set(event, [...(listeners.get(event) ?? []), handler]),
 		registerCommand: (name, command) => {
 			assert.equal(name, "lazy-panel");
 			commands.push(command);
@@ -47,8 +52,17 @@ function registeredCommand(): Command {
 		registerShortcut: () => {},
 		sendUserMessage: () => {},
 	};
-	extension(pi as ExtensionAPI);
-	return commands[0]!;
+	extension(pi as unknown as ExtensionAPI);
+	return {
+		command: commands[0]!,
+		emit: (event) => {
+			for (const handler of listeners.get(event) ?? []) handler({ type: event }, {});
+		},
+	};
+}
+
+function registeredCommand(): Command {
+	return registeredExtension().command;
 }
 
 test("registered settings argument bypasses unbound keys and opens before session loading, without writing config", async (ctx) => {
@@ -228,8 +242,10 @@ test("the entry point checks live pi activity before switching and cancellation 
 				});
 				try {
 					await panel.load();
-					assert.equal(idleQueries, 0, "activity is not cached when the panel opens");
+					// 打开时为了运行中标记会查一次活动状态，但切换前必须重新查，不能用那次的结果。
+					const atOpen = idleQueries;
 					panel.handleInput("\r");
+					assert.equal(idleQueries, atOpen + 1, "the switch guard asks pi again instead of reusing what the panel saw at open");
 					assert.equal(panel.state.mode, "confirm");
 					assert.match(panel.render(120).join("\n"), /Switch and interrupt the running conversation!/);
 					assert.deepEqual(switched, []);
@@ -238,11 +254,12 @@ test("the entry point checks live pi activity before switching and cancellation 
 					assert.equal(closed, false);
 					assert.deepEqual(switched, []);
 					idle = true;
+					const beforeRetry = idleQueries;
 					panel.handleInput("\r");
 					await delay(0);
 					assert.deepEqual(switched, [file]);
 					assert.equal(closed, true);
-					assert.equal(idleQueries, 2);
+					assert.equal(idleQueries, beforeRetry + 1);
 				} finally {
 					panel.dispose();
 				}
@@ -250,6 +267,71 @@ test("the entry point checks live pi activity before switching and cancellation 
 		}),
 	} as unknown as ExtensionCommandContext;
 	await registeredCommand().handler("", context);
+});
+
+test("agent_start reaches the open panel so the current session starts spinning, and is ignored once it is closed", async (ctx) => {
+	ctx.mock.timers.enable({ apis: ["setInterval"] });
+	const dir = await mkdtemp(join(tmpdir(), "lazy-panel-activity-"));
+	const previous = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = dir;
+	ctx.after(async () => {
+		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previous;
+		await rm(dir, { recursive: true, force: true });
+	});
+	await writeFile(join(dir, "lazy-panel.json"), JSON.stringify({ locale: "en" }));
+	const file = join(dir, "a.jsonl");
+	const now = new Date();
+	const entries = [
+		{ type: "session", version: CURRENT_SESSION_VERSION, id: "session-a", timestamp: now.toISOString(), cwd: dir },
+		{ type: "message", id: "u1", parentId: null, timestamp: now.toISOString(), message: { role: "user", content: [{ type: "text", text: "A conversation" }], timestamp: now.getTime() } },
+	];
+	await writeFile(file, `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
+	ctx.mock.method(SessionManager, "list", async () => [{ path: file, id: "session-a", cwd: dir, name: "Alpha", created: now, modified: now, messageCount: 1, firstMessage: "A conversation", allMessagesText: "A conversation" }]);
+	let idle = true;
+	let renders = 0;
+	const { command, emit } = registeredExtension();
+	let opened: LazyPanel | undefined;
+	const context = {
+		mode: "tui",
+		cwd: dir,
+		isProjectTrusted: () => false,
+		isIdle: () => idle,
+		sessionManager: { getSessionFile: () => file },
+		ui: fakeUi({
+			custom: async (factory: PanelFactory) => {
+				const panel = factory({ mode: "fullscreen", terminal: { rows: 24, columns: 120 }, requestRender: () => void renders++ }, theme, {}, () => {});
+				opened = panel;
+				try {
+					await panel.load();
+					// 200 列：左栏够宽，标记带得上 running 这个词
+					const row = () => panel.render(200).find((line) => line.includes("Alpha")) ?? "";
+					assert.match(row(), /Alpha\(current\)/);
+					// 面板开着时 pi 开始跑（比如排队的后续消息）
+					idle = false;
+					const before = renders;
+					emit("agent_start");
+					assert.match(row(), /Alpha ⠋ running/);
+					assert.ok(renders > before, "the panel repaints as soon as the run starts");
+					ctx.mock.timers.tick(80);
+					assert.match(row(), /Alpha ⠙ running/);
+					idle = true;
+					ctx.mock.timers.tick(80);
+					assert.match(row(), /Alpha\(current\)/);
+				} finally {
+					panel.dispose();
+				}
+			},
+		}),
+	} as unknown as ExtensionCommandContext;
+	await command.handler("", context);
+	// 面板关掉以后的事件不再碰它
+	idle = false;
+	const after = renders;
+	emit("agent_start");
+	ctx.mock.timers.tick(1200);
+	assert.equal(renders, after);
+	assert.ok(opened);
 });
 
 /** Poll until `check` holds: the command reads its config files before pi's `custom()` factory runs. */

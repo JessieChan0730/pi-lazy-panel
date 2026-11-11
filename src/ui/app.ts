@@ -37,7 +37,7 @@ import type { ResolvedConfig } from "../config/config.ts";
 import type { Component, Focusable, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
 import { type Binding, compileKeymap, labelsFor, labelsForFocus, matchesKeyId, resolveKeys } from "../config/keys.ts";
 import { DEFAULT_KEYMAP, FOCUS_ACTIONS, isDisabledIn, paneTitleText, TREE_DIALOG_FOOTER, treeDialogHintText } from "../config/keymap.ts";
-import { DEFAULT_OPEN_SHORTCUT, LEFT_COLUMN_RATIO, PANE_IDS, SESSION_SORT_MODES, SPINNER_INTERVAL_MS, TREE_DIALOG_SCOPE } from "../constants.ts";
+import { DEFAULT_OPEN_SHORTCUT, LEFT_COLUMN_RATIO, PANE_IDS, RUNNING_INTERVAL_MS, SESSION_SORT_MODES, SPINNER_INTERVAL_MS, TREE_DIALOG_SCOPE } from "../constants.ts";
 import { t } from "../i18n/index.ts";
 import { clamp, findLastIndex, indicesWhere } from "../utils/indices.ts";
 import { sessionFileKey } from "../utils/session-file-key.ts";
@@ -250,6 +250,10 @@ export class LazyPanel implements Component, Focusable {
 	private changelogMd: string | undefined;
 	/** Ticker that rotates the changelog loading spinner while the markdown is fetched / rendered. */
 	private changelogSpinner: ReturnType<typeof setInterval> | undefined;
+	/** Ticker behind the SESSIONS "running" spinner; it only exists while pi's agent is busy in the current session. */
+	private runningSpinner: ReturnType<typeof setInterval> | undefined;
+	/** Frame of that spinner (see `SessionsPaneProps.runningFrame`). */
+	private runningFrame = 0;
 	/** True while an Enter action is waiting for pi (keys are ignored, the panel is hidden). */
 	private entering = false;
 	/** Keys of an unfinished multi-key sequence such as "gg" (panes and tree dialog alike). */
@@ -459,6 +463,7 @@ export class LazyPanel implements Component, Focusable {
 
 	/** Load sessions, then the tree + content for the cursor session. */
 	async load(): Promise<void> {
+		this.syncActivity();
 		this.setStatus(t("status.loadingSessions"));
 		// 首次加载：光标落到 pi 当前打开的会话上（新会话还没列出来时就留在第一行）。
 		// 之后 C / A 切范围重新加载时不再定位，光标照旧回到顶部。
@@ -2142,6 +2147,37 @@ export class LazyPanel implements Component, Focusable {
 		this.o.requestRender();
 	}
 
+	/**
+	 * Start the SESSIONS "running" spinner when pi's agent is busy in the current
+	 * session. Called on load and by the entry point when pi starts a run; the
+	 * ticker stops itself once pi is idle again.
+	 *
+	 * 面板开着的时候 agent 可能开始 / 结束：开始由入口转发 pi 的 agent_start，结束由定时器
+	 * 每一帧自己查 isAgentIdle（不依赖结束事件，标记不会一直挂着）。
+	 */
+	syncActivity(): void {
+		if (this.disposed || this.runningSpinner || !this.agentRunning()) return;
+		const timer = setInterval(() => {
+			this.runningFrame++;
+			if (!this.agentRunning()) this.stopRunningSpinner();
+			this.o.requestRender();
+		}, RUNNING_INTERVAL_MS);
+		// unref：不让这个定时器拖住进程（尤其是测试）。
+		timer.unref?.();
+		this.runningSpinner = timer;
+		this.o.requestRender();
+	}
+
+	/** True while pi is working in the session it has open (the only session whose activity this process knows). */
+	private agentRunning(): boolean {
+		return this.currentSessionFile !== undefined && this.o.data.isAgentIdle?.() === false;
+	}
+
+	private stopRunningSpinner(): void {
+		if (this.runningSpinner) clearInterval(this.runningSpinner);
+		this.runningSpinner = undefined;
+	}
+
 	/** Rotate the changelog loading spinner one frame every SPINNER_INTERVAL_MS. */
 	private startChangelogSpinner(): void {
 		this.stopChangelogSpinner();
@@ -2252,6 +2288,7 @@ export class LazyPanel implements Component, Focusable {
 		this.cancelPending();
 		this.settingsDialog.dispose();
 		this.stopChangelogSpinner();
+		this.stopRunningSpinner();
 		this.keys.clear();
 		this.archiveSearchKeys.clear();
 		this.clearSessionLoad();
@@ -2308,6 +2345,7 @@ export class LazyPanel implements Component, Focusable {
 					title: this.paneTitle("sessions"),
 					theme,
 					...(this.currentSessionFile ? { currentFile: this.currentSessionFile } : {}),
+					...(this.runningSpinner ? { runningFrame: this.runningFrame } : {}),
 					...(sessionsSearch ? { search: sessionsSearch } : {}),
 				},
 				leftW,

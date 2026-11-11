@@ -214,6 +214,8 @@ test("extension factories: root shim and direct source entry resolve only their 
 		host.commands.push(slashCommand("lazy-panel:1", other));
 		factory({
 			...host.pi,
+			// 扩展工厂还会订阅 agent_start（运行中标记），这里用不到。
+			on: (() => {}) as Parameters<typeof extension>[0]["on"],
 			registerCommand(name, _command) {
 				assert.equal(name, "lazy-panel");
 				host.commands.push(slashCommand("lazy-panel:2", own));
