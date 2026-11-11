@@ -96,6 +96,7 @@ async function openPanel(pi: ExtensionAPI, ctx: ExtensionCommandContext, args: s
 	// treeFilterMode 是内置 /tree 的默认过滤，面板的 TREE 也从它开始。
 	const piSettings = loadPiSettings(ctx.cwd, getAgentDir(), ctx.isProjectTrusted());
 	const data: DataSource = {
+		isAgentIdle: () => ctx.isIdle(),
 		loadSessionState: async () => loadSessionFileState(getAgentDir()),
 		listSessions: async (scope, sort, pinned, filter) => sortSessions(filterSessions(await listSessions({ cwd: ctx.cwd, scope }), filter), sort, pinned),
 		// 归档框读取所有目录的归档行（不受 C/A 范围限制），打开时默认只看当前项目，`p` 可切到所有项目。
@@ -190,6 +191,11 @@ async function openPanel(pi: ExtensionAPI, ctx: ExtensionCommandContext, args: s
 				getHeight: () => tui.terminal.rows,
 				requestRender: () => tui.requestRender(),
 				onClose: () => done(),
+				// pi 1.5 切换会话 / reload 时直接移除 overlay 并 dispose 面板，但不 resolve ctx.ui.custom。
+				// 不补调 done() 的话命令永远不结束：panelOpen 不复位（模块被缓存，之后再也打不开）、
+				// 鼠标上报不关、手动输入 /lazy-panel 时 pi 的输入循环也一直卡着。pi 的 done 自带
+				// closed 标记，正常关闭（done → dispose）时这里的第二次调用是 no-op。
+				onDispose: () => done(),
 				setHidden: (hidden) => setHidden?.(hidden),
 				keymap: config.keymap,
 				initialState: { scope: config.defaultScope, sort: config.defaultSort, treeFilter: piSettings.treeFilter },

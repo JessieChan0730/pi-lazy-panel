@@ -58,7 +58,7 @@ npm run ci             # CI 入口（.github/workflows/ci.yml 调用）：跑和
 
 ```
 src/
-├── index.ts                  # 入口：registerCommand("/lazy-panel")（命令本体在 openPanel）用 ctx.ui.custom 打开全屏面板；同时 registerShortcut 注册 pi 全局快捷键（默认 alt+l，走 sendUserMessage 重新进入命令）
+├── index.ts                  # 入口：registerCommand("/lazy-panel")（命令本体在 openPanel）用 ctx.ui.custom 打开全屏面板；同时 registerShortcut 注册 pi 全局快捷键（默认 alt+l，走 sendUserMessage 重新进入命令）。pi 1.5 切换会话 / reload 时只 dispose 面板、不 resolve ctx.ui.custom，所以面板的 onDispose 也调 done()，否则命令不结束（防重入标记不复位、鼠标上报不关）
 ├── types.ts                  # 共享类型（只放类型，禁止运行时代码）
 ├── constants.ts              # 常量：扩展 id、命令名、pi 级快捷键默认值（DEFAULT_OPEN_SHORTCUT = alt+l）、布局比例、面板 id、排序循环顺序（SESSION_SORT_MODES）、键位 scope（KEY_SCOPES = global + 面板 + tree-dialog）
 ├── ui/                       # 渲染层：pi-tui Component。不做 I/O，不调用 pi 会话 API
@@ -90,12 +90,12 @@ src/
 │       ├── input-dialog.ts   # 通用的居中单行输入弹窗（包装 pi-tui Input，3 行高）：标题 / 预填值 / 提示 / 回调在 open 时传入
 │       ├── label-dialog.ts   # T 打标签：InputDialog 的预设（标题 + footer 提示）；给 session 起名等场景照此加预设
 │       ├── dialog-subject.ts # 弹窗标题栏右上角的“作用对象”：nodeSubject（树节点 角色 · 时间，打标签 / Enter 恢复共用）和 sessionSubject（会话 名字或模型 · 更新日期，永不用会被截断的首条消息预览）
-│       ├── select-dialog.ts  # 通用的居中选择菜单（j/k/方向键移动、Enter 确认、Esc 取消，高度 = 选项数 + 2；spec.shortcuts 让某个键直接选中某一项）：标题 / 选项 / 回调在 open 时传入
+│       ├── select-dialog.ts  # 通用的居中选择菜单（j/k/方向键移动、Enter 确认、Esc 取消，高度 = 选项数 + 2；spec.shortcuts 让某个键直接选中某一项）：标题 / 选项 / 回调在 open 时传入。鼠标走 click()：双击 = Enter 只在两下都点在这个菜单的同一项上时成立，打开菜单的那次连击不会顺手把它答了
 │       ├── restore-dialog.ts # TREE Enter 的预设：Summarize branch? 三选菜单的标题 / 选项 / 提示 + 自定义摘要指令输入框的标题 / 提示
 │       ├── fork-dialog.ts    # o 分叉：选择器（user 消息列表，可滚动）的标题 / 提示；确认框右上角只显示 #序号/总数
 │       ├── rename-dialog.ts  # r 给会话改名：InputDialog 的预设（标题 Rename + footer 提示，空值清除名字）
 │       ├── tree-dialog.ts    # a 打开的完整树对话框：顶部搜索行（PromptBar，实时搜索，Esc 退出搜索框但关键字保留、Enter 无含义；没焦点时只显示关键字或 `/ to search`）、中间画树线的树（和面板共用折叠状态，折叠的段头画 ⊞），几乎占满终端；快捷键只在面板底部 footer 显示（对话框里不做 ? 帮助）。只管画、搜索框和自己的光标；行的搜索 / 过滤 / 折叠由 app.ts 算好 setRows，按键也由 app.ts 按 tree-dialog scope 解析后调用它的方法
-│       ├── confirm-dialog.ts # 删除 / fork / clone / 导入 / 覆盖导出文件前的确认框：SelectDialog 的预设（confirmDialogSpec：Yes / No，默认停在 No，y / n 直接选，Enter 确认，Esc 取消）
+│       ├── confirm-dialog.ts # 删除 / fork / clone / 导入 / 覆盖导出文件前的确认框：SelectDialog 的预设（confirmDialogSpec：Yes / No，默认停在 No，y / n 直接选，Enter 确认，Esc 取消）。当前对话运行中、进入其他会话前的确认也是它：labels 把 是 / 否 换成写明后果的两项（切换并中断当前正在进行的对话! / 留在当前会话），目标会话在标题栏右侧，不另做组件
 │       ├── share-dialog.ts   # S 分享：目的地菜单（Auto / GitHub Gist / Radius）的标题 / 选项 / 提示；Auto 是 Gist 优先，初始光标来自 pi 的 sessionShareDestination
 │       ├── radius-account-dialog.ts # S → Radius 已登录时的账号菜单（分享到 Radius / 退出登录）的标题 / 选项 / 提示
 │       ├── radius-login-dialog.ts # S → Radius 未登录时接管 `/login radius`：账号 / API Key 菜单，以及 pi 浏览器 / 设备码选择菜单的标题 / 选项（i18n 后的文案）
@@ -152,7 +152,7 @@ test/                        # 目录是 src 分层的镜像：一个模块的�
 │   ├── archive-panel.test.ts # X 归档框：跨目录扫描 / 项目筛选 / 实时搜索 / s 排序、Enter 恢复与 R 批量恢复（并保留弹窗）、d 拒绝当前会话、确认删除（文件 + 元数据）、加载失败、自定义多键
 │   ├── tree-filter.test.ts   # f 过滤菜单：五种模式 / 直选键 / 取消保留 / 面板与树对话框双向共享 / 清折叠 / 空结果恢复 / 失败回滚可重试 / 可配置与帮助 footer
 │   ├── label-time.test.ts    # T / L 与标签时间：可选的独立时间、宽度安全、选中背景与搜索高亮不断、跨树视图共享、清空同时移除、重新绑定 / 解绑 / 帮助执行
-│   ├── index.test.ts         # 扩展入口：带 settings 参数直开设置且不写配置、General 字段即时写入 / 语言即时生效 / scope·sort 下次打开生效、非 TUI 守卫
+│   ├── index.test.ts         # 扩展入口：带 settings 参数直开设置且不写配置、General 字段即时写入 / 语言即时生效 / scope·sort 下次打开生效、非 TUI 守卫、按 pi 1.5 切换会话只 dispose 不调 done 时命令仍结束（关鼠标上报、可再次打开）
 │   └── open-shortcut.test.ts # pi 级快捷键：loadConfigSync（默认 / 自定义 / null / 坏 JSON）和 registerOpenShortcut（注册键位、description、重新发 /lazy-panel、null 不注册）
 ├── actions/                  # 副作用层：临时会话文件 + 假外部命令
 │   ├── session-actions.test.ts # 临时会话文件上验证 isEffectiveLeaf / resumeSession / restoreNode 的分流与摘要选项透传、deleteSession（当前会话拒绝、trash → unlink 回退）、renameSession 的分流、new / fork / clone、export（默认路径 / JSONL 链 / 假 pi）/ import（复制 / 重名 / 清理副本）/ share（假 gh、假 Radius fetch、auto 的 Gist 优先与 Radius 回退、radius 不回落、pi.share entry）/ radiusAuthenticated / loginRadius、utils/paths
@@ -183,6 +183,7 @@ test/                        # 目录是 src 分层的镜像：一个模块的�
     │   └── settings-flows.test.ts # 设置流程：General 选择即写 / 取消与撤销不写、回到隐式默认清掉覆盖、成功提示带值、scope 菜单、恢复默认只删已有覆盖、脏退出二次确认
     └── widgets/              # 弹窗组件级测试（构造组件、喂按键、看渲染）
         ├── modal.test.ts     # 弹窗外观与叠加：背景降级、嵌套不叠加样式、窄边距裁剪、统一边框与 footer 优先级
+        ├── confirm-dialog.test.ts # 确认框预设：运行中切换会话的确认和删除确认同高同键（中英文、各宽度下两项各占一行且行宽不变），默认停在“留在当前会话”，只有 y / 第一项上的 Enter 才切换
         ├── dialog-header.test.ts # 标题栏几何：Esc / 提示 / 主体在长标题下仍可见、窄宽度退让
         ├── help.test.ts      # ? 帮助：固定高度与小终端收缩、边框提示、条目保留 ActionId / alias / 绑定、跨语言换行
         ├── context-dialog.test.ts # u 上下文与 prompt 详情：分类导航夹取、Enter 与统计行、prompt 预览滚动 / 复制、footer 提示不重复、鼠标点选

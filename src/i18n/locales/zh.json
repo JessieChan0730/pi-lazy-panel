@@ -366,7 +366,10 @@
     "fork": "分叉会话？",
     "import": "导入并切换过去？",
     "overwrite": "覆盖文件？",
-    "radiusSignOut": "退出 Radius 登录？"
+    "radiusSignOut": "退出 Radius 登录？",
+    "switchRunning": "切换会话？",
+    "switchRunningInterrupt": "切换并中断当前正在进行的对话!",
+    "switchRunningStay": "留在当前会话"
   },
   "info": {
     "name": "名称",

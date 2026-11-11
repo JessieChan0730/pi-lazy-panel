@@ -114,6 +114,12 @@ export interface LazyPanelOptions {
 	requestRender: () => void;
 	onClose: () => void;
 	/**
+	 * The host tore the panel down (`dispose()`), whether after `onClose` or on
+	 * its own: pi 1.5 disposes overlays on session switches and /reload without
+	 * resolving `ctx.ui.custom`, so the entry point ends its command here.
+	 */
+	onDispose?: () => void;
+	/**
 	 * Temporarily hide / show the panel while pi switches sessions, so prompts pi
 	 * raises meanwhile (e.g. "session cwd not found") are visible and get the keys.
 	 */
@@ -1002,9 +1008,8 @@ export class LazyPanel implements Component, Focusable {
 			() => this.selectDialog.wheel(event.x, event.y, event.wheelDelta ?? 0),
 			(double) => {
 				const index = this.selectDialog.indexAt(event.x, event.y);
-				if (index === undefined) return;
-				this.selectDialog.moveTo(index);
-				if (double) this.selectDialog.activate();
+				// 双击的两下都要点在同一项上才算 Enter（SelectDialog.click）：打开菜单的那次连击不会顺手把它答了。
+				if (index !== undefined) this.selectDialog.click(index, double);
 			},
 		);
 	}
@@ -2244,6 +2249,7 @@ export class LazyPanel implements Component, Focusable {
 		this.keys.clear();
 		this.archiveSearchKeys.clear();
 		this.clearSessionLoad();
+		this.o.onDispose?.();
 	}
 
 	private clearSessionLoad(): void {

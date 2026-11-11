@@ -79,6 +79,8 @@ export class SelectDialog {
 	private scroll = 0;
 	/** 上一次绘制时这个菜单在屏幕上的位置（`overlay()` 里记）；鼠标命中只认这一份，没画过就点不到。 */
 	private boxRect: BoxRect | undefined;
+	/** Entry the previous click landed on since this menu opened (see `click`). */
+	private clickedIndex: number | undefined;
 
 	constructor(private readonly o: SelectDialogOptions) {}
 
@@ -103,6 +105,7 @@ export class SelectDialog {
 		this.index = clamp(spec.initialIndex ?? 0, 0, spec.items.length - 1);
 		this.scroll = 0;
 		this.boxRect = undefined;
+		this.clickedIndex = undefined;
 		this.ensureVisible();
 	}
 
@@ -110,6 +113,7 @@ export class SelectDialog {
 	close(): void {
 		this.spec = undefined;
 		this.boxRect = undefined;
+		this.clickedIndex = undefined;
 	}
 
 	handleInput(data: string): void {
@@ -169,6 +173,23 @@ export class SelectDialog {
 		this.index = next;
 		this.ensureVisible();
 		this.o.onChange();
+	}
+
+	/**
+	 * A click on entry `index`: the cursor goes there, and a double-click picks it
+	 * (same as Enter) — provided the click before it hit this entry of this menu
+	 * too. A menu can open under the pointer halfway through a multi-click
+	 * (double-clicking a session opens the switch confirmation); what is left of
+	 * that multi-click must not answer a question nobody has read yet.
+	 *
+	 * 双击 = Enter 只在“上一下也点在这个菜单的同一项”时成立：菜单可能在一次连击的中途
+	 * 弹出来（双击会话 → 运行中切换的确认框），连击剩下的那一下只选中、不确认。
+	 */
+	click(index: number, double: boolean): void {
+		const repeated = this.clickedIndex === index;
+		this.moveTo(index);
+		this.clickedIndex = index;
+		if (double && repeated) this.activate();
 	}
 
 	/**

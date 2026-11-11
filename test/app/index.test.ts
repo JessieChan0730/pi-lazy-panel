@@ -5,9 +5,10 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { currentLocale, initI18n } from "../../src/i18n/index.ts";
-import { getAgentDir, type ExtensionAPI, type ExtensionCommandContext, type Theme } from "@earendil-works/pi-coding-agent";
+import { CURRENT_SESSION_VERSION, getAgentDir, SessionManager, type ExtensionAPI, type ExtensionCommandContext, type Theme } from "@earendil-works/pi-coding-agent";
 import extension from "../../src/index.ts";
 import { LazyPanel } from "../../src/ui/app.ts";
+import { DISABLE_MOUSE, ENABLE_MOUSE } from "../../src/ui/mouse-input.ts";
 
 const theme = {
 	fg: (_c: string, s: string) => s,
@@ -182,6 +183,172 @@ test("settings writes General fields as soon as they are picked, applies languag
 	await command.handler("settings", context);
 	await command.handler("settings", context);
 	assert.equal(opens, 2);
+});
+
+test("the entry point checks live pi activity before switching and cancellation never calls switchSession or abort", async (ctx) => {
+	const dir = await mkdtemp(join(tmpdir(), "lazy-panel-running-"));
+	const previous = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = dir;
+	ctx.after(async () => {
+		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previous;
+		await rm(dir, { recursive: true, force: true });
+	});
+	await writeFile(join(dir, "lazy-panel.json"), JSON.stringify({ locale: "en" }));
+	const file = join(dir, "b.jsonl");
+	const now = new Date();
+	const entries = [
+		{ type: "session", version: CURRENT_SESSION_VERSION, id: "session-b", timestamp: now.toISOString(), cwd: dir },
+		{ type: "message", id: "u1", parentId: null, timestamp: now.toISOString(), message: { role: "user", content: [{ type: "text", text: "B conversation" }], timestamp: now.getTime() } },
+	];
+	await writeFile(file, `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
+	ctx.mock.method(SessionManager, "list", async () => [{ path: file, id: "session-b", cwd: dir, name: "B", created: now, modified: now, messageCount: 1, firstMessage: "B conversation", allMessagesText: "B conversation" }]);
+	const switched: string[] = [];
+	let idle = false;
+	let idleQueries = 0;
+	let closed = false;
+	const context = {
+		mode: "tui",
+		cwd: dir,
+		isProjectTrusted: () => false,
+		isIdle: () => {
+			idleQueries++;
+			return idle;
+		},
+		abort: () => assert.fail("cancelling a switch must not abort the current response"),
+		sessionManager: { getSessionFile: () => join(dir, "a.jsonl") },
+		switchSession: async (target: string) => {
+			switched.push(target);
+			return { cancelled: false };
+		},
+		ui: fakeUi({
+			custom: async (factory: PanelFactory) => {
+				const panel = factory({ mode: "fullscreen", terminal: { rows: 24, columns: 120 }, requestRender: () => {} }, theme, {}, () => {
+					closed = true;
+				});
+				try {
+					await panel.load();
+					assert.equal(idleQueries, 0, "activity is not cached when the panel opens");
+					panel.handleInput("\r");
+					assert.equal(panel.state.mode, "confirm");
+					assert.match(panel.render(120).join("\n"), /Switch and interrupt the running conversation!/);
+					assert.deepEqual(switched, []);
+					panel.handleInput("n");
+					assert.equal(panel.state.mode, "normal");
+					assert.equal(closed, false);
+					assert.deepEqual(switched, []);
+					idle = true;
+					panel.handleInput("\r");
+					await delay(0);
+					assert.deepEqual(switched, [file]);
+					assert.equal(closed, true);
+					assert.equal(idleQueries, 2);
+				} finally {
+					panel.dispose();
+				}
+			},
+		}),
+	} as unknown as ExtensionCommandContext;
+	await registeredCommand().handler("", context);
+});
+
+/** Poll until `check` holds: the command reads its config files before pi's `custom()` factory runs. */
+async function until(check: () => boolean, what: string): Promise<void> {
+	for (let i = 0; i < 200 && !check(); i++) await delay(5);
+	assert.ok(check(), what);
+}
+
+test("a session switch that disposes the panel without done() still ends the command, so the panel opens again", async (ctx) => {
+	const dir = await mkdtemp(join(tmpdir(), "lazy-panel-reset-"));
+	const previous = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = dir;
+	ctx.after(async () => {
+		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previous;
+		await rm(dir, { recursive: true, force: true });
+	});
+	await writeFile(join(dir, "lazy-panel.json"), JSON.stringify({ locale: "en" }));
+	const file = join(dir, "b.jsonl");
+	const now = new Date();
+	const entries = [
+		{ type: "session", version: CURRENT_SESSION_VERSION, id: "session-b", timestamp: now.toISOString(), cwd: dir },
+		{ type: "message", id: "u1", parentId: null, timestamp: now.toISOString(), message: { role: "user", content: [{ type: "text", text: "B conversation" }], timestamp: now.getTime() } },
+	];
+	await writeFile(file, `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
+	ctx.mock.method(SessionManager, "list", async () => [{ path: file, id: "session-b", cwd: dir, name: "B", created: now, modified: now, messageCount: 1, firstMessage: "B conversation", allMessagesText: "B conversation" }]);
+	// regular 模式：面板自己打开鼠标上报、挂输入监听，要等命令结束时才关掉。
+	const writes: string[] = [];
+	const listeners = new Set<(data: string) => unknown>();
+	const tui = {
+		mode: "regular",
+		terminal: { rows: 24, columns: 120, write: (data: string) => writes.push(data) },
+		requestRender: () => {},
+		addInputListener: (listener: (data: string) => unknown) => {
+			listeners.add(listener);
+			return () => listeners.delete(listener);
+		},
+	};
+	// 照搬 pi 1.5 的 showExtensionCustom：done 先移除 overlay（dispose 组件）再 resolve；
+	// 切换会话时 resetExtensionUI 只移除 overlay，promise 一直挂着、永远不 resolve。
+	const panels: LazyPanel[] = [];
+	let resetExtensionUI = () => {};
+	const custom = (factory: PanelFactory) => new Promise<void>((resolve) => {
+		let closed = false;
+		let mounted: LazyPanel | undefined;
+		const removeOverlay = () => {
+			const panel = mounted;
+			mounted = undefined;
+			panel?.dispose();
+		};
+		mounted = factory(tui, theme, {}, () => {
+			if (closed) return;
+			closed = true;
+			removeOverlay();
+			resolve();
+		});
+		panels.push(mounted);
+		resetExtensionUI = removeOverlay;
+	});
+	const switched: string[] = [];
+	const context = {
+		mode: "tui",
+		cwd: dir,
+		isProjectTrusted: () => false,
+		// 当前对话正在运行：Enter 先弹确认，y 才切换（用户实际走到的路径）。
+		isIdle: () => false,
+		sessionManager: { getSessionFile: () => join(dir, "a.jsonl") },
+		switchSession: async (target: string) => {
+			// pi 的 teardownCurrent：先 resetExtensionUI（dispose 面板但不调 done），再换成目标会话。
+			resetExtensionUI();
+			switched.push(target);
+			return { cancelled: false };
+		},
+		ui: fakeUi({ custom }),
+	} as unknown as ExtensionCommandContext;
+	const command = registeredCommand();
+	const first = command.handler("", context);
+	await until(() => panels.length === 1, "the panel opens");
+	const panel = panels[0]!;
+	await panel.load();
+	assert.ok(writes.includes(ENABLE_MOUSE));
+	assert.ok(listeners.size > 0);
+	panel.handleInput("\r");
+	assert.equal(panel.state.mode, "confirm");
+	panel.handleInput("y");
+	// 有上限地等命令结束：修复前 pi 永远不 resolve，1 秒后在这里给出明确的失败信息。
+	const timeout = new AbortController();
+	const ended = await Promise.race([first.then(() => true), delay(1000, false, { signal: timeout.signal }).catch(() => false)]);
+	timeout.abort();
+	assert.equal(ended, true, "the command ends although pi never calls done()");
+	assert.deepEqual(switched, [file]);
+	assert.equal(writes.at(-1), DISABLE_MOUSE, "mouse reporting is switched off again");
+	assert.equal(listeners.size, 0, "no input listener is left behind");
+	// 防重入标记已复位：再次执行命令会打开新面板；q 正常关闭（done → dispose → onDispose 的第二次 done 是 no-op）。
+	const second = command.handler("", context);
+	await until(() => panels.length === 2, "the panel opens again");
+	panels[1]!.handleInput("q");
+	await second;
+	assert.equal(listeners.size, 0);
 });
 
 test("settings command preserves the non-TUI guard", async () => {

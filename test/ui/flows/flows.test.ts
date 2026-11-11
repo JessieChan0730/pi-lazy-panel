@@ -11,12 +11,12 @@ import { test } from "node:test";
 import { initI18n, t } from "../../../src/i18n/index.ts";
 import type { ContextUsageInfo, RestoreOptions, SessionRow } from "../../../src/types.ts";
 import type { FlowHost } from "../../../src/ui/flows/host.ts";
-import { confirmDeleteSession, confirmShareSession, copyLastReply, openContextUsage, startExport, startFork } from "../../../src/ui/flows/session-flows.ts";
+import { confirmDeleteSession, confirmShareSession, copyLastReply, openContextUsage, resumeSession, startExport, startFork } from "../../../src/ui/flows/session-flows.ts";
 import { openTreeFilterMenu, restoreTreeNode, type TreeTarget } from "../../../src/ui/flows/tree-flows.ts";
 import type { ActionSource, DataSource } from "../../../src/ui/ports.ts";
 import { createInitialState } from "../../../src/ui/state.ts";
-import { CONFIRM_NO_INDEX, CONFIRM_YES_INDEX, deleteSessionsTitle, overwriteFileTitle } from "../../../src/ui/widgets/confirm-dialog.ts";
-import { nodeSubject } from "../../../src/ui/widgets/dialog-subject.ts";
+import { CONFIRM_NO_INDEX, CONFIRM_YES_INDEX, confirmHints, deleteSessionsTitle, overwriteFileTitle, switchSessionLabels, switchSessionTitle } from "../../../src/ui/widgets/confirm-dialog.ts";
+import { nodeSubject, sessionSubject } from "../../../src/ui/widgets/dialog-subject.ts";
 import type { InputDialogSpec } from "../../../src/ui/widgets/input-dialog.ts";
 import type { NoticeDialogSpec } from "../../../src/ui/widgets/notice-dialog.ts";
 import { CUSTOM_PROMPT_INDEX } from "../../../src/ui/widgets/restore-dialog.ts";
@@ -137,6 +137,120 @@ function fakeHost(opts: FakeHostOptions = {}) {
 		usageOpened: () => usageOpened,
 	};
 }
+
+test("resume: switching away from a running session confirms first; cancelling leaves it untouched", async () => {
+	const resumed: string[] = [];
+	const h = fakeHost({
+		currentSessionFile: "/tmp/s2.jsonl",
+		data: { isAgentIdle: () => false },
+		actions: {
+			resumeSession: async (file) => {
+				resumed.push(file);
+				return "switched";
+			},
+		},
+	});
+	await resumeSession(h.host);
+	assert.equal(h.state.mode, "confirm");
+	// 和删除确认是同一个菜单：目标会话在标题栏右侧，两项写明后果，光标默认停在“留下”。
+	const menu = h.menu();
+	assert.equal(menu.title, switchSessionTitle());
+	assert.equal(menu.subject, sessionSubject(row(1)));
+	assert.deepEqual(menu.items, [switchSessionLabels().confirm, switchSessionLabels().cancel]);
+	assert.equal(menu.initialIndex, CONFIRM_NO_INDEX, "a stray Enter stays in the running conversation");
+	assert.deepEqual(menu.shortcuts, { y: CONFIRM_YES_INDEX, n: CONFIRM_NO_INDEX });
+	assert.deepEqual(menu.hints, confirmHints());
+	assert.deepEqual(h.entered, [], "pi is not entered or hidden before consent");
+	// Esc 和选中“留下”都只是关掉确认框。
+	menu.onCancel();
+	assert.equal(h.anyOpen(), false);
+	await resumeSession(h.host);
+	h.menu().onSelect(CONFIRM_NO_INDEX);
+	assert.equal(h.anyOpen(), false);
+	assert.deepEqual(resumed, []);
+	assert.deepEqual(h.entered, []);
+	await resumeSession(h.host);
+	h.state.cursor.sessions = 2;
+	h.menu().onSelect(CONFIRM_YES_INDEX);
+	await flush();
+	assert.deepEqual(resumed, ["/tmp/s1.jsonl"], "consent applies to the original target");
+	assert.deepEqual(h.entered, ["resume"]);
+	assert.equal(h.anyOpen(), false);
+});
+
+test("resume: idle or current sessions need no confirmation, and activity is queried at Enter time", async () => {
+	for (const currentSessionFile of ["/tmp/s1.jsonl", "/tmp/./s1.jsonl"]) {
+		const h = fakeHost({ currentSessionFile, data: { isAgentIdle: () => false } });
+		await resumeSession(h.host);
+		assert.deepEqual(h.entered, ["resume"]);
+		assert.equal(h.anyOpen(), false);
+	}
+	let idle = true;
+	const h = fakeHost({ currentSessionFile: "/tmp/s2.jsonl", data: { isAgentIdle: () => idle } });
+	await resumeSession(h.host);
+	assert.deepEqual(h.entered, ["resume"]);
+	assert.equal(h.anyOpen(), false);
+	idle = false;
+	await resumeSession(h.host);
+	assert.equal(h.state.mode, "confirm", "an agent that started after opening the panel is protected");
+	assert.deepEqual(h.entered, ["resume"]);
+	const unsaved = fakeHost({ data: { isAgentIdle: () => false } });
+	await resumeSession(unsaved.host);
+	assert.equal(unsaved.state.mode, "confirm", "a running session need not have a persisted file yet");
+});
+
+test("resume: confirmation callbacks cannot enter pi after the panel is disposed", async () => {
+	let disposed = false;
+	const h = fakeHost({ data: { isAgentIdle: () => false }, disposed: () => disposed });
+	await resumeSession(h.host);
+	disposed = true;
+	h.menu().onSelect(CONFIRM_YES_INDEX);
+	await flush();
+	assert.deepEqual(h.entered, []);
+});
+
+test("restore: cross-session Enter confirms before switching, including leaves and summary choices", async () => {
+	const restores: RestoreOptions[] = [];
+	const h = fakeHost({
+		currentSessionFile: "/tmp/s2.jsonl",
+		data: { isAgentIdle: () => false },
+		actions: {
+			restoreNode: async (_file, _id, options) => {
+				restores.push(options);
+				return "restored";
+			},
+		},
+	});
+	const target: TreeTarget = { file: "/tmp/s1.jsonl", row: { entryId: "e1", role: "user", kind: "message", text: "hi", timestamp: 0, onActiveBranch: true, isLeaf: true } };
+	restoreTreeNode(h.host, target);
+	assert.equal(h.state.mode, "confirm");
+	assert.equal(h.menu().title, switchSessionTitle());
+	assert.equal(h.menu().subject, sessionSubject(row(1)), "the subject is the session, not the restored node's role and time");
+	assert.deepEqual(restores, []);
+	h.menu().onCancel();
+	assert.equal(h.anyOpen(), false);
+	restoreTreeNode(h.host, target);
+	h.menu().onSelect(CONFIRM_YES_INDEX);
+	await flush();
+	assert.deepEqual(restores, [{ summarize: false }]);
+	const earlier = { ...target, row: { ...target.row, isLeaf: false } };
+	restoreTreeNode(h.host, earlier);
+	assert.equal(h.state.mode, "restore", "the existing summary menu remains unchanged");
+	assert.equal(h.menu().subject, nodeSubject(earlier.row), "which still names the node");
+	h.menu().onSelect(1);
+	// 摘要菜单选完才轮到切换确认：同一个菜单组件换了一份 spec。
+	assert.equal(h.state.mode, "confirm");
+	assert.equal(h.menu().title, switchSessionTitle());
+	assert.equal(restores.length, 1);
+	h.menu().onSelect(CONFIRM_YES_INDEX);
+	await flush();
+	assert.deepEqual(restores.at(-1), { summarize: true });
+	const current = fakeHost({ currentSessionFile: target.file, data: { isAgentIdle: () => false } });
+	restoreTreeNode(current.host, target);
+	await flush();
+	assert.equal(current.anyOpen(), false, "returning to the active session is not a switch");
+	assert.deepEqual(current.entered, ["restore"]);
+});
 
 test("tree filter: five choices, current mode selected, cancel preserves it and selection closes the menu", async () => {
 	const h = fakeHost();
