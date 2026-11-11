@@ -9,7 +9,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { initI18n, t } from "../../../src/i18n/index.ts";
-import type { ContextUsageInfo, RestoreOptions, SessionRow } from "../../../src/types.ts";
+import type { ContextUsageInfo, RestoreOptions, SessionRow, StatusTone } from "../../../src/types.ts";
 import type { FlowHost } from "../../../src/ui/flows/host.ts";
 import { confirmDeleteSession, confirmShareSession, copyLastReply, openContextUsage, resumeSession, startExport, startFork } from "../../../src/ui/flows/session-flows.ts";
 import { openTreeFilterMenu, restoreTreeNode, type TreeTarget } from "../../../src/ui/flows/tree-flows.ts";
@@ -50,6 +50,8 @@ function fakeHost(opts: FakeHostOptions = {}) {
 		notice: undefined,
 	};
 	const statuses: string[] = [];
+	/** Tone passed along with each recorded status (undefined = a plain hint). */
+	const tones: Array<StatusTone | undefined> = [];
 	const entered: string[] = [];
 	let pendingCancel: (() => void) | undefined;
 	let usageOpened: { info: ContextUsageInfo; onCopy: (text: string) => void } | undefined;
@@ -68,8 +70,10 @@ function fakeHost(opts: FakeHostOptions = {}) {
 		archiveOpenHint: () => "X open archive",
 		removeArchivedRows: () => {},
 		isDisposed: opts.disposed ?? (() => false),
-		setStatus: (text) => {
-			if (text !== undefined) statuses.push(text);
+		setStatus: (text, tone) => {
+			if (text === undefined) return;
+			statuses.push(text);
+			tones.push(tone);
 		},
 		sessionRows: () => rows,
 		currentSessionRow: () => rows[state.cursor.sessions],
@@ -119,6 +123,7 @@ function fakeHost(opts: FakeHostOptions = {}) {
 		host,
 		state,
 		statuses,
+		tones,
 		entered,
 		menu: (): SelectDialogSpec => {
 			assert.ok(dialogs.menu, "a menu is open");
@@ -311,6 +316,8 @@ test("export: format menu → path prompt → overwrite confirmation, each Esc /
 	assert.equal(h.state.mode, "normal");
 	assert.equal(h.anyOpen(), false);
 	assert.equal(h.statuses.at(-1), t("status.exportedTo", { path: "/work/taken.jsonl" }));
+	// 进度是提示色，完成才是 success：「已导出」不能和报错一个颜色。
+	assert.deepEqual(h.tones.slice(-2), [undefined, "success"], "exporting… is a hint, exported is a success");
 });
 
 test("fork: the selector starts on the last user message; No on the confirmation goes back onto the picked one", async () => {
@@ -403,6 +410,7 @@ test("batch delete: one confirmation, the open session is left out, a failure st
 	assert.deepEqual(deleted, ["/tmp/s2.jsonl"]);
 	assert.deepEqual([...h.state.selectedSessionFiles], ["/tmp/s3.jsonl"], "the failed one stays selected");
 	assert.equal(h.statuses.at(-1), t("status.batchDeletedFailed", { deleted: 1, failed: 1, error: "session 3: locked" }));
+	assert.equal(h.tones.at(-1), "error", "a partly failed batch reads as an error");
 });
 
 test("a flow that finishes after the panel is gone leaves it alone", async () => {

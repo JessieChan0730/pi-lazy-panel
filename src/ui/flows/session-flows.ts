@@ -184,14 +184,14 @@ async function deleteSession(host: FlowHost, row: SessionRow): Promise<void> {
 		method = await remove(row.file);
 		if (host.isDisposed()) return;
 	} catch (err) {
-		host.setStatus(t("status.deleteFailed", { error: (err as Error).message }));
+		host.setStatus(t("status.deleteFailed", { error: (err as Error).message }), "error");
 		return;
 	}
 	host.state.selectedSessionFiles.delete(row.file);
 	const warning = await forgetDeletedSessions(host, [row.file]);
 	if (host.isDisposed()) return;
 	// 删掉的行没了，光标夹回范围内；光标下换了会话就重新加载右边。
-	if (await host.relist(undefined)) host.setStatus([method === "trash" ? t("status.movedToTrash") : t("status.deleted"), warning].filter(Boolean).join(" — "));
+	if (await host.relist(undefined)) host.setStatus([method === "trash" ? t("status.movedToTrash") : t("status.deleted"), warning].filter(Boolean).join(" — "), warning ? "info" : "success");
 	await host.followSessionsCursor();
 }
 
@@ -222,7 +222,8 @@ async function deleteSelected(host: FlowHost, targets: SessionRow[]): Promise<vo
 	if (host.isDisposed()) return;
 	const failed = targets.length - deleted;
 	const summary = failed ? t("status.batchDeletedFailed", { deleted, failed, error: firstError }) : t("status.sessionsDeleted", { count: deleted });
-	if (await host.relist(undefined)) host.setStatus([summary, warning].filter(Boolean).join(" — "));
+	// 有失败 = error；删完但清理有警告 = 提示；全部成功 = success。
+	if (await host.relist(undefined)) host.setStatus([summary, warning].filter(Boolean).join(" — "), failed ? "error" : warning ? "info" : "success");
 	await host.followSessionsCursor();
 }
 
@@ -256,10 +257,10 @@ async function submitRename(host: FlowHost, row: SessionRow, value: string): Pro
 		await rename(row.file, name);
 		if (host.isDisposed()) return;
 	} catch (err) {
-		host.setStatus(t("status.renameFailed", { error: (err as Error).message }));
+		host.setStatus(t("status.renameFailed", { error: (err as Error).message }), "error");
 		return;
 	}
-	if (await host.relist(row.file)) host.setStatus(name ? t("status.renamed", { name }) : t("status.nameRemoved"));
+	if (await host.relist(row.file)) host.setStatus(name ? t("status.renamed", { name }) : t("status.nameRemoved"), "success");
 	// 改名会在会话文件里追加一条 session_info：TREE 在 all 过滤下要能看到它，光标留在原节点。
 	await host.refreshSession(row.file);
 }
@@ -331,7 +332,7 @@ export async function startFork(host: FlowHost): Promise<void> {
 		points = await host.data.loadForkPoints(row.file);
 		if (host.isDisposed()) return;
 	} catch (err) {
-		host.setStatus(t("status.forkFailed", { error: (err as Error).message }));
+		host.setStatus(t("status.forkFailed", { error: (err as Error).message }), "error");
 		return;
 	}
 	if (points.length === 0) {
@@ -424,9 +425,9 @@ export async function copyLastReply(host: FlowHost): Promise<void> {
 	try {
 		const copied = await copy(row.file);
 		if (host.isDisposed()) return;
-		host.setStatus(copied ? t("status.copiedLastReply") : t("status.noReplyToCopy"));
+		host.setStatus(copied ? t("status.copiedLastReply") : t("status.noReplyToCopy"), copied ? "success" : "info");
 	} catch (err) {
-		host.setStatus(t("status.copyFailed", { error: (err as Error).message }));
+		host.setStatus(t("status.copyFailed", { error: (err as Error).message }), "error");
 	}
 }
 
@@ -511,10 +512,10 @@ async function runExport(host: FlowHost, file: string, format: ExportFormat, pat
 	try {
 		const written = await write(file, format, path);
 		if (host.isDisposed()) return;
-		host.setStatus(t("status.exportedTo", { path: written }));
+		host.setStatus(t("status.exportedTo", { path: written }), "success");
 	} catch (err) {
 		if (host.isDisposed()) return;
-		host.setStatus(t("status.exportFailed", { error: (err as Error).message }));
+		host.setStatus(t("status.exportFailed", { error: (err as Error).message }), "error");
 	}
 }
 
@@ -629,10 +630,10 @@ async function runRadiusSignOut(host: FlowHost): Promise<void> {
 	try {
 		await logout();
 		if (host.isDisposed()) return;
-		host.setStatus(t("status.radiusSignedOut"));
+		host.setStatus(t("status.radiusSignedOut"), "success");
 	} catch (err) {
 		if (host.isDisposed()) return;
-		host.setStatus(t("status.radiusSignOutFailed", { error: (err as Error).message }));
+		host.setStatus(t("status.radiusSignOutFailed", { error: (err as Error).message }), "error");
 	}
 }
 
@@ -735,10 +736,10 @@ async function runRadiusLogin(host: FlowHost, row: SessionRow, method: RadiusLog
 	}
 	host.closeDialogs();
 	if (failure) {
-		host.setStatus(t("status.radiusLoginFailed", { error: failure.message }));
+		host.setStatus(t("status.radiusLoginFailed", { error: failure.message }), "error");
 		return;
 	}
-	host.setStatus(t("status.radiusSignedIn"));
+	host.setStatus(t("status.radiusSignedIn"), "success");
 	await runShare(host, row.file, "radius");
 }
 
@@ -862,9 +863,9 @@ async function copyRadiusNotice(host: FlowHost, text: string): Promise<void> {
 	if (!copy) return;
 	try {
 		await copy(text);
-		if (!host.isDisposed()) host.setStatus(t("status.copiedRadiusLink"));
+		if (!host.isDisposed()) host.setStatus(t("status.copiedRadiusLink"), "success");
 	} catch (err) {
-		if (!host.isDisposed()) host.setStatus(t("status.copyFailed", { error: (err as Error).message }));
+		if (!host.isDisposed()) host.setStatus(t("status.copyFailed", { error: (err as Error).message }), "error");
 	}
 }
 
@@ -900,7 +901,7 @@ async function runShare(host: FlowHost, file: string, destination: SessionShareD
 		if (host.isDisposed()) return;
 	} catch (err) {
 		if (host.isDisposed()) return;
-		host.setStatus(t("status.shareFailed", { error: (err as Error).message }));
+		host.setStatus(t("status.shareFailed", { error: (err as Error).message }), "error");
 		return;
 	}
 	const copy = host.actions?.copyText;
@@ -908,10 +909,10 @@ async function runShare(host: FlowHost, file: string, destination: SessionShareD
 		if (!copy) throw new Error("no clipboard");
 		await copy(result.url);
 		if (host.isDisposed()) return;
-		host.setStatus(t("status.shareUrlCopied", { url: result.url }));
+		host.setStatus(t("status.shareUrlCopied", { url: result.url }), "success");
 	} catch {
 		if (host.isDisposed()) return;
-		host.setStatus(t("status.shared", { url: result.url }));
+		host.setStatus(t("status.shared", { url: result.url }), "success");
 	}
 }
 
@@ -928,12 +929,12 @@ export async function openSessionInfo(host: FlowHost): Promise<void> {
 	try {
 		info = await load(row.file);
 	} catch (err) {
-		host.setStatus(t("status.sessionInfoFailed", { error: (err as Error).message }));
+		host.setStatus(t("status.sessionInfoFailed", { error: (err as Error).message }), "error");
 		return;
 	}
 	if (host.isDisposed()) return;
 	if (!info) {
-		host.setStatus(t("status.sessionInfoCannotRead", { file: row.file }));
+		host.setStatus(t("status.sessionInfoCannotRead", { file: row.file }), "error");
 		return;
 	}
 	host.openInfo(info, (text) => void copySessionInfo(host, text));
@@ -949,9 +950,9 @@ async function copySessionInfo(host: FlowHost, text: string): Promise<void> {
 	try {
 		await copy(text);
 		if (host.isDisposed()) return;
-		host.setStatus(t("status.copiedSessionInfo"));
+		host.setStatus(t("status.copiedSessionInfo"), "success");
 	} catch (err) {
-		host.setStatus(t("status.copyFailed", { error: (err as Error).message }));
+		host.setStatus(t("status.copyFailed", { error: (err as Error).message }), "error");
 	}
 }
 
@@ -969,12 +970,12 @@ export async function openContextUsage(host: FlowHost): Promise<void> {
 	try {
 		info = await load(row.file);
 	} catch (err) {
-		host.setStatus(t("status.usageFailed", { error: (err as Error).message }));
+		host.setStatus(t("status.usageFailed", { error: (err as Error).message }), "error");
 		return;
 	}
 	if (host.isDisposed()) return;
 	if (!info) {
-		host.setStatus(t("status.usageCannotRead", { file: row.file }));
+		host.setStatus(t("status.usageCannotRead", { file: row.file }), "error");
 		return;
 	}
 	host.openUsage(info, (text) => void copyContextUsage(host, text));
@@ -990,9 +991,9 @@ async function copyContextUsage(host: FlowHost, text: string): Promise<void> {
 	try {
 		await copy(text);
 		if (host.isDisposed()) return;
-		host.setStatus(t("status.copiedContextUsage"));
+		host.setStatus(t("status.copiedContextUsage"), "success");
 	} catch (err) {
-		host.setStatus(t("status.copyFailed", { error: (err as Error).message }));
+		host.setStatus(t("status.copyFailed", { error: (err as Error).message }), "error");
 	}
 }
 

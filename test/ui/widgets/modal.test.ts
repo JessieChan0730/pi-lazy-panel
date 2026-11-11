@@ -11,10 +11,12 @@ import { renderFooter, type FooterProps } from "../../../src/ui/widgets/footer.t
 import { overlayHelp } from "../../../src/ui/widgets/help-overlay.ts";
 import { InputDialog } from "../../../src/ui/widgets/input-dialog.ts";
 import { PromptDetailDialog } from "../../../src/ui/widgets/prompt-detail-dialog.ts";
+import { renderSearchStatus } from "../../../src/ui/widgets/search-bar.ts";
 import { SelectDialog } from "../../../src/ui/widgets/select-dialog.ts";
 import { SessionInfoDialog } from "../../../src/ui/widgets/session-info-dialog.ts";
 import { createSettingsState } from "../../../src/ui/settings-state.ts";
 import { DEFAULT_CONFIG } from "../../../src/config/config.ts";
+import type { StatusTone } from "../../../src/types.ts";
 import { SettingsDialog } from "../../../src/ui/widgets/settings-dialog.ts";
 import { TreeDialog } from "../../../src/ui/widgets/tree-dialog.ts";
 
@@ -26,7 +28,9 @@ const ACCENT = "\x1b[36m";
 const BORDER = "\x1b[96m";
 const SELECTED = "\x1b[44m";
 const WARNING = "\x1b[33m";
-const colors: Record<string, string> = { dim: DIM, accent: ACCENT, borderAccent: BORDER, warning: WARNING, muted: "\x1b[37m", text: "\x1b[97m" };
+const SUCCESS = "\x1b[32m";
+const ERROR = "\x1b[31m";
+const colors: Record<string, string> = { dim: DIM, accent: ACCENT, borderAccent: BORDER, warning: WARNING, success: SUCCESS, error: ERROR, muted: "\x1b[37m", text: "\x1b[97m" };
 const theme = {
 	fg: (color: string, text: string) => `${colors[color] ?? "\x1b[37m"}${text}\x1b[39m`,
 	bg: (_color: string, text: string) => `${SELECTED}${text}\x1b[49m`,
@@ -162,6 +166,21 @@ test("modal footer preserves warning emphasis and supports a display-only mode l
 	const narrow = renderFooter({ ...footerProps(), modal: true, status: "Failed to load" }, 25)[0]!;
 	assert.ok(narrow.includes(`${WARNING}Failed to load`));
 	assert.ok(!narrow.includes("v0.1.4"));
+});
+
+test("footer and search status paint the status by tone: success green, hints warning, errors red", () => {
+	const footer = (statusTone?: StatusTone): string => renderFooter({ ...footerProps(), status: "copied", ...(statusTone ? { statusTone } : {}) }, 100)[0]!;
+	assert.ok(footer("success").includes(`${SUCCESS}copied`));
+	assert.ok(footer("error").includes(`${ERROR}copied`));
+	assert.ok(footer("info").includes(`${WARNING}copied`));
+	assert.ok(footer().includes(`${WARNING}copied`), "no tone is a plain hint");
+
+	// 搜索生效时状态画在搜索状态行里，颜色要和 footer 一致。
+	const search = (statusTone?: StatusTone): string =>
+		renderSearchStatus({ query: "foo", position: 1, total: 2, hints: [], status: "copied", theme, ...(statusTone ? { statusTone } : {}) }, 100);
+	assert.ok(search("success").includes(`${SUCCESS}copied`));
+	assert.ok(search("error").includes(`${ERROR}copied`));
+	assert.ok(search().includes(`${WARNING}copied`));
 });
 
 test("ordinary footer retains its muted descriptions and reserved version space", () => {

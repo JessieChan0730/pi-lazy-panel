@@ -71,12 +71,12 @@ async function changeSessionFiles(host: FlowHost, change: SessionFileChange, kee
 		if (host.isDisposed()) return;
 		applySessionFileState(host.state, saved);
 		host.state.listScroll.sessions = null;
-		if (await host.relist(keep)) host.setStatus(saved.warning ? t("status.sessionStateSavedWarning", { error: saved.warning }) : status);
+		if (await host.relist(keep)) host.setStatus(saved.warning ? t("status.sessionStateSavedWarning", { error: saved.warning }) : status, saved.warning ? "info" : "success");
 		await host.followSessionsCursor();
 	} catch (err) {
 		if (host.isDisposed()) return;
 		const error = (err as Error).message;
-		host.setStatus(change.type === "pin" || change.type === "unpin" ? t("status.pinFailed", { error }) : t("status.archiveFailed", { error }));
+		host.setStatus(change.type === "pin" || change.type === "unpin" ? t("status.pinFailed", { error }) : t("status.archiveFailed", { error }), "error");
 	} finally {
 		host.state.sessionStateBusy = false;
 	}
@@ -105,14 +105,17 @@ export async function restoreArchivedSessions(host: FlowHost, rows: readonly Ses
 		// 恢复成功后这些行不可能还在归档里：本地删掉即可，不用再扫一遍所有目录。
 		host.removeArchivedRows(files);
 		if (await host.relist(keep)) {
-			host.setStatus(saved.warning
-				? t("status.sessionStateSavedWarning", { error: saved.warning })
-				: t("status.sessionsUnarchived", { count: files.length }));
+			host.setStatus(
+				saved.warning
+					? t("status.sessionStateSavedWarning", { error: saved.warning })
+					: t("status.sessionsUnarchived", { count: files.length }),
+				saved.warning ? "info" : "success",
+			);
 		}
 		await host.followSessionsCursor();
 	} catch (err) {
 		if (host.isDisposed()) return;
-		host.setStatus(t("status.archiveFailed", { error: (err as Error).message }));
+		host.setStatus(t("status.archiveFailed", { error: (err as Error).message }), "error");
 	} finally {
 		host.state.sessionStateBusy = false;
 	}
@@ -196,7 +199,7 @@ async function deleteArchivedSessions(host: FlowHost, targets: readonly SessionR
 			: failed
 				? t("status.batchDeletedFailed", { deleted, failed, error: firstError })
 				: t("status.sessionsDeleted", { count: deleted });
-		host.setStatus([summary, warning].filter(Boolean).join(" — "));
+		host.setStatus([summary, warning].filter(Boolean).join(" — "), failed ? "error" : warning ? "info" : "success");
 	} finally {
 		host.state.sessionStateBusy = false;
 	}
