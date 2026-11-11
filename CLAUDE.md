@@ -58,9 +58,9 @@ npm run ci             # CI 入口（.github/workflows/ci.yml 调用）：跑和
 
 ```
 src/
-├── index.ts                  # 入口：registerCommand("/lazy-panel")（命令本体在 openPanel）用 ctx.ui.custom 打开全屏面板；同时 registerShortcut 注册 pi 全局快捷键（默认 alt+l，走 sendUserMessage 重新进入命令）。pi 1.5 切换会话 / reload 时只 dispose 面板、不 resolve ctx.ui.custom，所以面板的 onDispose 也调 done()，否则命令不结束（防重入标记不复位、鼠标上报不关）
+├── index.ts                  # 入口：registerCommand("/lazy-panel")（命令本体在 openPanel）用 ctx.ui.custom 打开全屏面板；同时 registerShortcut 注册 pi 全局快捷键（默认 alt+l，走 sendUserMessage 重新进入命令）。pi 1.5 切换会话 / reload 时只 dispose 面板、不 resolve ctx.ui.custom，所以面板的 onDispose 也调 done()，否则命令不结束（防重入标记不复位、鼠标上报不关）。另外订阅一次 pi 的 `agent_start`，转发给当前打开的面板（`activePanel`，`pi.on` 取消不了订阅，所以不在 openPanel 里注册）
 ├── types.ts                  # 共享类型（只放类型，禁止运行时代码）
-├── constants.ts              # 常量：扩展 id、命令名、pi 级快捷键默认值（DEFAULT_OPEN_SHORTCUT = alt+l）、布局比例、面板 id、排序循环顺序（SESSION_SORT_MODES）、键位 scope（KEY_SCOPES = global + 面板 + tree-dialog）
+├── constants.ts              # 常量：扩展 id、命令名、pi 级快捷键默认值（DEFAULT_OPEN_SHORTCUT = alt+l）、布局比例、面板 id、排序循环顺序（SESSION_SORT_MODES）、键位 scope（KEY_SCOPES = global + 面板 + tree-dialog）、两套转圈帧（SPINNER_FRAMES 旋转方块给 footer / changelog 加载，RUNNING_FRAMES 点阵给运行中标记）
 ├── ui/                       # 渲染层：pi-tui Component。不做 I/O，不调用 pi 会话 API
 │   ├── app.ts                # 根组件 LazyPanel，只做协调：加载光标下的会话、TREE 光标驱动 CONTENT 高亮、/ 搜索的编排（原位置、实时跳转、n/N、折叠展开）、树对话框、鼠标、render。overlays 一张表决定按键归谁 / footer 提示 / 鼠标屏蔽 / 叠加顺序（新增弹窗只加一项）；dispatch 对 ActionId 做了穷尽检查（新增动作漏了分发 tsc 会报错）
 │   ├── state.ts              # PanelState + createInitialState：全部可变 UI 状态（焦点、光标、搜索、多选、置顶、折叠……）
@@ -80,7 +80,7 @@ src/
 │   │   ├── session-flows.ts  # SESSIONS：Enter / d（单个、批量，拒删当前会话）/ p / r / n / c / o / y / Y / e / I / S / i
 │   │   └── tree-flows.ts     # TREE 和树对话框：y 复制、T 打标签、Enter 恢复（Summarize branch? 菜单 + 自定义摘要指令）
 │   ├── panes/
-│   │   ├── sessions-pane.ts  # 左上 SESSIONS 面板（search prop：命中行高亮、标题计数）
+│   │   ├── sessions-pane.ts  # 左上 SESSIONS 面板（search prop：命中行高亮、标题计数；runningFrame prop：当前会话的 (current) 换成 pi 原生的点阵转圈（accent）+ running（muted），窄面板只留转圈）
 │   │   ├── tree-pane.ts      # 左下 TREE 面板：折叠大纲（前缀来自 tree-outline.ts，可见行由 tree-view.ts 用 applyTreeFold 算好）；renderTreeRow（光标 › + 已配色的前缀 + 活动路径 • + [label] + 时间 + role + 正文，可选的搜索高亮）和树对话框共用
 │   │   └── content-pane.ts   # 右侧 CONTENT 面板，用 pi-tui 的 Markdown 渲染消息；排版结果带 searchable[]（只有正文行参与 / 搜索），命中只叠加在窗口里的行上
 │   └── widgets/
@@ -195,7 +195,7 @@ docs/progress.md              # 任务进度（原 进度.md），每次开工�
 AGENTS.md                     # 仅指向本文件，规则统一在这里维护
 ```
 
-数据流：`sessions.ts` → `SessionRow[]` → SESSIONS 面板；选中行驱动 `tree.ts` → `TreeRow[]` → `tree-fold.ts` 隐藏折叠段（`PanelState.treeFolded`，默认旁支折叠）→ TREE 面板；选中节点（或活动叶子）驱动 `content.ts` → `ContentBlock[]` → CONTENT 面板。所有 UI 状态集中在 `PanelState`（`src/ui/state.ts`），TREE / CONTENT 由此派生的视图（可见行、排版、滚动规则）在 `ui/tree-view.ts` / `ui/content-viewport.ts`。`/` 搜索是每个面板一份的 `PanelState.search`（关键字 + 匹配行号），列表不过滤只跳转；面板拿到的是 `SearchView`（可见行号的匹配集合、当前匹配、要高亮的词），高亮由 `ui/search-highlight.ts` 在画好的行上叠加。
+数据流：`sessions.ts` → `SessionRow[]` → SESSIONS 面板；选中行驱动 `tree.ts` → `TreeRow[]` → `tree-fold.ts` 隐藏折叠段（`PanelState.treeFolded`，默认旁支折叠）→ TREE 面板；选中节点（或活动叶子）驱动 `content.ts` → `ContentBlock[]` → CONTENT 面板。运行中标记是例外的一条推送路径：pi 的 `agent_start` → `src/index.ts` → `LazyPanel.syncActivity()` 起一个定时器转圈（`RUNNING_FRAMES`，80ms 一帧），定时器每帧查 `DataSource.isAgentIdle`，空闲就自己停（不订阅结束事件，空闲时也不轮询）。所有 UI 状态集中在 `PanelState`（`src/ui/state.ts`），TREE / CONTENT 由此派生的视图（可见行、排版、滚动规则）在 `ui/tree-view.ts` / `ui/content-viewport.ts`。`/` 搜索是每个面板一份的 `PanelState.search`（关键字 + 匹配行号），列表不过滤只跳转；面板拿到的是 `SearchView`（可见行号的匹配集合、当前匹配、要高亮的词），高亮由 `ui/search-highlight.ts` 在画好的行上叠加。
 
 快捷键是间接绑定：按键 → `resolveKeys`（`src/config/keys.ts`，按 `scopeChain` 的顺序查：面板 scope 再 global，树对话框是 tree-dialog → tree → global，支持 `gg` 这类多键序列） → `ActionId`（`src/types.ts`） → `LazyPanel.dispatch`（对话框里是 `dispatchInTreeDialog`）。默认值在 `src/config/keymap.ts`，`loadConfig` 深合并用户覆盖。新增动作时要同时改：`ActionId`、默认键位、`ACTION_DESCRIPTIONS`、`dispatch` 里的分发（漏了 tsc 会报错）、`docs/keybindings.md`。要弹窗或调 action 的命令，流程写成 `ui/flows/` 里的顶级函数（第一个参数是 `FlowHost`），`dispatch` 里只调用它；需要面板的新能力就加到 `FlowHost` 上。
 
