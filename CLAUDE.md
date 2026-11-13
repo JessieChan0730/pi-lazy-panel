@@ -83,7 +83,7 @@ src/
 │   ├── panes/
 │   │   ├── sessions-pane.ts  # 左上 SESSIONS 面板（search prop：命中行高亮、标题计数；runningFrame prop：当前会话的 (current) 换成 pi 原生的点阵转圈（accent）+ running（muted），窄面板只留转圈）
 │   │   ├── tree-pane.ts      # 左下 TREE 面板：折叠大纲（前缀来自 tree-outline.ts，可见行由 tree-view.ts 用 applyTreeFold 算好）；renderTreeRow（光标 › + 已配色的前缀 + 活动路径 • + [label] + 时间 + role + 正文，可选的搜索高亮）和树对话框共用
-│   │   └── content-pane.ts   # 右侧 CONTENT 面板，用 pi-tui 的 Markdown 渲染消息；排版结果带 searchable[]（只有正文行参与 / 搜索），命中只叠加在窗口里的行上
+│   │   └── content-pane.ts   # 右侧 CONTENT 面板，用 pi-tui 的 Markdown 渲染消息；排版结果带 searchable[]（只有正文行参与 / 搜索），命中只叠加在窗口里的行上；标题右侧是 contentMeta：消息数（搜索时是匹配计数）· 滚动百分比（scrollPercent：顶 0% / 底 100%，一屏装得下不显示，放不下时保留百分比）
 │   └── widgets/
 │       ├── footer.ts         # 底部一行：模式 + 当前面板快捷键提示（弹窗打开时显示弹窗的提示）
 │       ├── prompt-bar.ts     # 底部一行输入的通用组件（包装 pi-tui Input），搜索栏和树对话框的搜索行基于它
@@ -174,7 +174,7 @@ test/                        # 目录是 src 分层的镜像：一个模块的�
 │   ├── i18n-scan.test.ts     # scripts/i18n-usage.mjs：静态 / 动态 key 提取、前缀只覆盖自身子树、复数变体、isKeyPresent
 │   └── lint.test.ts          # i18n/no-hardcoded-text 规则：报 / 不报的场景、只作用于 src
 └── ui/                       # 渲染层
-    ├── ui.test.ts            # 格式化、frame 几何、树过滤 / 折叠、TreeDialog 搜索行、highlightLine / searchMeta、ContentViewport（滚动夹取 / zz 越界 / 行匹配缓存）、TreeView（reveal / keepCursorOn / z / 搜索期间暂停折叠）、mouse 命中映射、dialog subject
+    ├── ui.test.ts            # 格式化、frame 几何、树过滤 / 折叠、TreeDialog 搜索行、highlightLine / searchMeta、ContentViewport（滚动夹取 / zz 越界 / 行匹配缓存）、CONTENT 标题的 scrollPercent / contentMeta、TreeView（reveal / keepCursorOn / z / 搜索期间暂停折叠）、mouse 命中映射、dialog subject
     ├── key-log.test.ts       # attachKeyLog：没开 LAZY_PANEL_KEY_LOG 时什么都不做、开了逐 chunk 追加且照常把按键交回面板
     ├── mouse-input.test.ts   # parseSgrMouse / parseSgrMouseChunk / MouseTracker：按下释放、只认左键、同格点击、双击计数、滚轮批量拆条
     ├── overlay-lifecycle.test.ts # mountPanelOverlay：regular 首次挂载重绘一次、恢复可见才重绘、fullscreen 不额外重绘
