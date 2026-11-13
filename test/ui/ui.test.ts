@@ -18,12 +18,12 @@ import {
 	foldTarget,
 	nearestListedIndex,
 } from "../../src/data/tree-fold.ts";
-import type { SessionRow, TreeRow } from "../../src/types.ts";
+import type { ContentBlock, SearchView, SessionRow, TreeRow } from "../../src/types.ts";
 import { boxCell, boxContains, centeredRect, fit, FRAME_DIVIDER, frame, metaBudget, overlayCentered, sideBySide } from "../../src/ui/frame.ts";
 import { hitTest, listVisibleRows, panelGeometry } from "../../src/ui/mouse.ts";
 import { renderSessionsPane, scrollOffset, sessionAtLine, sessionFirstLine, sessionLineCount, sessionsMeta } from "../../src/ui/panes/sessions-pane.ts";
 import { renderTreePane, treeMeta } from "../../src/ui/panes/tree-pane.ts";
-import { layoutContent, renderContentPane } from "../../src/ui/panes/content-pane.ts";
+import { contentMeta, layoutContent, renderContentPane, scrollPercent } from "../../src/ui/panes/content-pane.ts";
 import { ContentViewport } from "../../src/ui/content-viewport.ts";
 import { TreeView } from "../../src/ui/tree-view.ts";
 import { createInitialState } from "../../src/ui/state.ts";
@@ -736,6 +736,52 @@ test("ContentViewport: scroll clamps to the last full page, zz may overscroll un
 	view.layoutFor(20, 9);
 	assert.notEqual(view.matches("alpha"), wide, "recomputed for the new layout");
 	assert.deepEqual(view.matches(""), []);
+});
+
+test("scrollPercent: 0 at the top, 100 at the bottom, nothing when the pane fits", () => {
+	// 24 lines in a 9-line viewport → maxScroll 15
+	assert.equal(scrollPercent(0, 24, 9), 0);
+	assert.equal(scrollPercent(15, 24, 9), 100);
+	assert.equal(scrollPercent(8, 24, 9), 53);
+	assert.equal(scrollPercent(1, 24, 9), 7);
+	assert.equal(scrollPercent(999, 24, 9), 100, "zz overscroll clamps to the bottom");
+	assert.equal(scrollPercent(-3, 24, 9), 0);
+	// 只有真的到顶 / 到底才显示 0% / 100%，中间四舍五入不会提前到极值
+	assert.equal(scrollPercent(1, 1005, 5), 1);
+	assert.equal(scrollPercent(999, 1005, 5), 99);
+	// 一屏装得下（含正好相等）：没有位置可报
+	assert.equal(scrollPercent(0, 9, 9), undefined);
+	assert.equal(scrollPercent(0, 8, 9), undefined);
+});
+
+test("contentMeta pairs the message count with the scroll position and degrades by budget", () => {
+	assert.equal(contentMeta(12, undefined, 34, 40), "12 messages · 34%");
+	assert.equal(contentMeta(12, undefined, 34, 10), "34%", "no room for both: the position wins");
+	assert.equal(contentMeta(12, undefined, undefined, 40), "12 messages");
+	assert.equal(contentMeta(0, undefined, undefined, 40), "");
+	const search: SearchView = { terms: ["alpha"], matches: new Set([1]), current: 1, position: 2, total: 7 };
+	assert.equal(contentMeta(12, search, 34, 40), "2/7 matches · 34%");
+	assert.equal(contentMeta(12, search, 34, 14), "2/7 · 34%", "the count shortens to keep the position");
+	assert.equal(contentMeta(12, search, undefined, 40), "2/7 matches");
+	assert.equal(contentMeta(12, search, 34, 8), "2/7", "both together never fit: the search count wins");
+});
+
+test("renderContentPane titles show the scroll position, and nothing while the content fits", () => {
+	// 6 blocks → 24 layout lines in a 9-line viewport (visible 7) → maxScroll 17
+	const blocks: ContentBlock[] = Array.from({ length: 6 }, (_, i) => ({ entryId: `e${i}`, role: "user", timestamp: 0, markdown: `alpha ${i}` }));
+	const top = renderContentPane({ blocks, scroll: 0, focused: false, theme: plainTheme as never }, 60, 9).map(stripTerminalSequences);
+	assert.ok(top[0]!.includes("6 messages · 0%"), top[0]);
+	const bottom = renderContentPane({ blocks, scroll: 17, focused: false, theme: plainTheme as never }, 60, 9).map(stripTerminalSequences);
+	assert.ok(bottom[0]!.includes("6 messages · 100%"), bottom[0]);
+	// zz 越界滚过最后一整页，百分比也不会超过 100%
+	const overscrolled = renderContentPane({ blocks, scroll: 23, focused: false, theme: plainTheme as never }, 60, 9).map(stripTerminalSequences);
+	assert.ok(overscrolled[0]!.includes("100%"), overscrolled[0]);
+	// 一屏装得下：只有消息数，没有百分比
+	const fits = renderContentPane({ blocks: blocks.slice(0, 1), scroll: 0, focused: false, theme: plainTheme as never }, 60, 9).map(stripTerminalSequences);
+	assert.ok(fits[0]!.includes(t("pane.messages", { count: 1 })) && !fits[0]!.includes("%"), fits[0]);
+	// 窄面板：放不下两样时保留位置，丢掉消息数
+	const narrow = renderContentPane({ blocks, scroll: 8, focused: false, theme: plainTheme as never }, 22, 9).map(stripTerminalSequences);
+	assert.ok(narrow[0]!.includes("47%") && !narrow[0]!.includes("messages"), narrow[0]);
 });
 
 test("ContentViewport: the layout cache follows the UI language (and a save no longer has to clear it)", () => {
