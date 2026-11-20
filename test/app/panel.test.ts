@@ -1154,6 +1154,24 @@ test("zz puts the highlighted message on the middle row, even for the last messa
 	h.panel.dispose();
 });
 
+test("the CONTENT title tracks the scroll position: 0% at the top, 100% at the bottom", async () => {
+	const h = makeShortContentPanel(12, 20);
+	await h.panel.load();
+	const header = () => h.text().find((l) => l.includes("[3] CONTENT"))!;
+	// 面板打开时停在活动叶子（最后一条消息）上，也就是对话末尾。
+	assert.ok(header().includes("12 messages · 100%"), header());
+	h.panel.handleInput("3");
+	h.panel.handleInput("g");
+	h.panel.handleInput("g");
+	// 断言带上前缀："100%" 里也有子串 "0%"，只查 "0%" 会误过。
+	assert.ok(header().includes("12 messages · 0%"), header());
+	h.panel.handleInput("j");
+	assert.match(header(), /12 messages · [1-9]\d?%/, header());
+	h.panel.handleInput("G");
+	assert.ok(header().includes("12 messages · 100%"), header());
+	h.panel.dispose();
+});
+
 /** The centered Label dialog in rendered `lines`: its top row, title line and input line (row + 1), or undefined when closed. */
 function labelDialog(lines: string[]): { top: number; title: string; input: string } | undefined {
 	const top = lines.findIndex((l) => l.includes(`┌─ ${LABEL_DIALOG_TITLE} `));
